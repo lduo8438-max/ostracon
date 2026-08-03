@@ -11,12 +11,28 @@
 
 ---
 
+## 環境需求
+
+**Node 24 以上，而且它的內建 SQLite 必須含 FTS5。** 先跑這一行確認：
+
+```bash
+node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRTUAL TABLE t USING fts5(x)')" \
+  && echo "FTS5 可用" || echo "這個 Node 的 SQLite 沒有 FTS5，請換一個 build"
+```
+
+沒有 FTS5 的話，建立 schema 會失敗在 `no such module: fts5`——那個訊息不會告訴你
+原因，所以寫在這裡。實測 **v24.14.1 可用、v23.11.0 不可用**（後者 `node:sqlite`
+存在，但沒有把 FTS5 編進去）。全文檢索是 schema 的一部分，不是選配。
+
+零執行期相依是刻意的取捨（只有 tree-sitter 兩個套件），代價就是綁在 Node 內建的
+SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `ExperimentalWarning`。
+
 ## 現在能跑什麼
 
 ```bash
 pnpm install
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
-pnpm test        # 先跑 typecheck，再跑單元測試
+pnpm test        # 先跑 typecheck，再跑單元測試（220 個）
 
 # 印出一段程式碼的演化史
 pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo
@@ -226,11 +242,16 @@ hunk 內。git 說的是「這幾行對這個檔案是新的」，不是「這�
 ### `node:sqlite` 仍是實驗性 API
 
 資料存取用 Node 內建的 `node:sqlite`，**零執行期相依**是刻意的取捨——安裝摩擦是
-開源專案的頭號死因。代價是每次執行都會看到 `ExperimentalWarning`（Node v24.14.1
-實測仍會出現），而且這個 API 在未來的 Node 版本可能變動。
+開源專案的頭號死因。但這個取捨有代價，而且代價比預期大：
 
-另外它需要編進 FTS5 的 Node build：某些發行版的內建 SQLite 沒有 FTS5，
-完整 schema 會建不起來。那是 runtime 差異，不是程式的 bug。
+- 這個 API 仍是實驗性的，未來的 Node 版本可能變動，每次執行都會印
+  `ExperimentalWarning`（v24.14.1 實測仍會出現）。
+- **它把可用性綁在 Node 的 build 設定上**。FTS5 有沒有被編進去不是我們能控制的，
+  而沒有它整個 schema 就建不起來（見「環境需求」）。那是 runtime 差異不是 bug，
+  但對使用者來說沒有差別——一樣是跑不起來。
+
+換句話說，「零相依」把安裝摩擦從 `npm install` 移到了「你的 Node 是哪個 build」。
+目前的判斷仍是這樣比較好，但這不是免費的。
 
 ---
 

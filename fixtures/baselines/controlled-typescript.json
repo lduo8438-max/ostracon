@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "id": "ctrl-position-ambiguous",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "ctrl-position-scoped",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "lin-controlled-pure-self-rename",
+      "difficulty": "hard",
+      "status": "pass"
+    }
+  ]
+}

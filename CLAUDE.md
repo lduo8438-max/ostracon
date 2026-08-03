@@ -169,6 +169,19 @@ pnpm fixtures:validate    fixtures --repos <name>=<repo-path>
 一個模組算完成，需要：通過型別檢查、有單元測試、**黃金測試集無退步**、
 `docs/architecture.md` 中對應章節已更新。
 
+### CI 與 baseline
+
+`.github/workflows/ci.yml` 執行「不放寬 CI 閘門」這條規則：FTS5 檢測 → 型別檢查 →
+單元測試 → 兩套黃金測試集逐案例比對 `fixtures/baselines/*.json`。
+
+**閘門只在「baseline 裡 pass 的案例變成 fail 或 missing」時失敗**，而且
+**只看 hard / adversarial 層**（`easy` 被 `findRegressions` 跳過）。
+沒有 `--baseline` 時 exit code 恆為 0——所以任何少了 `--baseline` 的 golden 呼叫
+都是一道不會擋任何東西的假閘門。
+
+覆蓋率提升導致本來 missing 的案例開始 fail **不算退步**，那是新資訊。
+真的要更新 baseline 時，重新產生並在 PR 說明為什麼那不是退步。
+
 ---
 
 ## 目前階段

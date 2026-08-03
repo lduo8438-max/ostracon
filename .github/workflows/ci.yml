@@ -1,0 +1,85 @@
+name: CI
+
+# 「不放寬 CI 閘門」是專案規則之一（見 CLAUDE.md），但規則要有東西在執行才算數。
+# 這個 workflow 就是那個東西：型別檢查、單元測試、兩套黃金測試集的逐案例迴歸比對。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # 語料的釘死終點。fixture 的錨點全是 git 原生座標，所以任何機器都能重建。
+  # 換 SHA 就等於換語料，baseline 必須跟著重新產生。
+  OSIRIS_REPO: https://github.com/simplifaisoul/osiris.git
+  OSIRIS_SHA: 994a5dcd69385e97cf7d1faa1263e5a51987da6b
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # **這一步必須在最前面。** 沒有 FTS5 的話整個 schema 建不起來，而 SQLite
+      # 只會回 `no such module: fts5`——那個訊息不會告訴任何人原因。
+      # 與其讓後面的步驟以難懂的方式崩掉，不如在這裡明確失敗。
+      - name: 檢查內建 SQLite 是否含 FTS5
+        run: |
+          node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRTUAL TABLE t USING fts5(x)')" \
+            || { echo "::error::這個 Node build 的內建 SQLite 沒有 FTS5，完整 schema 建不起來"; exit 1; }
+          node -v
+
+      - run: pnpm install --frozen-lockfile
+
+      # 與 pnpm test 重複跑一次 tsc，是為了讓「型別錯誤」與「測試失敗」在
+      # CI 介面上是兩個分開的紅點。多花幾秒換到的是可讀性。
+      - name: 型別檢查（零錯誤是硬門檻）
+        run: pnpm typecheck
+
+      - name: 單元測試
+        run: pnpm test
+
+      - name: 取得 Osiris 語料（釘死 SHA）
+        run: |
+          git clone --quiet "$OSIRIS_REPO" "$RUNNER_TEMP/osiris"
+          git -C "$RUNNER_TEMP/osiris" checkout --quiet "$OSIRIS_SHA"
+          test "$(git -C "$RUNNER_TEMP/osiris" rev-parse HEAD)" = "$OSIRIS_SHA"
+
+      # 迴歸閘門是**逐案例**比對 baseline，不比對彙總率：覆蓋率上升時本來 missing
+      # 的案例會開始被評估、其中一部分必然 fail，那是新資訊不是退步。
+      # 只有「baseline 裡 pass 的案例變成 fail 或 missing」才會讓這一步失敗。
+      - name: 黃金測試集 — Osiris
+        run: |
+          pnpm golden:index -- --repo "$RUNNER_TEMP/osiris" \
+            --fixture fixtures/osiris.yaml --db "$RUNNER_TEMP/osiris.db"
+          pnpm golden -- --fixture fixtures/osiris.yaml \
+            --db "$RUNNER_TEMP/osiris.db" \
+            --baseline fixtures/baselines/osiris.json \
+            --report "$RUNNER_TEMP/golden-osiris.json"
+
+      - name: 黃金測試集 — 受控 fixture
+        run: |
+          pnpm fixtures:controlled -- "$RUNNER_TEMP/controlled"
+          pnpm golden:index -- --repo "$RUNNER_TEMP/controlled" \
+            --fixture fixtures/controlled-typescript.yaml \
+            --db "$RUNNER_TEMP/controlled.db"
+          pnpm golden -- --fixture fixtures/controlled-typescript.yaml \
+            --db "$RUNNER_TEMP/controlled.db" \
+            --baseline fixtures/baselines/controlled-typescript.json \
+            --report "$RUNNER_TEMP/golden-controlled.json"
+
+      # 失敗時要看得到是哪幾條案例退步，而不是只有一個 exit code。
+      - name: 保留黃金測試集報告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-reports
+          path: ${{ runner.temp }}/golden-*.json
+          if-no-files-found: ignore

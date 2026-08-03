@@ -1,0 +1,169 @@
+{
+  "cases": [
+    {
+      "id": "chg-alpha-dashboard-mobile-size",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-birth-balloons-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-birth-company-intel",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-birth-safe-format-number",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-death-balloons-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-death-company-intel-inner",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-bgp-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-cctv-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-certs-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-cve-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-dns-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-health-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-infrastructure-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-raw-maritime-get",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-camera-null-src",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-dashboard-hidden-polling",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-dashboard-open-source",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-dashboard-safe-format",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-dashboard-support-link",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "chg-shape-layer-panel-safe-format",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "dis-scanner-server-recreated",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "exc-balloons-get-git-revert",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "lin-camera-viewer",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "lin-company-intel-wrapper",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "lin-conflict-simulator-r90",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "lin-dashboard-fetch-consolidation-j55",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-dashboard-style-sequence",
+      "difficulty": "easy",
+      "status": "pass"
+    },
+    {
+      "id": "lin-fetch-endpoint-position-anchored-j91",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-neg-fetch-endpoint-crosswire-j62",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-neg-fetch-endpoint-crosswire-j70",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-neg-fetch-endpoint-crosswire-j86",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-neg-fetch-endpoint-position-crosswire-j91",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "lin-rate-limiter-extraction-j77",
+      "difficulty": "adversarial",
+      "status": "pass"
+    }
+  ]
+}

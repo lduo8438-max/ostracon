@@ -27,10 +27,28 @@ node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRT
 零執行期相依是刻意的取捨（只有 tree-sitter 兩個套件），代價就是綁在 Node 內建的
 SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `ExperimentalWarning`。
 
-## 現在能跑什麼
+## 自己驗證它的宣稱
+
+這份 README 說黃金測試集是 33/33。**不要相信它，自己跑一次。**
 
 ```bash
 pnpm install
+pnpm corpus:fetch        # 依 fixture 裡釘死的 SHA 取回語料並驗證 HEAD
+pnpm golden:index -- --repo corpora/osiris --fixture fixtures/osiris.yaml --db osiris.db
+pnpm golden       -- --fixture fixtures/osiris.yaml --db osiris.db \
+                     --baseline fixtures/baselines/osiris.json
+```
+
+語料的 clone URL 與釘死 commit 都寫在 `fixtures/*.yaml` 裡，**那是唯一真相**——
+CI、文件與這支指令全都從它讀，沒有第二份 SHA 可以分岔。取回後會驗證 HEAD 確實
+等於 fixture 指定的 commit，不符就硬失敗（抓錯 commit 會讓 golden 以「案例 missing」
+的形式壞掉，那和「索引器壞了」在報告上長得一模一樣）。
+
+同一組指令就是 `.github/workflows/ci.yml` 在跑的東西。
+
+## 現在能跑什麼
+
+```bash
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
 pnpm test        # 先跑 typecheck，再跑單元測試（220 個）
 

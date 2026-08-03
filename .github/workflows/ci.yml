@@ -8,12 +8,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  # 語料的釘死終點。fixture 的錨點全是 git 原生座標，所以任何機器都能重建。
-  # 換 SHA 就等於換語料，baseline 必須跟著重新產生。
-  OSIRIS_REPO: https://github.com/simplifaisoul/osiris.git
-  OSIRIS_SHA: 994a5dcd69385e97cf7d1faa1263e5a51987da6b
-
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -46,18 +40,18 @@ jobs:
       - name: 單元測試
         run: pnpm test
 
-      - name: 取得 Osiris 語料（釘死 SHA）
-        run: |
-          git clone --quiet "$OSIRIS_REPO" "$RUNNER_TEMP/osiris"
-          git -C "$RUNNER_TEMP/osiris" checkout --quiet "$OSIRIS_SHA"
-          test "$(git -C "$RUNNER_TEMP/osiris" rev-parse HEAD)" = "$OSIRIS_SHA"
+      # 語料座標（clone_url + index_until）的唯一真相在 fixture 裡。CI 不另外抄一份
+      # SHA——抄了就會有兩份、遲早分岔，而且沒有人會發現。corpus:fetch 會驗證
+      # 取回的 HEAD 確實等於 fixture 指定的 commit，不符就硬失敗。
+      - name: 取得語料（座標讀自 fixture）
+        run: pnpm corpus:fetch -- --dir "$RUNNER_TEMP/corpora"
 
       # 迴歸閘門是**逐案例**比對 baseline，不比對彙總率：覆蓋率上升時本來 missing
       # 的案例會開始被評估、其中一部分必然 fail，那是新資訊不是退步。
       # 只有「baseline 裡 pass 的案例變成 fail 或 missing」才會讓這一步失敗。
       - name: 黃金測試集 — Osiris
         run: |
-          pnpm golden:index -- --repo "$RUNNER_TEMP/osiris" \
+          pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/osiris" \
             --fixture fixtures/osiris.yaml --db "$RUNNER_TEMP/osiris.db"
           pnpm golden -- --fixture fixtures/osiris.yaml \
             --db "$RUNNER_TEMP/osiris.db" \
@@ -66,8 +60,7 @@ jobs:
 
       - name: 黃金測試集 — 受控 fixture
         run: |
-          pnpm fixtures:controlled -- "$RUNNER_TEMP/controlled"
-          pnpm golden:index -- --repo "$RUNNER_TEMP/controlled" \
+          pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/controlled-typescript" \
             --fixture fixtures/controlled-typescript.yaml \
             --db "$RUNNER_TEMP/controlled.db"
           pnpm golden -- --fixture fixtures/controlled-typescript.yaml \

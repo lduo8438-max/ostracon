@@ -13,6 +13,7 @@
     "mine:candidates": "node mine-candidates.mjs",
     "fixtures:validate": "node validate-fixtures.mjs",
     "fixtures:controlled": "node fixtures/build-controlled-repo.mjs",
+    "corpus:fetch": "node --experimental-strip-types src/golden/corpus.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && node --experimental-strip-types --test test/index.test.ts",
     "golden:index": "node --experimental-strip-types src/golden/materialize.ts",

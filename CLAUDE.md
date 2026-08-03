@@ -131,10 +131,15 @@ pnpm typecheck                  # tsc --noEmit，零錯誤是硬門檻
 pnpm test                       # 先跑 typecheck，再跑 node --test
                                 # 全部測試由 test/index.test.ts 匯入
 
+# 依 fixture 裡的 clone_url / index_until 取回語料到 corpora/，並驗證 HEAD
+# 語料座標的唯一真相是 fixture，不得在別處另抄一份 SHA
+pnpm corpus:fetch [-- --dir <目錄>]
+
 # 建立黃金案例需要的 revision/match，再跑 runner
-# fixture 內含語料的 GitHub URL 與釘死的 SHA，任何機器都可重建
-pnpm golden:index -- --repo <osiris-checkout> --fixture fixtures/osiris.yaml --db <fresh.db>
-pnpm golden       -- --fixture fixtures/osiris.yaml --db <fresh.db> --report reports/<name>.json
+# --baseline 是閘門的必要條件，少了它 exit code 恆為 0
+pnpm golden:index -- --repo corpora/osiris --fixture fixtures/osiris.yaml --db <fresh.db>
+pnpm golden       -- --fixture fixtures/osiris.yaml --db <fresh.db> \
+                     --baseline fixtures/baselines/osiris.json --report reports/<name>.json
 
 # 印出一段程式碼的演化史（會自行建索引，只索引該檔案所屬的血緣）
 pnpm why:cli -- '<path>:<symbol>' --repo <repo-path> --db <db> [--until <sha>] [--full]

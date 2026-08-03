@@ -12,3 +12,6 @@ reports/
 
 # 只屬於這台機器的工作脈絡：進度、個人排程、本機路徑。
 CLAUDE.local.md
+
+# corpus:fetch 抓下來的語料副本。座標的真相在 fixture 裡，副本不需要進版控。
+corpora/

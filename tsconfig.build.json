@@ -1,0 +1,30 @@
+{
+  // 發布用的建置設定。開發與測試仍然走 `node --experimental-strip-types`，
+  // 不經過這裡——所以「原始碼與產物不同步」的風險只存在於發布那一刻，
+  // 而 `prepublishOnly` 會在那一刻重建。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+
+    // 匯入寫的是 `./walk.ts`（Node 的 strip-types 要求副檔名照實寫）。
+    // 這個選項讓 emit 時改寫成 `./walk.js`，所以同一份原始碼兩種執行方式都成立。
+    // 少了它，產物會 import 一個不存在的 .ts 檔。
+    "rewriteRelativeImportExtensions": true,
+
+    // 索引引擎本身是可以被當函式庫用的（AST 解析、四層雜湊、匹配階梯、
+    // 圖遍歷都不依賴 CLI），所以附型別。
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+
+  // **`src/golden/` 不進封裝。** 它是評估工具不是產品：它 import `yaml`
+  // （devDependency）、只服務這個專案自己的開發流程，而使用者要跑 golden 的話
+  // 是 clone 整個 repo 而不是裝 npm 套件。這條界線先前不存在，
+  // 所以「yaml 是 devDependency 卻被 src/ import」看起來像 bug；
+  // 界線畫出來之後那件事就是正確的。
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/golden/**", "test/**"]
+}

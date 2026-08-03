@@ -514,11 +514,7 @@ export async function why(
   }
 }
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
-  const args = process.argv.slice(2);
+export async function main(args: string[]): Promise<void> {
   const target = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--repo"
     && args[args.indexOf(a) - 1] !== "--db" && args[args.indexOf(a) - 1] !== "--until");
   const repo = valueAfter(args, "--repo") ?? process.cwd();
@@ -526,10 +522,18 @@ if (
   const until = valueAfter(args, "--until") ?? "HEAD";
   if (!target) {
     console.error(
-      "用法：why <path>:<symbol> [--repo <path>] [--db <file>] [--until <sha>] [--full]\n"
+      "用法：ostracon why <path>:<symbol> [--repo <path>] [--db <file>] [--until <sha>] [--full]\n"
       + "  --full  索引整個 repo，跨檔案的搬移與抽取才看得見（慢很多）",
     );
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   console.log(await why(repo, target, dbPath, until, { full: args.includes("--full") }));
+}
+
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  await main(process.argv.slice(2));
 }

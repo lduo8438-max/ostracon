@@ -120,10 +120,16 @@ TypeScript；W5 加 Python 僅為驗證架構沒有寫死在單一語言。
 
 ## 開發指令
 
-`package.json` 目前**沒有** `build`——不要執行 `pnpm build` 再把失敗當成回歸。
+**開發與測試一律走 `node --experimental-strip-types`，不經過建置。**
+`pnpm build`（`tsconfig.build.json`）只在發布時用，`prepublishOnly` 會自動跑。
 
-**CLI 的 script 叫 `why:cli`，不是 `why`。** `pnpm why` 是 pnpm 內建指令（查相依
-關係），會蓋掉同名 script 而不報錯。
+**`src/golden/` 不進封裝**——`files` 白名單只有 `dist`、`db/schema.sql`、README、
+LICENSE。它是評估工具不是產品（它 import devDependency `yaml`），要跑 golden 的人
+是 clone 整個 repo。
+
+**CLI 的 script 叫 `why:cli`，不是 `why`。** `pnpm why` 是 pnpm 內建指令，會蓋掉
+同名 script 而不報錯。對外介面是 `ostracon why`，由 `src/cli/main.ts` 分派到各支的
+`main(args)`——那也是各支直接執行時走的同一個函式。
 
 ```bash
 pnpm install

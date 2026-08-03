@@ -20,15 +20,12 @@ function valueAfter(args: string[], flag: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
-  const args = process.argv.slice(2);
+export function main(args: string[]): void {
   const dbPath = valueAfter(args, "--db");
   if (!dbPath) {
-    console.error("用法：extract-evidence --db <file> [--repo-id <n>]");
-    process.exit(2);
+    console.error("用法：ostracon evidence extract --db <file> [--repo-id <n>]");
+    process.exitCode = 2;
+    return;
   }
   const repoId = Number(valueAfter(args, "--repo-id") ?? 1);
   const db = new DatabaseSync(dbPath);
@@ -47,4 +44,11 @@ if (
   } finally {
     db.close();
   }
+}
+
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  main(process.argv.slice(2));
 }

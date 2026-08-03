@@ -174,22 +174,26 @@ export async function ostracised(
   }
 }
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
-  const args = process.argv.slice(2);
+export async function main(args: string[]): Promise<void> {
   const repo = valueAfter(args, "--repo") ?? process.cwd();
   const dbPath = valueAfter(args, "--db") ?? ".ostracon/index.db";
   const until = valueAfter(args, "--until") ?? "HEAD";
   const raw = valueAfter(args, "--strength");
   if (raw !== undefined && raw !== "A" && raw !== "C") {
     console.error("--strength 只接受 A 或 C（B 級需要文字證據，目前刻意不做）");
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   console.log(
     await ostracised(repo, dbPath, until, {
       ...(raw === undefined ? {} : { strength: raw }),
     }),
   );
+}
+
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  await main(process.argv.slice(2));
 }

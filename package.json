@@ -1,15 +1,15 @@
 {
-  "name": "@ostracon-dev/indexer",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Ostracon structural indexer and golden evaluation runner.",
+  "name": "ostracon",
+  "version": "0.1.0",
+  "description": "從 git history 重建程式碼的決策演化史：何時誕生、被哪幾次改動重塑、理由是什麼、哪些做法試過又被推翻。結構層零 LLM。",
   "homepage": "https://ostracon.org",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ostracon-dev/ostracon.git"
+    "url": "git+https://github.com/lduo8438-max/ostracon.git"
   },
   "type": "module",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "mine:candidates": "node mine-candidates.mjs",
     "fixtures:validate": "node validate-fixtures.mjs",
     "fixtures:controlled": "node fixtures/build-controlled-repo.mjs",
@@ -22,7 +22,8 @@
     "why:cli": "node --experimental-strip-types src/cli/why.ts",
     "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",
     "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
-    "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts"
+    "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts",
+    "prepublishOnly": "pnpm run build && pnpm test"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
@@ -36,5 +37,28 @@
   "dependencies": {
     "tree-sitter-typescript": "0.23.2",
     "web-tree-sitter": "0.26.11"
+  },
+  "keywords": [
+    "git",
+    "history",
+    "code-archaeology",
+    "decision-history",
+    "tree-sitter",
+    "ast",
+    "typescript",
+    "provenance"
+  ],
+  "license": "MIT",
+  "bin": {
+    "ostracon": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "db/schema.sql",
+    "README.md",
+    "LICENSE"
+  ],
+  "bugs": {
+    "url": "https://github.com/lduo8438-max/ostracon/issues"
   }
 }

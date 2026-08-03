@@ -15,3 +15,7 @@ CLAUDE.local.md
 
 # corpus:fetch 抓下來的語料副本。座標的真相在 fixture 裡，副本不需要進版控。
 corpora/
+
+# 建置產物與封裝檔。發布時由 prepublishOnly 重建，不進版控。
+dist/
+*.tgz

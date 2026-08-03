@@ -12,26 +12,23 @@ function valueAfter(args: string[], flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
-  const args = process.argv.slice(2);
+export async function main(args: string[]): Promise<void> {
   const dbPath = valueAfter(args, "--db");
   const recordDir = valueAfter(args, "--record-dir");
   const replayDir = valueAfter(args, "--replay-dir");
   if (!dbPath || (recordDir && replayDir)) {
     console.error(
-      "用法：evidence:linked -- --db <file> [--repo-id <n>] "
+      "用法：ostracon evidence linked --db <file> [--repo-id <n>] "
         + "[--record-dir fixtures/http | --replay-dir fixtures/http]",
     );
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 
   const token = process.env.GITHUB_TOKEN;
   if (!replayDir && !token) {
     console.log("未設定 GITHUB_TOKEN；略過 linked 層（其餘索引不受影響）");
-    process.exit(0);
+    return;
   }
 
   const live = createGitHubFetcher({ token });
@@ -57,4 +54,11 @@ if (
   } finally {
     db.close();
   }
+}
+
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  await main(process.argv.slice(2));
 }

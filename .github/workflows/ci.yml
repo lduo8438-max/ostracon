@@ -68,6 +68,22 @@ jobs:
             --baseline fixtures/baselines/controlled-typescript.json \
             --report "$RUNNER_TEMP/golden-controlled.json"
 
+      # 建置壞掉不會被上面任何一步發現——開發與測試都走 strip-types，不碰 tsc emit。
+      # 所以要在這裡真的打包一次、在封裝外安裝、實際執行，證明發布出去的東西能跑。
+      - name: 建置並冒煙測試封裝
+        run: |
+          pnpm run build
+          npm pack --silent
+          mkdir -p "$RUNNER_TEMP/pkg" && cd "$RUNNER_TEMP/pkg"
+          npm init -y >/dev/null
+          npm install --silent "$GITHUB_WORKSPACE"/ostracon-*.tgz
+          ./node_modules/.bin/ostracon --version
+          # 完整跑一次 why：這會驗到 db/schema.sql 與 tree-sitter wasm
+          # 在「安裝後的位置」解析得到——在原始碼樹裡跑是驗不到的。
+          ./node_modules/.bin/ostracon why 'src/match/signature.ts:modMulAdd' \
+            --repo "$GITHUB_WORKSPACE" --db "$RUNNER_TEMP/smoke.db" \
+            | grep -q modMulAdd
+
       # 失敗時要看得到是哪幾條案例退步，而不是只有一個 exit code。
       - name: 保留黃金測試集報告
         if: always()

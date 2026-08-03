@@ -27,6 +27,22 @@ node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRT
 零執行期相依是刻意的取捨（只有 tree-sitter 兩個套件），代價就是綁在 Node 內建的
 SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `ExperimentalWarning`。
 
+## 安裝
+
+```bash
+npx ostracon why 'src/auth.ts:validateToken' --repo /path/to/repo
+```
+
+或裝起來：`npm i -g ostracon`。零執行期相依（只有 tree-sitter 兩個套件），
+索引存在本機 SQLite，不上傳任何東西。
+
+```
+ostracon why <path>:<symbol>     印出一段程式碼的演化史
+ostracon ostracised              列出試過又被推翻的做法
+ostracon evidence extract        從 commit message 抽取理由並驗證 span
+ostracon evidence linked         取回被參照的 GitHub PR / issue 討論串
+```
+
 ## 自己驗證它的宣稱
 
 這份 README 說黃金測試集是 33/33。**不要相信它，自己跑一次。**

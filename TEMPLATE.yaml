@@ -1,0 +1,158 @@
+# fixtures/<repo-name>.yaml
+#
+# 複製這份，刪掉用不到的區塊，開始填。
+# 填完跑：node validate-fixtures.mjs fixtures --repos <name>=<path>
+# 或：pnpm fixtures:validate fixtures --repos <name>=<path>
+#
+# 三條規則，違反了整份測試集就沒有意義：
+#   1. commit 一律寫完整 40 字元 SHA。短碼在 repo 長大後會產生歧義。
+#   2. 錨點只用 git 原生座標。永遠不要引用 Ostracon 產生的任何 ID。
+#   3. rationale 一定要寫。六週後你不會記得為什麼這樣標，
+#      而屆時若系統與你不同意，你需要重新裁決——沒有理由就無從裁決。
+
+fixture_version: 1
+
+repo:
+  name: <repo-name>                 # 對應 --repos 的 key
+  clone_url: https://github.com/<org>/<repo>.git
+  index_until: <40 字元 SHA>        # 索引邊界。不釘死的話上游一更新指標就會無故變動
+  language: typescript
+
+labeled_by: <你>
+labeled_at: 2026-07-26
+
+cases:
+
+  # ─── A. 血緣 ────────────────────────────────────────────────────────────
+  - id: lin-001
+    kind: lineage
+    difficulty: hard                # easy | hard | adversarial
+    label_confidence: certain       # certain | probable | ambiguous
+    rationale: >
+      <為什麼你認為這幾個 anchor 是同一個實體？哪一段最可能斷？>
+    chain:
+      - anchor:
+          commit: <40 字元 SHA>
+          path: src/...
+          symbol: <限定名稱，如 ClassName.method>
+          occurrence: 0             # 同名多個時的序號
+          line_hint: <行號>         # 選填，僅供人閱讀；不用時刪除此欄
+          snippet_head: "<宣告的第一行，逐字>"
+      - anchor:
+          commit: <40 字元 SHA>
+          path: src/...
+          symbol: <限定名稱>
+          occurrence: 0
+          snippet_head: "<宣告的第一行>"
+        transition:
+          type: edit                # edit | rename | move | move_rename
+                                    # | move_rename_rewrite | extract | inline
+          expect_tier_at_most: L1   # 「不得比這個更弱」
+                                    # L1 同槽位同名 / L2 raw|token 相等
+                                    # L3 alpha 相等 / L3b 同檔唯一 alpha_self 相等
+                                    # L4 同檔相似度 / L5 跨檔相似度
+
+  # 沒有唯一正解時（例如對等拆分），不要硬做決定：
+  # - id: lin-007
+  #   kind: lineage
+  #   difficulty: hard
+  #   label_confidence: ambiguous   # 不計入主要指標，但要報告命中哪個選項
+  #   rationale: 兩半程式碼量相當、都保留部分原職責，無客觀依據可分。
+  #   accept_any_of:
+  #     - chain: [...]
+  #     - chain: [...]
+
+  # 血緣負例沿用同一種 Git anchor，但明確要求 matcher 不可連線。
+  - id: lin-negative-001
+    kind: lineage
+    difficulty: adversarial
+    expect: absent
+    label_confidence: certain
+    rationale: >
+      <兩段程式碼為何只是相似模板、同名 helper 或同時搬動，而不是同一實體？>
+    chain:
+      - anchor:
+          commit: <40 字元 SHA>
+          path: src/...
+          symbol: <限定名稱>
+          occurrence: 0
+          snippet_head: "<宣告的第一行>"
+      - anchor:
+          commit: <40 字元 SHA>
+          path: src/...
+          symbol: <限定名稱>
+          occurrence: 0
+          snippet_head: "<宣告的第一行>"
+        transition:
+          type: unrelated
+
+  # ─── B. 斷層（負例至少要跟正例一樣多）──────────────────────────────────
+  - id: dis-001
+    kind: discontinuity
+    difficulty: easy
+    expect: present
+    slot: {path: src/..., symbol: <限定名稱>}
+    at_commit: <40 字元 SHA>
+    rationale: >
+      <為什麼這是整體置換而不是演化？>
+
+  - id: dis-002
+    kind: discontinuity
+    difficulty: adversarial
+    expect: absent                  # ★ 負例：改動很大但不是斷層
+    slot: {path: src/..., symbol: <限定名稱>}
+    at_commit: <40 字元 SHA>
+    rationale: >
+      body 幾乎全改，但簽名、職責、呼叫者都沒變，是同一個東西的演化。
+      誤報斷層等於叫使用者忽略真實歷史，比漏報嚴重。
+
+  # ─── C. 變更層級（最便宜，量要最大）────────────────────────────────────
+  - id: chg-001
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/..., symbol: <限定名稱>}
+    at_commit: <40 字元 SHA>
+    expect: raw                     # none|raw|token|alpha|shape|birth|death
+    rationale: <為什麼落在這一層？>
+
+  # ─── D. 構造生命週期 ───────────────────────────────────────────────────
+  - id: con-001
+    kind: construct
+    difficulty: hard
+    entity: {path: src/..., symbol: <限定名稱>}
+    description: <給人看的描述，如「以 mutex 保護共享佇列的做法」>
+    expect:
+      born_at: <40 字元 SHA>
+      died_at: <40 字元 SHA>        # 仍存在則留空
+    rationale: <你怎麼確認這個構造的生死點？>
+
+  # ─── E. 迂迴 ───────────────────────────────────────────────────────────
+  - id: exc-001
+    kind: excursion
+    difficulty: easy
+    entity: {path: src/..., symbol: <限定名稱>}
+    expect: present
+    introduce_at: <40 字元 SHA>
+    remove_at: <40 字元 SHA>
+    expect_strength_at_least: B     # A 確證 | B 高可信 | C 疑似
+    rationale: <有沒有文字證據？在哪裡？>
+
+  - id: exc-002
+    kind: excursion
+    difficulty: adversarial
+    entity: {path: src/..., symbol: <限定名稱>}
+    expect: absent                  # ★ 短命但非放棄（如過渡期 feature flag）
+    rationale: <為什麼結構特徵符合卻不是試錯？>
+
+  # ─── F. 證據（W5 起才會用到，但格式先定下來）──────────────────────────
+  - id: evd-001
+    kind: evidence
+    difficulty: hard
+    at_commit: <40 字元 SHA>
+    entity: {path: src/..., symbol: <限定名稱>}
+    expect_spans:
+      - source: {type: pr_body, external_id: "442"}
+        contains: "<原文中的關鍵片段，子字串比對即可>"
+        tier: linked
+    must_not_infer: true            # 有明確文字證據時，系統不得標成 inferred
+    rationale: commit message 只寫 "refactor"，真正的理由在 PR body。

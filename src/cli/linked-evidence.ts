@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import { ingestLinkedDocuments } from "../evidence/linked.ts";
+import { extractFromLinkedDocuments } from "../evidence/store.ts";
+import { createRecordingFetcher, createReplayFetcher } from "../http/fixtures.ts";
+import { createGitHubFetcher } from "../http/github.ts";
+
+function valueAfter(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  const args = process.argv.slice(2);
+  const dbPath = valueAfter(args, "--db");
+  const recordDir = valueAfter(args, "--record-dir");
+  const replayDir = valueAfter(args, "--replay-dir");
+  if (!dbPath || (recordDir && replayDir)) {
+    console.error(
+      "用法：evidence:linked -- --db <file> [--repo-id <n>] "
+        + "[--record-dir fixtures/http | --replay-dir fixtures/http]",
+    );
+    process.exit(2);
+  }
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!replayDir && !token) {
+    console.log("未設定 GITHUB_TOKEN；略過 linked 層（其餘索引不受影響）");
+    process.exit(0);
+  }
+
+  const live = createGitHubFetcher({ token });
+  const fetcher = replayDir
+    ? createReplayFetcher(replayDir)
+    : recordDir
+      ? createRecordingFetcher(live, recordDir)
+      : live;
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA foreign_keys = ON");
+  try {
+    const sourceReport = await ingestLinkedDocuments(
+      db,
+      Number(valueAfter(args, "--repo-id") ?? 1),
+      fetcher,
+    );
+    const extractionReport = extractFromLinkedDocuments(
+      db,
+      Number(valueAfter(args, "--repo-id") ?? 1),
+    );
+    console.log(JSON.stringify({ source: sourceReport, extraction: extractionReport }, null, 2));
+    if (sourceReport.stopped) process.exitCode = 1;
+  } finally {
+    db.close();
+  }
+}

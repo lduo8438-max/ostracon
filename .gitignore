@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+.pnpm-store/
+
+# 量測產出與本機語料副本。不是產品輸入，也不該進版控（目前 30MB）。
+reports/
+
+# 索引產出的資料庫。任何目錄都可能出現，一律排除。
+*.db
+*.db-wal
+*.db-shm
+
+# 只屬於這台機器的工作脈絡：進度、個人排程、本機路徑。
+CLAUDE.local.md

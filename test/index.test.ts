@@ -1,0 +1,17 @@
+import "./adapter.integration.test.ts";
+import "./fixture-tools.test.mjs";
+import "./excursion.test.ts";
+import "./git-index.test.ts";
+import "./golden-runner.test.ts";
+import "./hash.test.ts";
+import "./hunks.test.ts";
+import "./ladder.test.ts";
+import "./lineage.test.ts";
+import "./linked.test.ts";
+import "./minhash-arithmetic.test.ts";
+import "./ostracised.test.ts";
+import "./position.test.ts";
+import "./repo-pass.test.ts";
+import "./signature-cache.test.ts";
+import "./span.test.ts";
+import "./why.test.ts";

@@ -1,0 +1,534 @@
+fixture_version: 1
+
+repo:
+  name: osiris
+  clone_url: https://github.com/simplifaisoul/osiris.git
+  index_until: 994a5dcd69385e97cf7d1faa1263e5a51987da6b
+  language: typescript
+
+labeled_by: lcy
+labeled_at: 2026-07-26
+
+cases:
+  # ── change_level: raw ────────────────────────────────────────────────────
+  # 027798 的全 commit 塌縮 99%；以下檔案在 `git show -w --numstat`
+  # 完全沒有輸出，因此其函式宣告只改了空白，token 序列不變。
+  - id: chg-raw-cctv-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/cctv/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: cctv route 整個檔案只有空白重排，忽略空白後 diff 為空。
+
+  - id: chg-raw-health-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/health/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: health route 整個檔案只有空白重排，忽略空白後 diff 為空。
+
+  - id: chg-raw-infrastructure-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/infrastructure/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: infrastructure route 只有格式變動，GET 的 token 序列沒有改變。
+
+  - id: chg-raw-maritime-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/maritime/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: maritime route 在此 commit 只有空白重排，忽略空白後沒有 diff。
+
+  - id: chg-raw-bgp-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/osint/bgp/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: BGP handler 只被格式化；加減行很多但忽略空白後完全塌縮。
+
+  - id: chg-raw-certs-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/osint/certs/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: certificates handler 只改排版，token 與控制流均保持不變。
+
+  - id: chg-raw-cve-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/osint/cve/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: CVE handler 的 whitespace-aware diff 為空，應停在 raw 層。
+
+  - id: chg-raw-dns-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/osint/dns/route.ts, symbol: GET}
+    at_commit: 027798718e6e411178e0c9fc9f86be91a6c05aad
+    expect: raw
+    rationale: DNS handler 只有縮排和換行改動，token 雜湊應完全相同。
+
+  # ── change_level: alpha / shape ─────────────────────────────────────────
+  - id: chg-alpha-dashboard-mobile-size
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/app/page.tsx, symbol: Dashboard}
+    at_commit: 5fdb1b5cb193b9b16dffc78bf0378b3337f08739
+    expect: alpha
+    rationale: 只調整既有 JSX 節點的 className 字串；AST 結構不變但字面量改變。
+
+  - id: chg-shape-dashboard-support-link
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/app/page.tsx, symbol: Dashboard}
+    at_commit: 3bccc410b9e773169b34424d7b702c974ea985ed
+    expect: shape
+    rationale: desktop 與 mobile status subtree 被新的 support anchor subtree 取代。
+
+  - id: chg-shape-dashboard-open-source
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/app/page.tsx, symbol: Dashboard}
+    at_commit: 80b2f485d40a3cefd2b0d9b30b1083efef4e1ca2
+    expect: shape
+    rationale: 刪除 splash badge、classification bar 與 telemetry 子樹，結構明顯改變。
+
+  - id: chg-shape-dashboard-hidden-polling
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/app/page.tsx, symbol: Dashboard}
+    at_commit: ed3d3b922a7c0cf1f43b1f926f6b7f8f059ead04
+    expect: shape
+    rationale: fetchEndpoint 新增 document.hidden 提前返回的 if，並修改多個 polling 分支。
+
+  - id: chg-shape-camera-null-src
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/components/CameraViewer.tsx, symbol: CameraViewer}
+    at_commit: 7e3889027afd96cb2f4de9bc7fe221dd61251581
+    expect: shape
+    rationale: img 分支前加入 imageUrl 條件並增加 null 分支，JSX 控制結構改變。
+
+  - id: chg-shape-dashboard-safe-format
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/app/page.tsx, symbol: Dashboard}
+    at_commit: 1f9424c3867a7ff7e6bff9c5c0b8f551bb7a3c64
+    expect: shape
+    rationale: 多個 member call 改成 safeFormatNumber 呼叫，callee 子樹形狀不同。
+
+  - id: chg-shape-layer-panel-safe-format
+    kind: change_level
+    difficulty: hard
+    entity: {path: src/components/LayerPanel.tsx, symbol: LayerPanel}
+    at_commit: 1f9424c3867a7ff7e6bff9c5c0b8f551bb7a3c64
+    expect: shape
+    rationale: count.toLocaleString member call 改成 safeFormatNumber(count)，AST 子樹改變。
+
+  # ── change_level: birth / death ─────────────────────────────────────────
+  - id: chg-birth-safe-format-number
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/page.tsx, symbol: safeFormatNumber}
+    at_commit: 1f9424c3867a7ff7e6bff9c5c0b8f551bb7a3c64
+    expect: birth
+    rationale: 此 commit 首次新增 safeFormatNumber 箭頭函式宣告。
+
+  - id: chg-birth-company-intel
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/components/CompanyIntel.tsx, symbol: CompanyIntel}
+    at_commit: 02f32248c770fc589d990daa02b1b86fb0449b35
+    expect: birth
+    rationale: CompanyIntel 元件檔與 export default function 在此 commit 首次加入。
+
+  - id: chg-death-company-intel-inner
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/components/CompanyIntel.tsx, symbol: CompanyIntelInner}
+    at_commit: f472bc7377e2f4eab2916c399b7126d6066f0837
+    expect: death
+    rationale: 此 commit 刪除整個 CompanyIntel 元件檔，前一版仍有 CompanyIntelInner。
+
+  - id: chg-birth-balloons-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/balloons/route.ts, symbol: GET}
+    at_commit: 1e17e0f537d91b94fc0e4d4eb7eb7afae00ec77d
+    expect: birth
+    rationale: balloons API route 與 GET handler 在此功能 commit 首次建立。
+
+  - id: chg-death-balloons-get
+    kind: change_level
+    difficulty: easy
+    entity: {path: src/app/api/balloons/route.ts, symbol: GET}
+    at_commit: 8d9ca43c8d67b205f9ca2ab73c6c2b25524357fb
+    expect: death
+    rationale: 明確 git revert 刪除 balloons route；前一版仍存在完整 GET handler。
+
+  # ── discontinuity ─────────────────────────────────────────────────────────
+  - id: dis-scanner-server-recreated
+    kind: discontinuity
+    difficulty: easy
+    slot: {path: scanner/server.js, symbol: checkRate}
+    at_commit: b2879668b57f4aae0ee41caa6f6e21b8f29dd36d
+    expect: present
+    rationale: >
+      745663acc7821676f8154bf4d82352b7661c7e53 刪除 scanner/server.js，
+      b2879668b57f4aae0ee41caa6f6e21b8f29dd36d 又以新增檔重現同一路徑，
+      中間存在明確的版控生命週期斷層。刪除訊息雖說檔案仍留在本機並被 gitignore，
+      但工具能證明的是 Git 停止追蹤後又重新追蹤，不是檔案系統上的實體消失。
+      錨在 checkRate 而非原先的 server：server 是 call expression 的回傳值，按既定
+      entity 邊界不是宣告；checkRate 則在刪除前後都存在，且承受同一個路徑斷層。
+
+  # ── excursion ─────────────────────────────────────────────────────────────
+  - id: exc-balloons-get-git-revert
+    kind: excursion
+    difficulty: easy
+    entity: {path: src/app/api/balloons/route.ts, symbol: GET}
+    expect: present
+    introduce_at: 1e17e0f537d91b94fc0e4d4eb7eb7afae00ec77d
+    remove_at: 8d9ca43c8d67b205f9ca2ab73c6c2b25524357fb
+    expect_strength_at_least: A
+    rationale: >
+      GET handler 在 1e17e0f537d91b94fc0e4d4eb7eb7afae00ec77d 引入，
+      再由明確的 git revert 8d9ca43c8d67b205f9ca2ab73c6c2b25524357fb
+      連同 route 一起移除，構成有文字確證的 A 級迂迴。
+
+  # ── lineage ──────────────────────────────────────────────────────────────
+  # ── similarity boundary positives ───────────────────────────────────────
+  - id: lin-dashboard-fetch-consolidation-j55
+    kind: lineage
+    difficulty: adversarial
+    label_confidence: certain
+    rationale: >
+      原本只抓 flights 的 effect-local helper 被泛化成可抓任意 endpoint 的 helper，
+      隨後所有原 fetchFlights 呼叫都改指向它。精確 3-gram Jaccard 為 0.555，
+      正壓在 sameFileThreshold 附近；職責擴張但呼叫鏈連續，是同一實體的演化。
+    chain:
+      - anchor:
+          commit: b83294c0550f35acdb16dd5fd8f450a711cd1f17
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchFlights
+          occurrence: 0
+          snippet_head: "fetchFlights = async () => {"
+      - anchor:
+          commit: 7099ba07562d71e7cb90f447ed0fa4ae72d32169
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 0
+          snippet_head: "fetchEndpoint = async (url: string, key: string, transform?: (d: any) => any) => {"
+        transition:
+          type: rename
+          expect_tier_at_most: L4
+
+  - id: lin-rate-limiter-extraction-j77
+    kind: lineage
+    difficulty: adversarial
+    label_confidence: certain
+    rationale: >
+      scanner route 的 isRateLimited 被抽到共用 ssrf-guard，原 call site 同 commit
+      改為 import；核心 Map 清理、window rollover 與 count 判斷延續。精確 Jaccard
+      0.769，僅略高於 crossFileThreshold，是跨檔門檻的真實邊界案例。
+    chain:
+      - anchor:
+          commit: c47908da80809cce5ce74c3d20425c1d5581b946
+          path: src/app/api/scanner/route.ts
+          symbol: isRateLimited
+          occurrence: 0
+          snippet_head: "function isRateLimited(ip: string): boolean {"
+      - anchor:
+          commit: b3f2597b6296f66b7825cdb506b1f96ddf846fd0
+          path: src/lib/ssrf-guard.ts
+          symbol: isRateLimited
+          occurrence: 0
+          snippet_head: "function isRateLimited(ip: string, limit: number = 20, windowMs: number = 60_000): boolean {"
+        transition:
+          type: move
+          expect_tier_at_most: L5
+
+  - id: lin-fetch-endpoint-position-anchored-j91
+    kind: lineage
+    difficulty: adversarial
+    label_confidence: certain
+    rationale: >
+      page.tsx 在這一步有四個 Dashboard.fetchEndpoint closure，宣告文字逐字相同
+      （同樣的參數列與 body），所以 hash_raw 相等、精確 Jaccard = 1，內容資訊完全
+      用盡；L1 與 L2 的 bucket 都是 4x4，兩層都必須因雙端唯一性失敗而往下掉。
+
+      裁決依據不是 occurrence 序號，也不是系統輸出，而是 enclosing scope 的語意：
+      四個 closure 各自位於唯一可辨識的區塊，前後版本的 banner 完全一致——
+      #0 PROGRESSIVE DATA LOADING、#1 LAYER-AWARE DATA LOADING、
+      #2 LAYER-AWARE POLLING、#3 REACTIVE。本案例錨定 #2，也就是
+      LAYER-AWARE POLLING 那個 useEffect 裡的 closure。
+
+      這一步只改了 page.tsx 的第 65、212、226 行與 485 之後的 JSX，#2 所在的
+      287 起整段完全沒被碰到，因此 diff hunk 的位移回推可以精確指出它在前像的
+      位置。要求 L3c 而非 L4：位置可證明時系統必須說得出理由，退回相似度就是
+      把已有的證據丟掉。#0 不適用（212 與 226 兩個 hunk 落在它的區間內），
+      這是刻意的對照——同一個 commit 裡有可證明與不可證明的兩種候選。
+    chain:
+      - anchor:
+          commit: 0b15973d4d5fde494f16dc4bc79a290ada7a1926
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 2
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+      - anchor:
+          commit: e810f4b8e81f6f964d13a4298e2da617b12b4463
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 2
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+        transition:
+          type: edit
+          expect_tier_at_most: L3c
+
+  # ── matcher-produced negatives ──────────────────────────────────────────
+  - id: lin-neg-fetch-endpoint-position-crosswire-j91
+    kind: lineage
+    difficulty: adversarial
+    expect: absent
+    label_confidence: certain
+    rationale: >
+      與 lin-fetch-endpoint-position-anchored-j91 同一個 commit pair 的反向約束。
+      該步四個 closure 逐字相同，位置是唯一的判別資訊；正例要求 #2 接到 #2，
+      這條要求 #2 **不得**接到 #1。
+
+      裁決依據同樣是 enclosing scope：#1 在 LAYER-AWARE DATA LOADING 區塊、
+      #2 在 LAYER-AWARE POLLING 區塊，兩者在前後版本都存在且職責未交換，
+      任何跨區塊的配對都是假陽性。位置證據若在唯一性上放寬，最可能的失敗形態
+      就是接到相鄰的那一個，所以負例挑 #1 而不是隨便一個 occurrence。
+    chain:
+      - anchor:
+          commit: 0b15973d4d5fde494f16dc4bc79a290ada7a1926
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 2
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+      - anchor:
+          commit: e810f4b8e81f6f964d13a4298e2da617b12b4463
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 1
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+        transition:
+          type: unrelated
+
+  - id: lin-neg-fetch-endpoint-crosswire-j86
+    kind: lineage
+    difficulty: adversarial
+    expect: absent
+    label_confidence: certain
+    rationale: >
+      L1 唯一性修復前，完整匹配審計實際產生的假陽性。兩個同名 helper 位於不同 useEffect：
+      occurrence 0 管理基礎 feeds，occurrence 1 管理 layer-aware feeds。版本 commit
+      沒有交換兩者職責；正確延續是相同 occurrence，不能把前版 #1 接到新版 #0。
+      舊 matcher 因 L1 用 Map 靜默覆蓋，以 L4/Jaccard 0.857 錯接；
+      此案例現在防止該問題復發。
+    chain:
+      - anchor:
+          commit: b3ef988c4f7073ae4e3e7106b05f939eb52bfb4b
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 1
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+      - anchor:
+          commit: e14176e48e8201ede188a3c7494d2f704b12bead
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 0
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+        transition:
+          type: unrelated
+
+  - id: lin-neg-fetch-endpoint-crosswire-j70
+    kind: lineage
+    difficulty: adversarial
+    expect: absent
+    label_confidence: certain
+    rationale: >
+      L1 唯一性修復前，完整匹配審計實際產生的假陽性。前版 occurrence 2 與新版 occurrence 0
+      分屬不同 effect、輪詢不同 feed 集合，commit 也沒有搬移兩個 closure 的
+      職責。舊 matcher 在同名槽位被 Map 覆蓋後，以 L4/Jaccard 0.697
+      把兩個獨立實體連起來；此案例現在防止該問題復發。
+    chain:
+      - anchor:
+          commit: d1c047cd3576fda00f5e5397bed257840da4804d
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 2
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+      - anchor:
+          commit: 22efb81e3742443362c2cb43034e422f6ece2b96
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 0
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+        transition:
+          type: unrelated
+
+  - id: lin-neg-fetch-endpoint-crosswire-j62
+    kind: lineage
+    difficulty: adversarial
+    expect: absent
+    label_confidence: certain
+    rationale: >
+      L1 唯一性修復前，完整匹配審計實際產生的假陽性。前版 occurrence 2 是含 RequestInit 的
+      layer polling helper，新版 occurrence 0 是不含 options 的基礎 feed helper；
+      正確身份各自留在原 lexical scope。舊 matcher 以 L4/Jaccard 0.615
+      跨 occurrence 接線；此案例現在防止該 precision 退步復發。
+    chain:
+      - anchor:
+          commit: 2b5801465e150a1891ddfb573c024f93fcc2cf97
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 2
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any, options?: RequestInit) => {"
+      - anchor:
+          commit: cb46cd64b71075e1b06aa8968e0817b928a31365
+          path: src/app/page.tsx
+          symbol: Dashboard.fetchEndpoint
+          occurrence: 0
+          snippet_head: "fetchEndpoint = async (url: string, transform?: (d: any) => any) => {"
+        transition:
+          type: unrelated
+
+  # ── existing lineage baselines ──────────────────────────────────────────
+  - id: lin-conflict-simulator-r90
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      Git 顯示 R90；同一 commit 將 war-simulator 搬成 conflict-simulator，
+      GET 增加授權檢查並移除隨機行為。HEAD 已刪除此路徑，git log -L 直接失敗。
+    chain:
+      - anchor:
+          commit: 1e17e0f537d91b94fc0e4d4eb7eb7afae00ec77d
+          path: src/app/api/war-simulator/route.ts
+          symbol: GET
+          occurrence: 0
+          snippet_head: "export async function GET() {"
+      - anchor:
+          commit: 2b5801465e150a1891ddfb573c024f93fcc2cf97
+          path: src/app/api/conflict-simulator/route.ts
+          symbol: GET
+          occurrence: 0
+          snippet_head: "export async function GET(req: Request) {"
+        transition:
+          type: move_rename_rewrite
+          expect_tier_at_most: L5
+
+  - id: lin-company-intel-wrapper
+    kind: lineage
+    difficulty: hard
+    label_confidence: probable
+    rationale: >
+      原本的 CompanyIntel 實作在修復 commit 中改名為 CompanyIntelInner，
+      再由 memo wrapper 匯出；主要 state、搜尋與 render 職責持續。檔案後來被刪，
+      所以從 HEAD 執行 git log -L 無法開始。
+    chain:
+      - anchor:
+          commit: 02f32248c770fc589d990daa02b1b86fb0449b35
+          path: src/components/CompanyIntel.tsx
+          symbol: CompanyIntel
+          occurrence: 0
+          snippet_head: "export default function CompanyIntel({ isMobile }: { isMobile?: boolean }) {"
+      - anchor:
+          commit: db309efa7baaf32c8e949056750a5b6709ddb32a
+          path: src/components/CompanyIntel.tsx
+          symbol: CompanyIntelInner
+          occurrence: 0
+          snippet_head: "function CompanyIntelInner({ isMobile }: { isMobile?: boolean }) {"
+        transition:
+          type: rename
+          expect_tier_at_most: L4
+
+  - id: lin-camera-viewer
+    kind: lineage
+    difficulty: easy
+    label_confidence: certain
+    rationale: >
+      五個 anchor 的路徑、限定名稱與顯示 camera feed 的職責始終相同，
+      五段轉換都可由同槽位 L1 接住。git log -L 漏掉中間修改只是標註調查限制，
+      不提高待測系統的 difficulty。
+    chain:
+      - anchor:
+          commit: b3362ef38e8c1706c2f46491e1c5dedccba941d2
+          path: src/components/CameraViewer.tsx
+          symbol: CameraViewer
+          occurrence: 0
+          snippet_head: "export default function CameraViewer({ camera, onClose, onLocate }: CameraViewerProps) {"
+      - anchor:
+          commit: 509e55c2d9a19d62253c932c4c220e2d632f77c2
+          path: src/components/CameraViewer.tsx
+          symbol: CameraViewer
+          occurrence: 0
+          snippet_head: "export default function CameraViewer({ camera, onClose, onLocate }: CameraViewerProps) {"
+        transition: {type: edit, expect_tier_at_most: L1}
+      - anchor:
+          commit: 5b2aad94bf3476fbb503d81f5b1c4edae2e979a2
+          path: src/components/CameraViewer.tsx
+          symbol: CameraViewer
+          occurrence: 0
+          snippet_head: "export default function CameraViewer({ camera, onClose, onLocate }: CameraViewerProps) {"
+        transition: {type: edit, expect_tier_at_most: L1}
+      - anchor:
+          commit: 467a31458c10015d9cb5e4e261dce393d1522626
+          path: src/components/CameraViewer.tsx
+          symbol: CameraViewer
+          occurrence: 0
+          snippet_head: "export default function CameraViewer({ camera, onClose, onLocate }: CameraViewerProps) {"
+        transition: {type: edit, expect_tier_at_most: L1}
+      - anchor:
+          commit: 7e3889027afd96cb2f4de9bc7fe221dd61251581
+          path: src/components/CameraViewer.tsx
+          symbol: CameraViewer
+          occurrence: 0
+          snippet_head: "export default function CameraViewer({ camera, onClose, onLocate }: CameraViewerProps) {"
+        transition: {type: edit, expect_tier_at_most: L1}
+
+  - id: lin-dashboard-style-sequence
+    kind: lineage
+    difficulty: easy
+    label_confidence: certain
+    rationale: >
+      四個相鄰的 page.tsx 修改都保留 Dashboard 的同一路徑、名稱與產品職責，
+      git log -L 能持續追蹤，作為 L1 baseline。
+    chain:
+      - anchor:
+          commit: 6b51641f8ebd95c8de035f7db847c5257d271e41
+          path: src/app/page.tsx
+          symbol: Dashboard
+          occurrence: 0
+          snippet_head: "export default function Dashboard() {"
+      - anchor:
+          commit: 80b2f485d40a3cefd2b0d9b30b1083efef4e1ca2
+          path: src/app/page.tsx
+          symbol: Dashboard
+          occurrence: 0
+          snippet_head: "export default function Dashboard() {"
+        transition: {type: edit, expect_tier_at_most: L1}
+      - anchor:
+          commit: 3bccc410b9e773169b34424d7b702c974ea985ed
+          path: src/app/page.tsx
+          symbol: Dashboard
+          occurrence: 0
+          snippet_head: "export default function Dashboard() {"
+        transition: {type: edit, expect_tier_at_most: L1}
+      - anchor:
+          commit: 5fdb1b5cb193b9b16dffc78bf0378b3337f08739
+          path: src/app/page.tsx
+          symbol: Dashboard
+          occurrence: 0
+          snippet_head: "export default function Dashboard() {"
+        transition: {type: edit, expect_tier_at_most: L1}

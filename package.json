@@ -1,0 +1,39 @@
+{
+  "name": "@ostracon-dev/indexer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ostracon structural indexer and golden evaluation runner.",
+  "homepage": "https://ostracon.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ostracon-dev/ostracon.git"
+  },
+  "type": "module",
+  "scripts": {
+    "mine:candidates": "node mine-candidates.mjs",
+    "fixtures:validate": "node validate-fixtures.mjs",
+    "fixtures:controlled": "node fixtures/build-controlled-repo.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --experimental-strip-types --test test/index.test.ts",
+    "golden:index": "node --experimental-strip-types src/golden/materialize.ts",
+    "golden:audit": "node --experimental-strip-types src/golden/audit-matches.ts",
+    "golden": "node --experimental-strip-types src/golden/cli.ts",
+    "why:cli": "node --experimental-strip-types src/cli/why.ts",
+    "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",
+    "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
+    "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3",
+    "yaml": "^2.9.0"
+  },
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "tree-sitter-typescript": "0.23.2",
+    "web-tree-sitter": "0.26.11"
+  }
+}

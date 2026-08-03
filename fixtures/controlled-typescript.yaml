@@ -1,0 +1,139 @@
+fixture_version: 1
+
+repo:
+  name: controlled-typescript
+  clone_url: "generated:fixtures/build-controlled-repo.mjs"
+  index_until: 63150cf0770ffc119f905d3b13b65d6a34124583
+  language: typescript
+
+labeled_by: codex
+labeled_at: 2026-07-27
+
+cases:
+  - id: lin-controlled-pure-self-rename
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      由可重現的受控 repo 只改 function declaration 自身名稱：
+      formatAccount 變成 serializeAccount，參數、body、路徑與所有 token
+      均保持不變。node_count 87，高於碰撞閘門；必須由 hash_alpha_self
+      在 L3b 接住，不能依賴相似度層矇中。
+    chain:
+      - anchor:
+          commit: e12bca16697dbf98e16bb79729b296383f740fa4
+          path: src/account.ts
+          symbol: formatAccount
+          occurrence: 0
+          snippet_head: "function formatAccount(input: string): string {"
+      - anchor:
+          commit: 4f95ae33f56db80a87d74cbe80259c98aba62625
+          path: src/account.ts
+          symbol: serializeAccount
+          occurrence: 0
+          snippet_head: "function serializeAccount(input: string): string {"
+        transition:
+          type: rename
+          expect_tier_at_most: L3b
+
+  - id: ctrl-position-scoped
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      前版有三個 body 逐 token 完全相同的 Dashboard.poll closure，分別位於
+      alpha、beta、gamma 三個 useEffect。下一版只在最前面插入第四個
+      inserted scope。外層依賴陣列各自不同，所以 alpha scope 可被識別，
+      原 alpha closure 的正確身份是 #0→#1。這是階層式 scope 匹配應能
+      解開、但目前只看 declaration body 的階梯會失敗的真實目標。
+    chain:
+      - anchor:
+          commit: 1d48dddae7099779f4aebafbb582c60564493480
+          path: src/identical-closures.ts
+          symbol: Dashboard.poll
+          occurrence: 0
+          snippet_head: "poll = () => {"
+      - anchor:
+          commit: 1db8ff9adc0394d975dc53ca6e34ced3e24fccd2
+          path: src/identical-closures.ts
+          symbol: Dashboard.poll
+          occurrence: 1
+          snippet_head: "poll = () => {"
+        transition:
+          type: edit
+          expect_tier_at_most: L4
+
+  - id: ctrl-position-ambiguous
+    kind: lineage
+    difficulty: adversarial
+    label_confidence: ambiguous
+    rationale: >
+      前後版本的三個／四個 useEffect 連 enclosing body、依賴陣列與內部
+      Dashboard.poll 都完全相同。缺乏 diff hunk 或其他外部資訊時，舊 #0
+      對任一新 occurrence 都同樣自洽，沒有唯一正解。此案例接受四種結果；
+      它的用途是防止系統把任意選中的雙射宣稱為唯一、高信心答案。
+    accept_any_of:
+      - chain:
+          - anchor:
+              commit: ac785de0b44c5547f72ab4c15262f8fffdfe89d1
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 0
+              snippet_head: "poll = () => {"
+          - anchor:
+              commit: 63150cf0770ffc119f905d3b13b65d6a34124583
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 0
+              snippet_head: "poll = () => {"
+            transition:
+              type: edit
+              expect_tier_at_most: L4
+      - chain:
+          - anchor:
+              commit: ac785de0b44c5547f72ab4c15262f8fffdfe89d1
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 0
+              snippet_head: "poll = () => {"
+          - anchor:
+              commit: 63150cf0770ffc119f905d3b13b65d6a34124583
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 1
+              snippet_head: "poll = () => {"
+            transition:
+              type: edit
+              expect_tier_at_most: L4
+      - chain:
+          - anchor:
+              commit: ac785de0b44c5547f72ab4c15262f8fffdfe89d1
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 0
+              snippet_head: "poll = () => {"
+          - anchor:
+              commit: 63150cf0770ffc119f905d3b13b65d6a34124583
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 2
+              snippet_head: "poll = () => {"
+            transition:
+              type: edit
+              expect_tier_at_most: L4
+      - chain:
+          - anchor:
+              commit: ac785de0b44c5547f72ab4c15262f8fffdfe89d1
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 0
+              snippet_head: "poll = () => {"
+          - anchor:
+              commit: 63150cf0770ffc119f905d3b13b65d6a34124583
+              path: src/ambiguous-closures.ts
+              symbol: Dashboard.poll
+              occurrence: 3
+              snippet_head: "poll = () => {"
+            transition:
+              type: edit
+              expect_tier_at_most: L4

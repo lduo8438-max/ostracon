@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "request": {
+    "url": "https://api.github.com/repos/simplifaisoul/osiris/pulls/162/reviews?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-reset": "1785504914"
+    },
+    "body": "[]"
+  }
+}

@@ -1,0 +1,396 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { after, describe, it } from "node:test";
+import { renderTimeline, why, type TimelineRow } from "../src/cli/why.ts";
+import { sha256 } from "../src/evidence/span.ts";
+
+const row = (over: Partial<TimelineRow> = {}): TimelineRow => ({
+  sha: "a".repeat(40),
+  shortSha: "aaaaaaaaaa",
+  committedAt: "2026-01-01T00:00:00Z",
+  authorName: "t",
+  subject: "commit 標題",
+  changeLevel: "raw",
+  tier: "L1",
+  ambiguitySize: 1,
+  path: "src/a.ts",
+  lineStart: 1,
+  lineEnd: 10,
+  signature: "function f() {",
+  symbol: "f",
+  rationale: null,
+  linked: [],
+  ...over,
+});
+
+describe("renderTimeline（純函式）", () => {
+  it("印出判定依據，因為那是「為什麼是同一個」的唯一說明", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ tier: "L3c", ambiguitySize: 4 })],
+    );
+    assert.match(text, /L3c/);
+    assert.match(text, /4 個等價候選/, "有歧義就必須說出來，不能藏起來");
+  });
+
+  it("唯一候選時不顯示歧義數字，避免雜訊", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ tier: "L1", ambiguitySize: 1 })],
+    );
+    assert.match(text, /\[L1\]/);
+    assert.doesNotMatch(text, /等價候選/);
+  });
+
+  it("誕生沒有 tier，不得硬印一個", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "birth", tier: null, ambiguitySize: null })],
+    );
+    assert.match(text, /誕生/);
+    assert.doesNotMatch(text, /\[/);
+  });
+
+  it("改名在發生的那一行明講，並在標頭提示現在的名字", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "old", stableKey: "0".repeat(64) },
+      [
+        row({ symbol: "old", changeLevel: "birth", tier: null, ambiguitySize: null }),
+        row({ symbol: "neo", shortSha: "bbbbbbbbbb", tier: "L4" }),
+      ],
+    );
+    assert.match(text, /現在叫 neo/);
+    assert.match(text, /改名：old → neo/);
+  });
+
+  it("沒有任何改動時明說，不回傳空字串", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [],
+    );
+    assert.match(text, /沒有找到任何改動/);
+  });
+
+  it("A 級迂迴可以直述，並說出判定依據", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "death" })],
+      {
+        kind: "excursion",
+        strength: "A",
+        method: "inverse_diff",
+        durationDays: 212.5,
+        survivingNamesakes: [],
+      },
+    );
+    assert.match(text, /這個做法被推翻了/);
+    assert.match(text, /212\.5 天/);
+    assert.match(text, /逐字相同/, "判定依據要說人話，不能只印 method 欄位");
+    assert.doesNotMatch(text, /疑似/, "A 是確證，標成疑似會低估自己的證據");
+  });
+
+  it("**C 級必須標「疑似」**，不得寫成結論", () => {
+    // architecture.md §5：C 只有生命週期符合，沒有任何反向證據。
+    // 把它印成「被推翻了」就是拿疑似當確證，是這一層最不能犯的錯。
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "death" })],
+      {
+        kind: "excursion",
+        strength: "C",
+        method: "trajectory",
+        durationDays: 3,
+        survivingNamesakes: [],
+      },
+    );
+    assert.match(text, /疑似被推翻/);
+    assert.match(text, /未經證實/);
+    assert.doesNotMatch(
+      text,
+      /^這個做法被推翻了/m,
+      "C 級不得出現與 A 級相同的斷定句",
+    );
+  });
+
+  it("**同名者仍存活時必須說出來**，否則會被讀成「這個想法被放棄了」", () => {
+    // 實測 create-t3-app：71 條 A 級裡有 11 條（15%）限定名稱仍然存在，
+    // 只是內容被改寫過所以內容守門抓不到。沉默會讓使用者把「實作被換掉」
+    // 讀成「概念被放棄」，而那是錯的。
+    const text = renderTimeline(
+      { path: "src/old.ts", symbol: "createContext", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "death", symbol: "createContext" })],
+      {
+        kind: "excursion",
+        strength: "A",
+        method: "inverse_diff",
+        durationDays: 40,
+        survivingNamesakes: ["src/new.ts"],
+      },
+    );
+    assert.match(text, /仍存在於 src\/new\.ts/);
+    assert.match(text, /不必然是這個想法/);
+  });
+
+  it("同名者太多時只列前三個並給總數，不把 39 條路徑倒進終端機", () => {
+    // 純名稱比對對泛用名字會大量命中：create-t3-app 的 `Home` 有 39 個同名存活者。
+    const paths = Array.from({ length: 39 }, (_, i) => `src/p${i}.tsx`);
+    const text = renderTimeline(
+      { path: "src/old.tsx", symbol: "Home", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "death", symbol: "Home" })],
+      {
+        kind: "excursion",
+        strength: "A",
+        method: "inverse_diff",
+        durationDays: 40,
+        survivingNamesakes: paths,
+      },
+    );
+    assert.match(text, /等 39 處/);
+    assert.doesNotMatch(text, /p38\.tsx/, "第 39 條不該被印出來");
+    assert.match(text, /p0\.tsx、src\/p1\.tsx、src\/p2\.tsx/);
+  });
+
+  it("沒跑全 repo 就說不知道，不得沉默", () => {
+    // 沉默會被讀成「不是迂迴」——那是憑空替使用者排除了一段歷史。
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "death" })],
+      { kind: "needs-full-scan" },
+    );
+    assert.match(text, /還無法判斷/);
+    assert.match(text, /--full/);
+    assert.doesNotMatch(text, /被推翻了/);
+  });
+
+  it("沒有迂迴時完全不提，不留下暗示", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row()],
+    );
+    assert.doesNotMatch(text, /推翻|疑似|--full/);
+  });
+});
+
+describe("why（真實 git + 真實 schema）", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "ostracon-why-"));
+  const dbDir = mkdtempSync(path.join(tmpdir(), "ostracon-why-db-"));
+  after(() => {
+    // tmp 由作業系統回收；留著方便失敗時檢查。
+  });
+
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  const write = (rel: string, body: string) => {
+    mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+    writeFileSync(path.join(repo, rel), body);
+  };
+  const commit = (msg: string) => {
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, "--no-gpg-sign");
+    return git("rev-parse", "HEAD");
+  };
+
+  it("時間軸涵蓋誕生、變更層級、改名，以及 slot 延續但血緣斷開", async () => {
+    git("init", "-q", "-b", "main");
+    write("src/a.ts", `
+export function compute(input: number): number {
+  const scaled = input * 2;
+  const shifted = scaled + 1;
+  return shifted;
+}
+`.trimStart());
+    commit("加入 compute");
+
+    // 只改局部變數名 → token 層
+    write("src/a.ts", `
+export function compute(input: number): number {
+  const doubled = input * 2;
+  const shifted = doubled + 1;
+  return shifted;
+}
+`.trimStart());
+    commit("改名局部變數");
+
+    // 改名宣告本身，並新增一個同名的新函式：slot 延續，entity 斷開。
+    write("src/a.ts", `
+export function computeCore(input: number): number {
+  const doubled = input * 2;
+  const shifted = doubled + 1;
+  return shifted;
+}
+
+export function compute(input: number): number {
+  return computeCore(input);
+}
+`.trimStart());
+    const replaced = commit("抽出 computeCore，compute 變成轉呼叫");
+
+    const dbPath = path.join(dbDir, "index.db");
+    const text = await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+
+    // 兩個實體：舊的 compute（後來叫 computeCore）與新的轉呼叫 compute。
+    assert.match(text, /2 個不同的實體/, "slot 延續但血緣斷開時必須說清楚");
+    assert.match(text, /改名：compute → computeCore/);
+    assert.match(text, /局部變數改名/, "token 層必須被辨識出來");
+    assert.equal(
+      (text.match(/誕生/g) ?? []).length,
+      2,
+      "兩個實體各誕生一次；同一個實體不得誕生兩次",
+    );
+
+    const db = new DatabaseSync(dbPath);
+    const discontinuity = db.prepare(
+      `SELECT d.prev_entity AS prevEntity, d.next_entity AS nextEntity
+         FROM slot_discontinuity d
+         JOIN git_commit c ON c.id = d.commit_id
+         JOIN slot s ON s.id = d.slot_id
+        WHERE c.sha = ? AND s.qualified_name = 'compute'`,
+    ).all(replaced) as unknown as Array<{ prevEntity: number; nextEntity: number }>;
+    db.close();
+    assert.equal(discontinuity.length, 1, "同名新函式補位必須成為佔用者置換斷層");
+    assert.notEqual(discontinuity[0]!.prevEntity, discontinuity[0]!.nextEntity);
+  });
+
+  it("重跑同一個資料庫不得改變任何結果", async () => {
+    // 不變量 7：相同輸入必須產生相同輸出。索引寫入全部走 ON CONFLICT，
+    // 重跑若會累加，時間軸就會憑空多出改動。
+    const dbPath = path.join(dbDir, "idempotent.db");
+    const first = await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+    const counts = () => {
+      const db = new DatabaseSync(dbPath);
+      const row = db.prepare(
+        `SELECT (SELECT COUNT(*) FROM revision) r,
+                (SELECT COUNT(*) FROM entity) e,
+                (SELECT COUNT(*) FROM revision_match) m,
+                (SELECT COUNT(*) FROM revision_change) c`,
+      ).get();
+      db.close();
+      return JSON.stringify(row);
+    };
+    const before = counts();
+    const second = await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+    assert.equal(counts(), before, "重跑不得新增任何列");
+    assert.equal(second, first, "輸出必須逐字相同");
+  });
+
+  it("linked evidence 寫入時全留，時間軸才依 provenance_root 收斂", async () => {
+    const dbPath = path.join(dbDir, "linked.db");
+    await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA foreign_keys = ON");
+    const targets = db.prepare(
+      `SELECT c.repo_id AS repoId, c.sha
+         FROM revision_change rc
+         JOIN git_commit c ON c.id = rc.commit_id
+        WHERE rc.entity_id IN (
+          SELECT DISTINCT r.entity_id
+            FROM revision r JOIN slot s ON s.id = r.slot_id
+           WHERE s.qualified_name = 'compute'
+        )
+        ORDER BY c.topo_order ASC LIMIT 2`,
+    ).all() as unknown as Array<{ repoId: number; sha: string }>;
+    const target = targets[0]!;
+    db.prepare(
+      `INSERT INTO reference_link
+         (repo_id, from_kind, from_key, to_kind, to_key, method, confidence)
+       VALUES (?, 'commit', ?, 'pr', '7', 'message_ref', 0.9)`,
+    ).run(target.repoId, target.sha);
+    db.prepare(
+      `INSERT INTO reference_link
+         (repo_id, from_kind, from_key, to_kind, to_key, method, confidence)
+       VALUES (?, 'commit', ?, 'pr', '7', 'message_ref', 0.4)`,
+    ).run(targets[1]!.repoId, targets[1]!.sha);
+    const docs = [
+      ["pr_body", "pr:7:body", "because every worker shares the same budget", "2026-01-01"],
+      ["pr_comment", "pr:7:comment:701", "to prevent unbounded growth", "2026-01-02"],
+    ] as const;
+    const insert = db.prepare(
+      `INSERT INTO source_doc
+         (repo_id, doc_type, provenance_root, external_id, url, author, created_at,
+          body, body_sha256)
+       VALUES (?, ?, 'pr:7', ?, 'https://github.com/acme/demo/pull/7', 't', ?, ?, ?)`,
+    );
+    for (const [type, externalId, body, createdAt] of docs) {
+      insert.run(target.repoId, type, externalId, createdAt, body, sha256(body));
+    }
+    db.close();
+
+    const text = await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+    assert.equal((text.match(/關聯「/g) ?? []).length, 1, "同一 PR 只呈現一份獨立證據");
+    assert.match(text, /PR #7；message_ref 0\.9；另有 1 則同串留言/);
+
+    const verify = new DatabaseSync(dbPath);
+    const evidence = verify.prepare(
+      "SELECT COUNT(*) AS n FROM evidence WHERE tier = 'linked'",
+    ).get() as { n: number };
+    assert.equal(evidence.n, 2, "查詢去重不得刪掉同串另一則 evidence");
+    const edited = "Upstream text was edited.";
+    verify.prepare(
+      "UPDATE source_doc SET body = ?, body_sha256 = ? WHERE provenance_root = 'pr:7'",
+    ).run(edited, sha256(edited));
+    verify.close();
+
+    const afterEdit = await why(repo, "src/a.ts:compute", dbPath, "HEAD");
+    assert.doesNotMatch(afterEdit, /關聯「/, "body hash 已變的 stale evidence 不得繼續呈現");
+  });
+
+  it("找不到符號時說明，而不是丟出例外或印空白", async () => {
+    const dbPath = path.join(dbDir, "index2.db");
+    const text = await why(repo, "src/a.ts:nonexistent", dbPath, "HEAD");
+    assert.match(text, /沒有這個符號/);
+  });
+});
+
+describe("時間軸顯示已驗證的理由", () => {
+  it("有引文就逐字印出，並與 subject 分開", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ rationale: "to prevent quota burn" })],
+    );
+    assert.match(text, /理由「to prevent quota burn」/);
+    assert.match(text, /commit 標題/, "subject 仍然要在，兩者不可混為一談");
+  });
+
+  it("多段引文各印一行", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ rationale: "第一個理由\u001f第二個理由" })],
+    );
+    assert.match(text, /理由「第一個理由」/);
+    assert.match(text, /理由「第二個理由」/);
+  });
+
+  it("沒有理由就完全不提——不替 commit 編一個", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ rationale: null })],
+    );
+    assert.doesNotMatch(text, /理由/);
+  });
+
+  it("linked 與 stated 視覺分開，且顯示關聯方法與強度", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({
+        linked: [{
+          provenanceRoot: "pr:7",
+          quote: "because workers share the same budget",
+          kind: "pr",
+          referenceKey: "7",
+          method: "message_ref",
+          confidence: 0.9,
+          additionalDocuments: 2,
+        }],
+      })],
+    );
+    assert.match(text, /關聯「because workers share the same budget」/);
+    assert.match(text, /PR #7；message_ref 0\.9/);
+    assert.match(text, /另有 2 則同串留言/);
+    assert.doesNotMatch(text, /理由「because workers/, "linked 不得偽裝成作者自己的 stated 理由");
+  });
+});

@@ -6,6 +6,7 @@ import { ingestLinkedDocuments } from "../evidence/linked.ts";
 import { extractFromLinkedDocuments } from "../evidence/store.ts";
 import { createRecordingFetcher, createReplayFetcher } from "../http/fixtures.ts";
 import { createGitHubFetcher } from "../http/github.ts";
+import { createRetryingFetcher, describeRetry } from "../http/retry.ts";
 
 function valueAfter(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -31,7 +32,12 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
 
-  const live = createGitHubFetcher({ token });
+  // 重試包在 live 外面、錄製裡面：錄下來的必須是成功的回應，不是中途的失敗。
+  // replay 不包——離線重播不會有暫時性失敗，包了只會讓測試變慢且更難推理。
+  const live = createRetryingFetcher(
+    createGitHubFetcher({ token }),
+    { onRetry: (event) => console.error(describeRetry(event)) },
+  );
   const fetcher = replayDir
     ? createReplayFetcher(replayDir)
     : recordDir

@@ -110,8 +110,12 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
        SELECT c.sha AS commitSha, c.topo_order AS topoOrder, r.repo_id AS repoId,
               r.to_kind AS kind, r.to_key AS referenceKey,
               r.method, r.confidence,
+              -- 只依 to_key 分群。GitHub 的 issue 與 PR 共用同一組編號，所以
+              -- 編號本身就唯一標定討論串；把 to_kind 一起放進去的話，一列尚未
+              -- 修正的 'issue' 與一列已修正的 'pr' 會落在兩個分群，同一個討論串
+              -- 就會顯示兩次、其中一次還標錯種類。
               row_number() OVER (
-                PARTITION BY r.to_kind, r.to_key
+                PARTITION BY r.to_key
                 ORDER BY r.confidence DESC, c.topo_order, r.method, r.id
               ) AS referenceRank
          FROM revision_change rc

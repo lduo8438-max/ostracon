@@ -449,12 +449,20 @@ CREATE TABLE reference_link (
   repo_id      INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
   from_kind    TEXT NOT NULL,           -- 'commit'|'pr'|'issue'
   from_key     TEXT NOT NULL,
+  -- [修正] to_kind 是**衍生欄位**，不是身分的一部分。抽取器只看得到 `#162`，
+  -- 一律先寫 'issue'；要等 linked 層真的取回才知道那是 PR 還是 issue。
+  -- 先前 UNIQUE 把它算進去，後果是：extract 寫 'issue' → linked 修正成 'pr'
+  -- → 再跑一次 extract 時 ON CONFLICT 鍵不再吻合，於是**又插一份 'issue'**
+  -- （Osiris 實測 23 列變 28 列），而下次 linked 要修正那份重複列時就 UNIQUE 衝突。
+  --
+  -- 身分是「哪個 commit、提到哪個編號、用哪種方法」。GitHub 的 issue 與 PR
+  -- 共用同一組編號，所以 to_key 本身就唯一標定目標，to_kind 由它決定。
   to_kind      TEXT NOT NULL,
   to_key       TEXT NOT NULL,
   method       TEXT NOT NULL CHECK (method IN
                  ('message_ref','merge_commit','trailer','api','heuristic')),
   confidence   REAL NOT NULL,
-  UNIQUE (repo_id, from_kind, from_key, to_kind, to_key, method)
+  UNIQUE (repo_id, from_kind, from_key, to_key, method)
 ) STRICT;
 
 -- 一段已驗證的正式引用。此表只容納 stated / linked：

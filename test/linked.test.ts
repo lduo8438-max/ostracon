@@ -250,6 +250,59 @@ describe("linked 文件收取（全程 replay）", () => {
     }
   });
 
+  it("**extract 與 linked 交替執行不得產生重複列**", async () => {
+    // 造成問題的真實序列（全部都是使用者會做的事）：
+    //   ostracon why --full   → extract 寫入 to_kind='issue'
+    //   ostracon evidence linked → 修正成 'pr'
+    //   ostracon why --full   → extract 再跑一次
+    // to_kind 若在 UNIQUE 裡，第三步的 ON CONFLICT 鍵就不再吻合，於是又插一份
+    //  'issue'（Osiris 實測 23 列變 28 列），而下一次 linked 要修正那份重複列時
+    // 會 UNIQUE 衝突並整趟 crash。
+    const db = makeDb();
+    const insertRef = () =>
+      db.exec(
+        `INSERT INTO reference_link
+           (repo_id, from_kind, from_key, to_kind, to_key, method, confidence)
+         VALUES (1, 'commit', 'abc', 'issue', '162', 'message_ref', 0.9)
+         ON CONFLICT DO NOTHING`,
+      );
+    const fake: HttpFetcher = async (url) =>
+      /\/issues\/\d+$/.test(url)
+        ? {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            number: 162,
+            body: "because the cache needs a cap",
+            html_url: "https://github.com/simplifaisoul/osiris/pull/162",
+            user: { login: "a" },
+            created_at: "2026-01-01",
+            pull_request: {},
+          }),
+        }
+        : { status: 200, headers: {}, body: "[]" };
+    try {
+      await ingestLinkedDocuments(db, 1, fake);
+      assert.equal(
+        (db.prepare("SELECT to_kind AS k FROM reference_link").get() as { k: string }).k,
+        "pr",
+        "前提：linked 會把它修正成 pr",
+      );
+
+      insertRef(); // 使用者再跑一次 why --full
+      const rows = db.prepare(
+        "SELECT to_kind AS k FROM reference_link ORDER BY id",
+      ).all() as Array<{ k: string }>;
+      assert.deepEqual(rows.map((r) => r.k), ["pr"], "不得因為 to_kind 不同而多插一列");
+
+      // 而且 linked 重跑不會炸——這是原本會 crash 的地方。
+      db.exec("DELETE FROM pass_state WHERE pass_name = 'linked'");
+      await assert.doesNotReject(() => ingestLinkedDocuments(db, 1, fake));
+    } finally {
+      db.close();
+    }
+  });
+
   it("rate limit 不推進水位線，並把 retry-after 留給呼叫端", async () => {
     const db = makeDb();
     const limited: HttpFetcher = async (url) => ({

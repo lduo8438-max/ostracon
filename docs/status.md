@@ -425,17 +425,35 @@ Osiris 複驗零回歸（`deduplicated: 0`、仍是 51 請求、33 文件、5 �
 
 #### 兩個尚未修的問題（實跑時踩到）
 
-**1. `reference_link` 的 UNIQUE 把 `to_kind` 算進身分，但它是衍生欄位。**
-`UNIQUE (repo_id, from_kind, from_key, to_kind, to_key, method)` 的後果：
+**1. `reference_link` 的 UNIQUE 把衍生欄位算進身分 → 已修（2026-08-02）。**
+
+`to_kind` 是衍生的：抽取器只看得到 `#162`，一律先寫 `'issue'`；要等 linked 層
+真的取回才知道那是 PR 還是 issue。把它放進 UNIQUE 的後果：
 
 1. `evidence:extract` 插入 `to_kind='issue'`
 2. `evidence:linked` 把其中的 PR 改成 `'pr'`
-3. 再跑一次 extract（`why --full` 內含）→ 那幾條的 ON CONFLICT 鍵不再吻合，
-   **又插一份 `'issue'`**（Osiris 實測 23 → 28 列）
-4. 下一次 `evidence:linked` 要把重複的 `'issue'` 改成 `'pr'` → **UNIQUE 衝突、crash**
+3. 再跑一次 extract（`why --full` 內含）→ ON CONFLICT 鍵不再吻合，**又插一份
+   `'issue'`**（Osiris 實測 23 → 28 列）
+4. 下一次 `evidence:linked` 要修正那份重複列 → **UNIQUE 衝突、整趟 crash**
 
-修法應是把 `to_kind` 移出 UNIQUE（身分是「哪個 commit 提到哪個編號、用哪種方法」，
-種類是取回後才知道的事實）。**這是資料模型變更，須逐行審過再動。**
+UNIQUE 改成 `(repo_id, from_kind, from_key, to_key, method)`。身分是「哪個 commit、
+提到哪個編號、用哪種方法」；GitHub 的 issue 與 PR 共用同一組編號，所以 `to_key`
+本身就唯一標定目標，`to_kind` 由它決定。真實 CLI 驗證：同一序列現在停在 23 列、
+5 PR / 18 issue 正確保留、水位線重置後重跑不再 crash。
+
+`why` 的 linked 查詢也從 `PARTITION BY to_kind, to_key` 改成只依 `to_key`。
+在乾淨資料上兩者等價，但資料一旦髒掉，一列未修正的 `'issue'` 與一列已修正的
+`'pr'` 會落在兩個分群，**同一個討論串顯示兩次且其中一次標錯種類**。
+
+**先前對嚴重度的判斷過高，這裡更正。** 原本記為「使用者會撞到 crash」，實測後：
+重複列**立刻且永久**產生（計數膨脹 22%），但 crash 只在舊 commit 被重新處理時
+發生（換 `LINKED_PASS_VERSION`、重建、重置水位線）——正常增量續跑不會觸發。
+而且多出來的 `issue:N` 指向的 `provenance_root` 有 0 份文件（真正的文件在 `pr:N`），
+所以**對時間軸顯示是惰性的**。`reports/demo-create-t3.db` 檢查後為 0 重複組，
+沒有既有產物需要修復。
+
+**沒有 schema 遷移機制**，所以在這個 commit 之前建立的資料庫仍帶舊索引。
+影響僅止於上述範圍，重建即可。
 
 **2. `createGitHubFetcher` 沒有任何重試 → 已修（2026-08-02）。**
 demo 那趟 51 分鐘內出現 **4 次 `fetch failed`**，每一次都足以讓整趟中止。
@@ -696,6 +714,7 @@ v0.5 讓 `slot_discontinuity.similarity` nullable：`NULL` 是無法比較，`0`
 - `source_doc.external_id` 必須 NOT NULL（SQLite 視每個 NULL 為相異值，UNIQUE 會失效）
 - `revision_change` 必須 CHECK 兩端不可皆 NULL
 - `idx_change_entity(entity_id, commit_id)`——「給我實體 X 的時間軸」是最熱查詢
+- `reference_link` 的 UNIQUE 不含 `to_kind`——那是取回後才知道的衍生欄位
 - `claim` / `excursion` 用 typed nullable FK + CHECK 恰好一個非 NULL，不用多型外鍵
 
 ---

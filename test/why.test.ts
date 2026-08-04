@@ -5,7 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { renderTimeline, why, type TimelineRow } from "../src/cli/why.ts";
+import {
+  renderTimeline,
+  suppressUnrelatedRationale,
+  why,
+  type TimelineRow,
+} from "../src/cli/why.ts";
 import { sha256 } from "../src/evidence/span.ts";
 
 const row = (over: Partial<TimelineRow> = {}): TimelineRow => ({
@@ -24,6 +29,7 @@ const row = (over: Partial<TimelineRow> = {}): TimelineRow => ({
   symbol: "f",
   rationale: null,
   linked: [],
+  suppressedReferences: [],
   ...over,
 });
 
@@ -164,6 +170,92 @@ describe("renderTimeline（純函式）", () => {
     assert.match(text, /還無法判斷/);
     assert.match(text, /--full/);
     assert.doesNotMatch(text, /被推翻了/);
+  });
+
+  it("**無變更的列不得出現理由引文**——那是斷言一個不存在的因果", () => {
+    // demo 語料實測：6,367 次引文顯示裡有 41.7% 落在 change_level='none' 上。
+    // 引文逐字為真、issue 編號正確、span 驗證通過，但那個 entity 在該 commit
+    // 什麼都沒發生。使用者沒有任何辦法察覺這條因果是假的。
+    const suppressed = suppressUnrelatedRationale(row({
+      changeLevel: "none",
+      rationale: "because the cache needs a cap",
+      linked: [{
+        provenanceRoot: "pr:162",
+        quote: "because the cache needs a cap",
+        kind: "pr",
+        referenceKey: "162",
+        method: "message_ref",
+        confidence: 0.9,
+        additionalDocuments: 0,
+      }],
+    }));
+    assert.equal(suppressed.rationale, null, "stated 引文必須被抑制");
+    assert.deepEqual(suppressed.linked, [], "linked 引文必須被抑制");
+    // **指標要留著**：「這個 commit 提到 PR #162」是關於 commit 的事實，
+    // 對導覽有用；被抑制的只是被當成理由讀的那段文字。
+    assert.equal(suppressed.suppressedReferences.length, 1);
+    assert.equal(suppressed.suppressedReferences[0]!.referenceKey, "162");
+    assert.equal(
+      JSON.stringify(suppressed.suppressedReferences).includes("quote"),
+      false,
+      "被抑制的指標裡不得夾帶引文",
+    );
+  });
+
+  it("有實際改動的列完全不受影響", () => {
+    for (const lvl of ["raw", "token", "alpha", "shape", "birth", "death"]) {
+      const kept = suppressUnrelatedRationale(row({
+        changeLevel: lvl,
+        rationale: "because X",
+        linked: [{
+          provenanceRoot: "pr:1",
+          quote: "because X",
+          kind: "pr",
+          referenceKey: "1",
+          method: "message_ref",
+          confidence: 0.9,
+          additionalDocuments: 0,
+        }],
+      }));
+      assert.equal(kept.rationale, "because X", `${lvl} 不該被抑制`);
+      assert.equal(kept.linked.length, 1, `${lvl} 不該被抑制`);
+      assert.deepEqual(kept.suppressedReferences, []);
+    }
+  });
+
+  it("**被抑制的數量必須在標頭交代**，不得靜默丟掉", () => {
+    // 靜默丟掉與靜默誤植同樣不誠實：前者讓使用者以為沒有理由可查，而其實有。
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [
+        row({ changeLevel: "shape" }),
+        row({
+          shortSha: "bbbbbbbbbb",
+          changeLevel: "none",
+          suppressedReferences: [
+            { provenanceRoot: "pr:1", kind: "pr", referenceKey: "1", method: "message_ref", confidence: 0.9 },
+            { provenanceRoot: "issue:2", kind: "issue", referenceKey: "2", method: "message_ref", confidence: 0.9 },
+          ],
+        }),
+        row({
+          shortSha: "cccccccccc",
+          changeLevel: "none",
+          suppressedReferences: [
+            { provenanceRoot: "pr:1", kind: "pr", referenceKey: "1", method: "message_ref", confidence: 0.9 },
+          ],
+        }),
+      ],
+    );
+    assert.match(text, /另有 2 次改動的 commit 提到 2 則 PR／issue/, "commit 數與去重後的討論串數要分開算");
+    assert.match(text, /沒有修改到這個實體/);
+  });
+
+  it("沒有被抑制的東西時，標頭完全不提", () => {
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [row({ changeLevel: "shape" })],
+    );
+    assert.doesNotMatch(text, /另有|沒有修改到/);
   });
 
   it("沒有迂迴時完全不提，不留下暗示", () => {

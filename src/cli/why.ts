@@ -52,15 +52,27 @@ export interface TimelineRow {
   rationale: string | null;
   /** 同一 provenance_root 在查詢時只留一個代表引用；原始 evidence 列不刪。 */
   linked: LinkedRationale[];
+  /**
+   * 因為「這個 entity 在這次 commit 沒有變更」而被抑制的參照。
+   *
+   * **保留指標，不保留引文。** 「這個 commit 提到 PR #123」是關於 commit 的事實，
+   * 對導覽有用；但把該 commit 的理由印在一個什麼都沒發生的 entity 底下，
+   * 是主動斷言一個不存在的因果。理由見 `suppressUnrelatedRationale`。
+   */
+  suppressedReferences: LinkedReference[];
 }
 
-export interface LinkedRationale {
+/** 指向一則討論串，不含任何被當成「理由」讀的文字。 */
+export interface LinkedReference {
   provenanceRoot: string;
-  quote: string;
   kind: "pr" | "issue";
   referenceKey: string;
   method: string;
   confidence: number;
+}
+
+export interface LinkedRationale extends LinkedReference {
+  quote: string;
   /** 除代表文件外，另有幾份同串文件也產生了有效 evidence。 */
   additionalDocuments: number;
 }
@@ -85,12 +97,16 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
             COALESCE(nr.line_end, pr.line_end) AS lineEnd,
             COALESCE(nr.signature, pr.signature) AS signature,
             COALESCE(ns.qualified_name, ps.qualified_name) AS symbol,
+            -- 這個實體在這次 commit 沒有變更時，不取理由。commit message 的理由
+            -- 是關於整次改動的，把它印在一個什麼都沒發生的實體底下，是主動斷言
+            -- 一個不存在的因果。完整理由見 suppressUnrelatedRationale 的註解。
             (SELECT group_concat(e.quoted_text, char(31))
                FROM evidence e
                JOIN source_doc d ON d.id = e.source_doc_id
               WHERE d.doc_type = 'commit_message'
                 AND d.external_id = c.sha
-                AND e.tier = 'stated') AS rationale
+                AND e.tier = 'stated'
+                AND rc.change_level <> 'none') AS rationale
        FROM revision_change rc
        JOIN git_commit c ON c.id = rc.commit_id
        LEFT JOIN revision nr ON nr.id = rc.next_revision
@@ -164,7 +180,54 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
     bucket.push(rationale);
     linkedByCommit.set(commitSha, bucket);
   }
-  return rows.map((row) => ({ ...row, linked: linkedByCommit.get(row.sha) ?? [] }));
+  return rows.map((row) =>
+    suppressUnrelatedRationale({
+      ...row,
+      linked: linkedByCommit.get(row.sha) ?? [],
+      suppressedReferences: [],
+    })
+  );
+}
+
+/**
+ * 把「這個 entity 在這次 commit 沒有變更」的列上的引文抽掉，只留指標。
+ *
+ * **為什麼需要這件事**：一次 commit 的理由是關於整次改動的，但時間軸是逐 entity
+ * 呈現的。`7fc02862b8` 一次提到 6 個 issue，於是 6 條引文全部掛到一列
+ * `無變更 [L1]` 底下——引文逐字為真、issue 編號正確、span 驗證通過，
+ * 但那個 entity 在該 commit 什麼都沒發生。
+ *
+ * demo 語料實測：6,367 次引文顯示裡有 **41.7% 落在 `change_level = 'none'` 的列上**。
+ *
+ * **為什麼用 `change_level`，而不是 hunk 與行區間相交**：兩者實測幾乎等價
+ * （`shape`/`alpha`/`death`/`raw`/`token` 全部 100% 有交集，`none` 有 98.7% 無交集），
+ * 而不一致的地方 `change_level` 更精確——那 32 條「`none` 但有交集」是 hunk 觸及了
+ * 行區間、但改的是上下文行，實體本身逐字未變。既然現成欄位更準，就不要另外蓋一套
+ * 需要處理 merge 無 hunk 與邊界語意的比對邏輯。
+ *
+ * **方向偏保守：寧可濾掉，不可留錯。** 誤濾的話使用者少看到一條解釋，但參照還在，
+ * 他可以自己去讀那個 PR；漏濾的話他會讀到一個關於別段程式碼的理由，而且
+ * **沒有任何辦法察覺那是錯的**。與「誤報斷層比漏報嚴重」同一個道理。
+ *
+ * 在查詢層做而不是寫入層：`evidence` 列是事實（這段文字逐字存在於那份文件），
+ * 歸屬是判斷。判斷寫進資料庫等於把門檻烤進儲存資料，而且規則一改就要重建索引。
+ */
+export function suppressUnrelatedRationale(row: TimelineRow): TimelineRow {
+  if (row.changeLevel !== "none") return row;
+  return {
+    ...row,
+    rationale: null,
+    linked: [],
+    suppressedReferences: row.linked.map(
+      ({ provenanceRoot, kind, referenceKey, method, confidence }) => ({
+        provenanceRoot,
+        kind,
+        referenceKey,
+        method,
+        confidence,
+      }),
+    ),
+  };
 }
 
 /**
@@ -284,6 +347,19 @@ export function renderTimeline(
   if (last && first && last.symbol !== first.symbol) {
     // 改名是這個工具的核心賣點之一，不能只在某一行悄悄變掉。
     out.push(`現在叫 ${last.symbol}`);
+  }
+  // 被抑制的引文要有交代。**靜默丟掉與靜默誤植同樣不誠實**——前者讓使用者以為
+  // 沒有理由可查，而其實有。只放在標頭不逐列印：長時間軸本來就已經被
+  // `[L1] 無變更` 淹沒，每列再加一行會讓真正有內容的列更難找。
+  const suppressedCommits = rows.filter((r) => r.suppressedReferences.length > 0);
+  if (suppressedCommits.length > 0) {
+    const roots = new Set(
+      suppressedCommits.flatMap((r) => r.suppressedReferences.map((s) => s.provenanceRoot)),
+    );
+    out.push(
+      `另有 ${suppressedCommits.length} 次改動的 commit 提到 ${roots.size} 則 PR／issue，`
+        + "但沒有修改到這個實體——它們的理由不會掛在下面的時間軸上。",
+    );
   }
   // 「這個做法被推翻了」放在標頭而不是埋在最後一列：它是關於整段歷史的結論，
   // 而且是使用者來問 why 最想知道的那件事（ostracised approaches 是專案的命名由來）。

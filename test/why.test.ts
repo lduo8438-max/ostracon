@@ -30,6 +30,7 @@ const row = (over: Partial<TimelineRow> = {}): TimelineRow => ({
   rationale: null,
   linked: [],
   suppressedReferences: [],
+  suppressedStatedQuotes: 0,
   ...over,
 });
 
@@ -246,8 +247,33 @@ describe("renderTimeline（純函式）", () => {
         }),
       ],
     );
-    assert.match(text, /另有 2 次改動的 commit 提到 2 則 PR／issue/, "commit 數與去重後的討論串數要分開算");
+    assert.match(text, /另有 2 次改動的 commit 帶著 2 則 PR／issue/, "commit 數與去重後的討論串數要分開算");
     assert.match(text, /沒有修改到這個實體/);
+  });
+
+  it("**只有 commit message 理由被抑制時，標頭一樣要交代**", () => {
+    // 這是第一版的漏洞：stated 的抑制寫在 SQL 的 WHERE 裡，而標頭只數 linked，
+    // 所以「沒有任何 PR 參照、只有 commit message 理由」的列被靜默丟掉。
+    // 實測 Osiris 有 17 列、create-t3-app 有 3 列踩到。
+    const text = renderTimeline(
+      { path: "src/a.ts", symbol: "f", stableKey: "0".repeat(64) },
+      [
+        row({ changeLevel: "shape" }),
+        row({ shortSha: "bbbbbbbbbb", changeLevel: "none", suppressedStatedQuotes: 2 }),
+      ],
+    );
+    assert.match(text, /另有 1 次改動的 commit/);
+    assert.match(text, /2 段 commit message 理由/);
+    assert.doesNotMatch(text, /PR／issue/, "沒有參照就不該提參照");
+  });
+
+  it("stated 被抑制時要數對條數", () => {
+    const suppressed = suppressUnrelatedRationale(row({
+      changeLevel: "none",
+      rationale: ["理由一", "理由二", "理由三"].join("\u001f"),
+    }));
+    assert.equal(suppressed.rationale, null);
+    assert.equal(suppressed.suppressedStatedQuotes, 3);
   });
 
   it("沒有被抑制的東西時，標頭完全不提", () => {

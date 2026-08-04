@@ -35,10 +35,13 @@ git 原生座標，不得引用索引器產生的 ID。
 
 ## 2. 模組地圖
 
-套件 `@ostracon-dev/indexer`（`private: true`、版本 `0.0.0`）。
-2026-08-01 以含 FTS5 的 Node v24.14.0 實跑全部測試 **193/193 通過**、
-`tsc --noEmit` **零錯誤**。系統 Node v23.11.0 的內建 SQLite 沒有 FTS5，不能用來
-跑完整 schema；這是 runtime 差異，不是測試回歸。
+套件 `ostracon`（版本 `0.1.0`，可發布；`files` 白名單只有 `dist`、`db/schema.sql`、
+README、LICENSE，`src/golden/` 不進封裝）。2026-08-03 實跑全部測試 **237/237 通過**、
+`tsc --noEmit` **零錯誤**。
+
+**Node 24 以上，且內建 SQLite 必須含 FTS5。** 實測 v24.14.1／CI 的 v24.18.0 可用、
+v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。這是 runtime 差異，
+不是測試回歸——`engines.node` 已由錯誤的 `>=22.13` 改為 `>=24`。
 
 型別檢查於 2026-07-28 補上：devDependency `typescript` + `@types/node`，設定在
 `tsconfig.json`，`pnpm test` 會先跑它。關鍵設定是 `erasableSyntaxOnly` 與

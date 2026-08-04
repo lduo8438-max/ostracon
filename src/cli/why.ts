@@ -60,7 +60,18 @@ export interface TimelineRow {
    * 是主動斷言一個不存在的因果。理由見 `suppressUnrelatedRationale`。
    */
   suppressedReferences: LinkedReference[];
+  /**
+   * 因為同一個原因被抑制的 commit message 引文條數。
+   *
+   * 與 `suppressedReferences` 分開記，是因為一列可能**只有** stated 理由而沒有任何
+   * linked 參照。第一版把 stated 的抑制寫在 SQL 的 WHERE 裡，標頭只數 linked，
+   * 於是這種列被靜默丟掉——而「不得靜默丟掉」正是這整個機制的前提。
+   */
+  suppressedStatedQuotes: number;
 }
+
+/** `rationale` 欄位裡多段引文的分隔符。SQL 端用 `char(31)` 串接。 */
+export const RATIONALE_SEPARATOR = "\u001f";
 
 /** 指向一則討論串，不含任何被當成「理由」讀的文字。 */
 export interface LinkedReference {
@@ -97,16 +108,17 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
             COALESCE(nr.line_end, pr.line_end) AS lineEnd,
             COALESCE(nr.signature, pr.signature) AS signature,
             COALESCE(ns.qualified_name, ps.qualified_name) AS symbol,
-            -- 這個實體在這次 commit 沒有變更時，不取理由。commit message 的理由
-            -- 是關於整次改動的，把它印在一個什麼都沒發生的實體底下，是主動斷言
-            -- 一個不存在的因果。完整理由見 suppressUnrelatedRationale 的註解。
+            -- 這裡照實取回。抑制**全部**在 suppressUnrelatedRationale 一個地方做，
+            -- 不拆到 SQL：第一版把 stated 的抑制寫成這裡的 WHERE 條件，結果標頭
+            -- 只數得到 linked 那一半，只有 stated 理由的列被靜默丟掉
+            -- （Osiris 17 列、create-t3-app 3 列）。抑制與「交代抑制了什麼」
+            -- 必須由同一段程式碼負責，否則兩者一定會分岔。
             (SELECT group_concat(e.quoted_text, char(31))
                FROM evidence e
                JOIN source_doc d ON d.id = e.source_doc_id
               WHERE d.doc_type = 'commit_message'
                 AND d.external_id = c.sha
-                AND e.tier = 'stated'
-                AND rc.change_level <> 'none') AS rationale
+                AND e.tier = 'stated') AS rationale
        FROM revision_change rc
        JOIN git_commit c ON c.id = rc.commit_id
        LEFT JOIN revision nr ON nr.id = rc.next_revision
@@ -185,6 +197,7 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
       ...row,
       linked: linkedByCommit.get(row.sha) ?? [],
       suppressedReferences: [],
+      suppressedStatedQuotes: 0,
     })
   );
 }
@@ -218,6 +231,9 @@ export function suppressUnrelatedRationale(row: TimelineRow): TimelineRow {
     ...row,
     rationale: null,
     linked: [],
+    suppressedStatedQuotes: row.rationale === null
+      ? 0
+      : row.rationale.split(RATIONALE_SEPARATOR).length,
     suppressedReferences: row.linked.map(
       ({ provenanceRoot, kind, referenceKey, method, confidence }) => ({
         provenanceRoot,
@@ -351,13 +367,22 @@ export function renderTimeline(
   // 被抑制的引文要有交代。**靜默丟掉與靜默誤植同樣不誠實**——前者讓使用者以為
   // 沒有理由可查，而其實有。只放在標頭不逐列印：長時間軸本來就已經被
   // `[L1] 無變更` 淹沒，每列再加一行會讓真正有內容的列更難找。
-  const suppressedCommits = rows.filter((r) => r.suppressedReferences.length > 0);
+  const suppressedCommits = rows.filter(
+    (r) => r.suppressedReferences.length > 0 || r.suppressedStatedQuotes > 0,
+  );
   if (suppressedCommits.length > 0) {
     const roots = new Set(
       suppressedCommits.flatMap((r) => r.suppressedReferences.map((s) => s.provenanceRoot)),
     );
+    const statedCount = suppressedCommits.reduce((n, r) => n + r.suppressedStatedQuotes, 0);
+    // 兩種來源分開講。只講其中一種的話，另一種就變成靜默丟掉——
+    // 而第一版正是只數了 linked，讓「只有 commit message 理由」的列無聲消失。
+    const parts = [
+      roots.size > 0 ? `${roots.size} 則 PR／issue` : "",
+      statedCount > 0 ? `${statedCount} 段 commit message 理由` : "",
+    ].filter((p) => p !== "");
     out.push(
-      `另有 ${suppressedCommits.length} 次改動的 commit 提到 ${roots.size} 則 PR／issue，`
+      `另有 ${suppressedCommits.length} 次改動的 commit 帶著 ${parts.join(" 與 ")}，`
         + "但沒有修改到這個實體——它們的理由不會掛在下面的時間軸上。",
     );
   }
@@ -414,7 +439,7 @@ export function renderTimeline(
     out.push(`            ${row.subject}`);
     // 已驗證的逐字引用。前綴用「理由」而不是把它混進 subject，
     // 是為了讓「作者說的」與「我們整理的」在視覺上就分得開。
-    for (const quote of row.rationale ? row.rationale.split("\u001f") : []) {
+    for (const quote of row.rationale ? row.rationale.split(RATIONALE_SEPARATOR) : []) {
       out.push(`            理由「${quote}」`);
     }
     for (const linked of row.linked) {

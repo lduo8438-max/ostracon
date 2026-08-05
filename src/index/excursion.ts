@@ -34,7 +34,12 @@ export type ExcursionMethod =
  */
 export type MoveGuardScope = "repo" | "lineage";
 
-const EXCURSION_ALGORITHM = "excursion-1.0.0+inverse-raw+move-guard";
+/**
+ * `1.0.0` → `1.1.0`：搬移守門的判準由「死得不比我早」（`>=`）改成
+ * 「嚴格活得比我久」（`>`）。同一個 commit 刪除的相同內容原本會互相抑制，
+ * 實測那是 84% 的排除。判準變了產出就變了，水位線必須要求重算（不變量 7）。
+ */
+const EXCURSION_ALGORITHM = "excursion-1.1.0+inverse-raw+move-guard-outlives";
 
 export const excursionVersion = (scope: MoveGuardScope): string =>
   `${EXCURSION_ALGORITHM}+scope:${scope}`;
@@ -102,23 +107,47 @@ function candidates(db: DatabaseSync, repoId: number): EntityRow[] {
 }
 
 /**
- * 這段內容是否在死亡當下或之後仍存在於**別的 entity** 上。
+ * 有沒有一份相同的內容**活得比我久**。
  *
- * **這道守門非做不可。** 實測 create-t3-app：117 個「內容逐字未變即被移除」的
- * 候選裡有 15 個（13%）其實是 matcher 漏接的搬移——例如 `MyApp` 從
- * `template-prisma/src/pages/_app.tsx` 被搬到
- * `cli/template/extras/src/pages/_app/base.tsx`，模板目錄大規模重構讓 L5 的
- * bucket 唯一性失敗。少了這道守門，13% 的迂迴會是假的。
- *
- * 而「這個做法被推翻了」講錯的代價與誤報斷層同級：它讓使用者相信一段
+ * 這道守門非做不可：宣告一段程式碼「被推翻」之前必須先確認它不是被搬走，
+ * 而「這個做法被推翻了」講錯的代價與誤報斷層同級——它讓使用者相信一段
  * 從未發生的歷史。
  *
  * 先比 `hash_raw`（逐字），再比 `hash_alpha`（僅局部改名後搬走）。
  *
- * **判準是「另一個 entity 在我們死亡時仍活著」，不是「有 revision 落在死亡之後」。**
- * `revision` 只在檔案被觸及時才寫入，所以搬過去的副本如果之後再也沒被改動，
- * 用 revision 的 topo_order 去查會完全漏掉它——測試就是這樣抓到的，
- * 而先前在 create-t3-app 上量到的 13% 因此是低估。
+ * ## 判準：嚴格活得比我久
+ *
+ * 有 → 我的死亡是搬移或去重，內容還在，不是放棄。抑制。
+ * 沒有 → 內容在我死時離開了 repo。那正是迂迴要報的時刻。
+ *
+ * 這個判準自然處理了「搬移後再刪除」的鏈：`foo` 從 A 搬到 B（A 死於 100）、
+ * B 死於 200——A 被 B 抑制，B 不被抑制，迂迴報在 200，也就是內容真正離開的
+ * 那一刻。**一次放棄只報一次。**
+ *
+ * ## `>` 不是 `>=`：先前這裡有一個 84% 的錯誤
+ *
+ * 原本寫的是 `dc.topo_order >= ?`，意思是「另一個 entity 死得**不比我早**」。
+ * 但同一個 commit 的 `topo_order` 相等，於是 **N 個內容相同的宣告在同一次
+ * commit 被刪除時，每一個都認為其他的還活著，全部互相抑制**——而它們全都
+ * 消失了。刪掉一整個重複的樣板目錄正是這個模式。
+ *
+ * create-t3-app 實測：77 個排除裡有 **65 個（84%）只被已死的 entity 抑制**。
+ * 最清楚的一對是兩個 380-node 的 `Home`（`template-prisma` 與
+ * `template-prisma-auth`），互相抑制、同死於 `e6fe4e6b`、終點兩個檔案都不存在。
+ *
+ * 修正後排除由 77 降到 19，迂迴由 111 升到 170。**放寬守門是單調的**
+ * （條件變嚴 → 抑制變少 → 迂迴只增不減），所以任何 `expect: present` 的
+ * 黃金案例都不可能因此退步。
+ *
+ * ## 刻意不加 node_count 閘門
+ *
+ * 修正後仍被排除的 19 個裡有 11 個是 `node_count < 25`，低於專案在別處使用的
+ * 碰撞閘門。小宣告的 `hash_raw` 相同確實是弱證據
+ * （`export type AppRouter = typeof appRouter;` 在每個樣板變體裡都一樣）。
+ *
+ * 但加閘門會讓守門更少觸發 → 更多東西被判成迂迴 → **往誤報方向移動**，
+ * 而誤報成本遠高於漏報。現在的無閘門行為偏保守，方向是對的，
+ * 這是刻意接受的代價。
  */
 function stillExistsElsewhere(
   db: DatabaseSync,
@@ -132,7 +161,7 @@ function stillExistsElsewhere(
          LEFT JOIN git_commit dc ON dc.id = o.death_commit_id
         WHERE r.${column} = ?
           AND o.id <> ?
-          AND (o.death_commit_id IS NULL OR dc.topo_order >= ?)
+          AND (o.death_commit_id IS NULL OR dc.topo_order > ?)
         LIMIT 1`,
     ).get(value, entity.id, entity.deathTopo) !== undefined;
 

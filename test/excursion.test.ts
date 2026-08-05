@@ -56,6 +56,68 @@ const HELPER = `export function experimentalCache(key: string): string {
 }`;
 
 describe("迂迴偵測（entity 層級）", () => {
+  it("**同一個 commit 刪掉的相同內容不得互相抑制**", async () => {
+    // 守門原本寫 `dc.topo_order >= ?`（死得不比我早），而同一個 commit 的
+    // topo_order 相等——於是 N 份相同內容一起被刪時，每一份都認為其他的還活著，
+    // 全部被排除。但它們全都消失了。刪掉一整個重複的樣板目錄正是這個模式。
+    //
+    // create-t3-app 實測：77 個排除裡有 65 個（84%）只被已死的 entity 抑制。
+    // 最清楚的一對是兩個 380-node 的 Home，互相抑制、同死於一個 commit、
+    // 終點兩個檔案都不存在。
+    const { repo, write, remove, commit } = makeRepo();
+    write("src/keep.ts", "export const keep = 1;\n");
+    write("src/copy-a.ts", `${HELPER}\n`);
+    write("src/copy-b.ts", `${HELPER}\n`);
+    commit("兩份逐字相同的拷貝");
+
+    // 關鍵：**同一個 commit** 刪掉兩份。
+    remove("src/copy-a.ts");
+    remove("src/copy-b.ts");
+    commit("一次刪掉兩份");
+
+    const { db, repoId } = await index(repo);
+    const report = detectExcursions(db, repoId, { scope: "repo" });
+    assert.equal(
+      report.excludedAsMoved,
+      0,
+      "兩份都消失了，沒有任何一份活得比另一份久，不該有排除",
+    );
+    assert.equal(
+      rows(db).filter((r) => r.sym === "experimentalCache").length,
+      2,
+      "兩份都必須被判為迂迴——內容確實離開了 repo",
+    );
+    db.close();
+  });
+
+  it("搬移後再刪除時，迂迴只報在內容真正離開的那一刻", async () => {
+    // A 搬到 B（A 死）、之後 B 才死。A 被 B 抑制、B 不被抑制，
+    // 所以一次放棄只報一次，而且報在正確的時間點。
+    const { repo, write, remove, commit } = makeRepo();
+    write("src/keep.ts", "export const keep = 1;\n");
+    write("src/a.ts", `${HELPER}\n`);
+    commit("加入");
+    write("src/b.ts", `${HELPER}\n`);
+    remove("src/a.ts");
+    commit("搬到 b.ts");
+    write("src/keep.ts", "export const keep = 2;\n");
+    commit("無關的改動");
+    remove("src/b.ts");
+    const finalSha = commit("真正移除");
+
+    const { db, repoId } = await index(repo);
+    detectExcursions(db, repoId, { scope: "repo" });
+    const found = rows(db).filter((r) => r.sym === "experimentalCache");
+    assert.equal(found.length, 1, "一次放棄只該報一次");
+
+    const at = db.prepare(
+      `SELECT c.sha AS sha FROM excursion x
+         JOIN git_commit c ON c.id = x.remove_commit LIMIT 1`,
+    ).get() as { sha: string };
+    assert.equal(at.sha, finalSha, "要報在內容真正離開 repo 的那次 commit");
+    db.close();
+  });
+
   it("**搬移不得被記成迂迴**——內容仍存在於別處就排除", async () => {
     // 實測 create-t3-app：117 個「內容逐字未變即被移除」的候選裡有 15 個（13%）
     // 其實是 matcher 漏接的搬移。少了這道守門，13% 的迂迴會是假的，

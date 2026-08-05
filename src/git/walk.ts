@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { COMMIT_MARKER, type FilePatch, parsePatchLog } from "./hunks.ts";
+import { COMMIT_MARKER, type FilePatch, parsePatchLog, unquotePath } from "./hunks.ts";
 import type { ChangeType, CommitRecord, FileChangeRecord, WalkOptions } from "./types.ts";
 
 /**
@@ -30,7 +30,21 @@ function diffFlags(o: WalkOptions): string[] {
   return f;
 }
 
-/** 解析 --name-status 的一行。回傳 null 代表這行不是變更記錄。 */
+/**
+ * 解析 --name-status 的一行。回傳 null 代表這行不是變更記錄。
+ *
+ * **路徑一律去引號。** git 預設 `core.quotePath=true`，非 ASCII 檔名會輸出成
+ * `"my \346\252\224\346\241\210.ts"`。先前這裡直接採用原字串，後果是路徑帶著
+ * 引號與八進位逸出存進 `file_change` 與 `path_lineage_segment`，而 `grammarForPath`
+ * 用 `/\.ts$/` 判副檔名——結尾是 `.ts"` 就永遠不匹配，**於是那些檔案完全不被解析**
+ * （實測 revision 數為 0，不是「查不到」而是根本不存在）。
+ *
+ * 更糟的是它會製造假死亡：函式從 ASCII 檔名搬到非 ASCII 檔名時，搬移端看不見，
+ * 於是被記成死亡，再餵給迂迴偵測就變成假的「被推翻」。
+ *
+ * diff parser（`hunks.ts`）本來就會去引號，所以先前兩邊的路徑對不起來，
+ * 非 ASCII 檔案連 hunk 約束都是失效的。
+ */
 function parseNameStatus(line: string): FileChangeRecord | null {
   if (!line) return null;
   const parts = line.split("\t");
@@ -44,18 +58,18 @@ function parseNameStatus(line: string): FileChangeRecord | null {
     if (!oldPath || !newPath) return null;
     return {
       changeType: kind,
-      path: newPath,
-      oldPath,
+      path: unquotePath(newPath),
+      oldPath: unquotePath(oldPath),
       score: Number.isFinite(score) ? score : undefined,
     };
   }
   if (kind === "A" || kind === "M" || kind === "D") {
     const p = parts[1];
-    return p ? { changeType: kind, path: p } : null;
+    return p ? { changeType: kind, path: unquotePath(p) } : null;
   }
   // T(型別變更) / U(未合併) 等；當作修改處理，不遺漏檔案。
   const p = parts[1];
-  return p ? { changeType: "M", path: p } : null;
+  return p ? { changeType: "M", path: unquotePath(p) } : null;
 }
 
 /**
@@ -83,7 +97,7 @@ function mergeChanges(repo: string, sha: string): FileChangeRecord[] {
       : tags.split("").every((c) => c === "D")
         ? "D"
         : "M";
-    rows.push({ changeType: kind, path });
+    rows.push({ changeType: kind, path: unquotePath(path) });
   }
   return rows;
 }

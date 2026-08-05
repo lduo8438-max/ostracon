@@ -79,4 +79,53 @@ async function dispatch(argv: string[]): Promise<void> {
   }
 }
 
-await dispatch(process.argv.slice(2));
+/**
+ * 把已知的失敗印成一行人看得懂的訊息，而不是 Node 的 stack trace。
+ *
+ * 掃描首次使用者路徑時，**每一種錯誤的第一行都是 `node:internal/errors:985`**：
+ * 空 repo、`--until` 指向不存在的 ref、repo 路徑打錯、目錄不是 git repo、
+ * `--db` 指向不可寫的位置——全都是最常見的「打錯字」情境。有些訊息本身其實不錯
+ * （「無法解析目標 a.ts；格式應為 …」），但都被埋在 stack trace 底下。
+ *
+ * **非預期的錯誤仍然保留完整 stack。** 把所有東西都壓成一行會讓真正的 bug
+ * 變得無法排查——這裡要分辨的是「使用者做錯了」與「我們寫錯了」。
+ */
+function explain(error: unknown): string | undefined {
+  const raw = error instanceof Error ? error.message : String(error);
+
+  // git 自己的訊息夠清楚，但被包在 execFileSync 的 "Command failed: …" 裡，
+  // 前面還有一整行 git 指令。抽出 fatal: 那一行就好。
+  const fatal = /^fatal: .*$/m.exec(raw);
+  if (fatal) {
+    const line = fatal[0];
+    if (line.includes("unknown revision or path not in the working tree")) {
+      return `${line}\n這通常是 --until 指向了不存在的 ref，或這個 repo 還沒有任何 commit。`;
+    }
+    if (line.includes("not a git repository")) {
+      return `${line}\n--repo 要指向一個 git repo 的根目錄。`;
+    }
+    if (line.includes("cannot change to")) {
+      return `${line}\n--repo 指向的路徑不存在。`;
+    }
+    return line;
+  }
+
+  if (raw.startsWith("ENOENT: no such file or directory, mkdir")) {
+    return `${raw}\n--db 的上層目錄不存在，而且無法建立。`;
+  }
+
+  // 我們自己丟出來的訊息本來就是給人看的（淺層 clone、目標格式、版本不符…）。
+  // 判準是「有沒有換行或中文」——那是我們寫的，不是 runtime 的。
+  if (/[一-鿿]/.test(raw)) return raw;
+
+  return undefined;
+}
+
+try {
+  await dispatch(process.argv.slice(2));
+} catch (error) {
+  const message = explain(error);
+  if (message === undefined) throw error;
+  console.error(message);
+  process.exitCode = 1;
+}

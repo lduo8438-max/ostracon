@@ -10,6 +10,7 @@ import "./lineage.test.ts";
 import "./linked.test.ts";
 import "./minhash-arithmetic.test.ts";
 import "./ostracised.test.ts";
+import "./paths.test.ts";
 import "./position.test.ts";
 import "./retry.test.ts";
 import "./repo-pass.test.ts";

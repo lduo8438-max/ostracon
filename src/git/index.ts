@@ -161,7 +161,15 @@ export function indexGit(repoPath: string, opts: IndexGitOptions): IndexGitRepor
  * 這不是完整的版本字串——完整版本還要帶上會改變產出的**設定**，見
  * `indexerVersion()`。
  */
-export const WALK_ALGORITHM_VERSION = "walk-0.2.0";
+/**
+ * `0.2.0` → `0.3.0`：`--name-status` 的路徑改為一律去引號。
+ *
+ * 非 ASCII 檔名先前帶著引號與八進位逸出存進 `file_change` 與
+ * `path_lineage_segment`，那些路徑值現在不同了——而 `stable_key` 雜湊誕生路徑，
+ * 所以產出確實改變（不變量 7）。ASCII-only 的 repo 產出完全相同，但版本仍必須
+ * 提升：舊資料庫裡那些路徑是壞的，續跑會讓兩種形態混在同一個水位線之後。
+ */
+export const WALK_ALGORITHM_VERSION = "walk-0.3.0";
 
 /**
  * 完整的 structural indexer 版本。

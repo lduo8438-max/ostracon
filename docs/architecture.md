@@ -62,6 +62,26 @@ fixtures/      黃金測試集與其 baseline
 partial clone（`--filter=blob:none`）不在此列：commit 歷史完整，只有 blob 延遲
 取得，所以歷史正確、只是比較慢。
 
+### 路徑一律去引號
+
+git 預設 `core.quotePath=true`，非 ASCII 檔名在 `--name-status` 會輸出成
+`"my \346\252\224\346\241\210.ts"`。走訪層若直接採用那個字串，路徑會帶著引號與
+八進位逸出存進 `file_change` 與 `path_lineage_segment`，而 `grammarForPath` 用
+`/\.ts$/` 判副檔名——結尾是 `.ts"` 就永遠不匹配，**那些檔案完全不被解析**
+（實測 revision 數為 0，不是「查不到」而是根本不存在）。
+
+它還會製造假死亡：函式從 ASCII 檔名搬到非 ASCII 檔名時，搬移端看不見，於是被記成
+死亡，再餵給迂迴偵測就變成假的「被推翻」。而且 diff parser 本來就會去引號，
+所以兩邊的路徑對不起來，非 ASCII 檔案連 hunk 約束都失效。
+
+八進位逸出是**位元組不是字元**，必須先組回 byte 陣列再用 UTF-8 解碼；逐字元
+`String.fromCharCode` 會把非 ASCII 路徑解成亂碼。走訪層與 diff parser 共用同一個
+`unquotePath`，不各寫一份。
+
+路徑值改變等於走訪層產出改變，所以 `WALK_ALGORITHM_VERSION` 由 `0.2.0` 提升到
+`0.3.0`——ASCII-only 的 repo 產出完全相同，但舊資料庫裡那些路徑是壞的，
+續跑會讓兩種形態混在同一個水位線之後。
+
 ### 產品與評估工具的界線
 
 `files` 白名單只有 `dist`、`db/schema.sql`、README、LICENSE。**`src/golden/` 不進封裝**：它是評估工具不是產品——只服務這個專案自己的開發流程，而且它 import `yaml`（devDependency）。要跑黃金測試集的人是 clone 整個 repo，不是裝 npm 套件。

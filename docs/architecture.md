@@ -26,20 +26,34 @@ git repo
 
 四個 pass 各有獨立水位線（`pass_state`）。pass 1–2 可以跑完整個 repo 而完全不碰網路、不花一毛錢；這是「先給你看結構，你覺得有用再開 API key」的產品策略的技術基礎，也是冷啟動摩擦最小化的關鍵。
 
-### 套件劃分
+### 目錄劃分
+
+原先規劃的是 `packages/*` monorepo。實際做出來是單一套件的 `src/*`——沒有出現需要獨立版本或獨立發布的邊界，拆成多套件只會多一層 workspace 設定。**這裡記實際的樣子**：
 
 ```
-packages/
-  core/       資料模型、SQLite 存取、型別定義
-  indexer/    pass 1–2。git 走訪、解析、雜湊、匹配、構造抽取
-  enrich/     pass 3–4。GitHub adapter、span 擷取與驗證
-  server/     HTTP API
-  web/        React 前端
-  cli/        why 指令
-fixtures/     黃金測試集
+src/git/       pass 1。走訪、路徑血緣、hunk 擷取、SQLite persistence
+src/ast/       tree-sitter 解析、四層雜湊、語言剖面
+src/match/     匹配階梯 L1–L5、n-gram 簽章
+src/index/     結構層寫入、單一血緣／全 repo pass、迂迴偵測
+src/evidence/  span 斷言、規則式抽取、stated／linked 收取
+src/http/      網路邊界：GitHub adapter、錄放 fixture、重試包裝
+src/cli/       ostracon 的子指令與分派
+src/golden/    黃金測試集的 materializer、runner、語料取回
+db/schema.sql  資料模型的唯一真相
+fixtures/      黃金測試集與其 baseline
 ```
 
-`indexer` 不得相依 `enrich`。反向相依是允許的。
+依賴方向仍然單向：`git` / `ast` / `match` 不得相依 `evidence` 或 `http`。
+
+### 產品與評估工具的界線
+
+`files` 白名單只有 `dist`、`db/schema.sql`、README、LICENSE。**`src/golden/` 不進封裝**：它是評估工具不是產品——只服務這個專案自己的開發流程，而且它 import `yaml`（devDependency）。要跑黃金測試集的人是 clone 整個 repo，不是裝 npm 套件。
+
+這條界線先前不存在，所以「`yaml` 是 devDependency 卻被 `src/` import」看起來像相依宣告錯了。界線畫出來之後那件事就是正確的。
+
+**開發與測試不經過建置**（`node --experimental-strip-types`），`pnpm build` 只在發布時用而且由 `prepublishOnly` 觸發，所以「原始碼與產物不同步」的風險只存在於發布那一刻。建置用 tsc 本身、零新相依，關鍵是 `rewriteRelativeImportExtensions`：匯入寫的是 `./walk.ts`（strip-types 要求副檔名照實寫），emit 時改寫成 `.js`，同一份原始碼兩種執行方式都成立。
+
+CI 會真的打包、在封裝外安裝、實跑一次 `why`。那是唯一驗得到 `db/schema.sql` 與 tree-sitter wasm 在**安裝後的位置**解析得到的方法；在原始碼樹裡跑永遠會過。
 
 ### Git 走訪與路徑血緣
 
@@ -274,6 +288,22 @@ bucket」的配對；它們集中在 25 個 commit 的 `Dashboard.fetchEndpoint`
 `200` 是版本化的索引器參數並納入 `indexer_version`，暫不寫成 schema CHECK，
 讓黃金測試校準門檻時不必做資料庫 migration。
 
+#### 模乘不能直接寫成 `(a * x + b) % p`
+
+MinHash 的置換是 `(a·x + b) mod (2^31 − 1)`，而 `a` 與 `x` 都可接近 2^31。直接相乘的乘積達 2^62，遠超過 `Number.MAX_SAFE_INTEGER`（2^53），高位被靜默捨去——**以實際係數實測 96.7% 的呼叫得到錯誤的值**（128 個係數的 `a` 最小值就有 3.0e7，沒有一個小到安全）。
+
+這**不影響配對的正確性**：結果仍是決定性的，而 MinHash 只做召回、L4/L5 接受前一律要精確 Jaccard 驗證。但那族雜湊的碰撞性質是任意的而非理論值，召回階段可能漏掉真正相似的候選，**而漏掉的東西不會有任何錯誤訊息**。
+
+修法是把 `x` 拆成高低 16 位，並用 Mersenne 質數的 `2^31 ≡ 1 (mod p)` 做部分規約：每一步的中間值都遠低於 2^53，最後一次條件減法把結果收進 `[0, p)`。除以 2^31 只是調整指數，在 IEEE-754 下**完全精確、不產生捨入**，所以整段沒有精度風險，也不需要 BigInt。
+
+**修正後比原本錯誤的版本還快**（Osiris 的 pass 由 5,467 ms 降到 3,816 ms，−30.2%）：double 的 `%` 走 fmod，比「除以 2 的冪 + 乘 + 減」慢一個數量級。兩個語料的結構產出逐項相同——若有任何 tier 變動，反而代表精確驗證沒擋住。
+
+`MINHASH_SEED_VERSION` 因此由 `mh-1.0.0` 升為 `mh-2.0.0`：種子沒變，但**種子與算術兩者都決定產出的值**，所以它識別的是整族雜湊。
+
+#### `SIGNATURE_VERSION` 必須進 declarations 水位線
+
+簽章決定 L4/L5 的召回，換了它就可能換掉配對，進而換掉 `stable_key`。先前它只被寫進每一列 `revision` 的 `minhash_version` 欄位，**沒有進水位線**——結果是改了簽章演算法之後續跑不會報錯，資料庫會靜默混進兩族互不可比的簽章。註解裡寫「換了就要重算」而系統不強制，那不是規則，是願望。
+
 ### 函式抽取的偵測
 
 同一 commit 內，某實體 body 大幅縮減，且出現新宣告與被移除的片段高度相似 → 建立 `entity_link(relation = 'extracted_from')`。對等拆分（兩半都保留部分職責）在黃金測試集中標為 `ambiguous`，不強求唯一答案。
@@ -342,12 +372,52 @@ interface ExtractedConstruct {
 | 強度 | 判準 | 需要 |
 |---|---|---|
 | **A 確證** | `git revert`，或返回 commit 的 diff 與引入 commit 的 diff 呈近似反向匹配 | 純結構，零 LLM |
-| **B 高可信** | 生命週期符合 + 有文字證據明確提及 | pass 3 |
+| **B 高可信** | 生命週期符合 + 有文字證據明確提及 | **刻意不做**，見下 |
 | **C 疑似** | 僅結構符合，無任何文字佐證 | — |
 
 C 級在 UI 上必須標示「疑似」，不得作為結論陳述。
 
-`duration_days` 記錄但**不作為門檻**：三週後撤掉是試錯，三年後撤掉是技術演進，兩者都有價值但意義不同，讓使用者自己過濾。
+**B 級刻意不做。** 它需要把文字證據關聯到 entity，而現有的 evidence 掛在 commit 上而不是 entity 上——commit 級的理由與「這個宣告為什麼被拿掉」不是同一件事（見 §6「理由屬於 commit，時間軸屬於 entity」，實測 41.7% 的引文落在該實體毫無變動的列上）。硬接會產生看似有據、實則無關的宣稱，那比沒有 B 級更糟。
+
+**目前只做 entity 層級，不做 construct 層級。** schema 的 `excursion` 是 `entity_id` XOR `construct_id`，entity 那一半用現有的 `entity` / `revision` 就夠，不需要 `construct_span`。「整個模組或方案被推翻」留給構造層。
+
+`duration_days` 記錄但**不作為門檻**：三週後撤掉是試錯，三年後撤掉是技術演進，兩者都有價值但意義不同，讓使用者自己過濾。它用 `authored_at` 而不是 `committed_at`——committer 時間會被 rebase、cherry-pick 與 amend 重寫，Osiris 的 99 個 commit 只有 88 個相異 committer 時間，而黃金案例的引入與移除 commit 的 committer 時間完全相同，算出來會是 0 天。
+
+### 搬移守門：這一層最重要的判準
+
+**宣告一段程式碼「被推翻」之前，必須先確認它不是被搬走。** 判準是：這段內容在死亡當下或之後，是否仍以相同 `hash_raw`（或 `hash_alpha`）出現在**另一個仍活著的 entity** 上。是的話那是 matcher 漏接的搬移，直接排除，連 C 級都不給——它根本沒有消失。
+
+create-t3-app 實測：189 個生死都在觀測範圍內的候選，**78 個（41%）被這道守門排除**。少了它，四成的「被推翻」是假的。而「這個做法被推翻了」講錯的代價與誤報斷層同級：它讓使用者相信一段從未發生的歷史。
+
+**判準是「另一個 entity 在我們死亡時仍活著」，不是「有 revision 落在死亡之後」。** `revision` 只在檔案被觸及時才寫入，所以搬過去的副本若之後再也沒被改動，用 revision 的時間去查會完全漏掉。第一版就是這樣寫的，測試抓到之後才發現先前量到的「13%」是嚴重低估，真值是 41%。
+
+這道查詢是單次索引查找，成本可忽略。
+
+### 搬移守門的可見範圍必須進版本字串
+
+守門在**只索引了部分血緣**時是瞎的：搬到未索引檔案的內容查不到，於是被誤判成迂迴。所以偵測器要求呼叫端明確宣告 `scope`（`repo` 或 `lineage`），並把它寫進 `pass_state` 的版本字串（`excursion-1.0.0+inverse-raw+move-guard+scope:<scope>`）。
+
+同一個 entity 在兩種 scope 下可以得到相反的答案，因此**那不是同一份產出**，不得混在同一個水位線之後（不變量 7）。scope 由 `lineage` 升級到 `repo` 時版本不符，水位線檢查會自動要求重算。
+
+`scope` 是必填而非有預設值，是為了讓型別檢查逼呼叫端表態；實際加上去時它一次抓到全部 7 個呼叫點。
+
+「被推翻的做法」清單一律跑全 repo pass，**不提供 `--full` 開關**——給開關等於給使用者一個會產生假名單的選項。清單查詢前另有 `assertExcursionScope`，版本或水位線不符即拒絕輸出：使用者無從分辨名單是完整的還是殘缺的，而錯的那一半看起來與對的一模一樣。
+
+### 名稱還在，不代表想法還在
+
+守門比對的是內容雜湊，所以「名稱還在、實作被改寫」它抓不到。create-t3-app 的 71 條 A 級裡有 11 條（15%）限定名稱仍然存在。這不是假的「這段程式碼消失了」，但**使用者會讀成「這個想法被放棄了」**，而那是錯的。
+
+呈現時必須一併列出仍存活的同名 entity。但那是**純名稱比對，不是語意判定**：`createInnerTRPCContext`、`createQueryClient` 命中的確實是同一個概念，`Home`（39 處）、`Session`、`Options` 這類模板泛用名撈到的多半不相干。所以措辭一律用「不必然是這個想法」，而且只列前三個加總數——39 條路徑不是資訊，是雜訊。全 111 條實測觸發率 14%。
+
+### 已消失的東西要定址得到
+
+迂迴的定義就是檔案已經不在了，而 `lineageIdAt` 解析的是「在這個 commit 上，這個路徑屬於哪條血緣」——對已刪除的路徑必然回傳 undefined。以釘死的 SHA 實測，111 條迂迴只有 20 條（18%）在終點可定址。
+
+這是 catch-22：使用者得先知道它什麼時候死的，才問得出它為什麼死。
+
+`lineagesEverAt` 補上這一半：某路徑在該 commit 之前**曾經**屬於的所有血緣，最近的排前面，只在 `lineageIdAt` 失敗時當 fallback。**`lineageIdAt` 的語意不動**——它被結構層與 golden materializer 共用。
+
+路徑被刪除後又重建（D→A，斷層機制已涵蓋）時**回傳全部，不挑一條**。靜默挑「最近的一條」會讓更早那段歷史整個消失，這與 `entitiesFor` 面對同名多 entity 時「不得替使用者挑一個而不說明」是同一條裁決。
 
 ---
 
@@ -446,6 +516,42 @@ Markdown 模式與 extractor version。它只多做兩個保守排除：fenced c
 多少份文件產生 evidence 也一併回報。查詢額外要求
 `evidence.doc_body_sha = source_doc.body_sha256`，上游編輯後的 stale evidence 不會繼續
 出現在可信時間軸上。
+
+### 取回以「目標」為單位，不以 reference row 為單位
+
+同一個 PR 被多個 commit 提到是常態：create-t3-app 有 1,310 條 reference 卻只指向 1,085 個相異目標，逐 row 取回等於 **17% 的請求是重複的**。單趟內以 `to_key` 為鍵快取即可。
+
+鍵**不含 `to_kind`**：GitHub 的 issue 與 PR 共用同一組編號，所以編號本身就唯一標定討論串；而且 `to_kind` 在取回之前一律是 `issue`，放進鍵就永遠命不中。命中時只快取種類、不快取文件內容——該目標的 `source_doc` 早就寫進去了，重寫一次是完全相同的內容。
+
+**命中仍必須修正該列的 `to_kind`。** 省請求不得省掉這一步，否則第二個 commit 的那一列會永遠留著錯的 `issue`，而查詢層靠它分辨 PR。
+
+同理，`reference_link` 的 UNIQUE **不含 `to_kind`**。身分是「哪個 commit、提到哪個編號、用哪種方法」；種類是取回後才知道的衍生事實。把衍生欄位放進身分的後果是 extract 與 linked 交替執行會產生重複列（Osiris 實測 23 列變 28 列），而下一次 linked 要修正那份重複列時會 UNIQUE 衝突並整趟 crash。
+
+### 暫時性失敗要重試，rate limit 不要
+
+demo 語料的 linked 收取跑了 51 分鐘、3,229 個請求，其中出現 **4 次 `fetch failed`**（TLS `ECONNRESET` 之類）。每一次都足以讓整趟拋例外中止。per-commit transaction 與水位線讓它不會損壞資料、可以續跑，但要人守著重跑四次才做得完。
+
+重試是**可組合的包裝**而不是 adapter 的一部分：`createGitHubFetcher` 是純粹的 HTTP adapter，加上重試會讓它同時負責兩件事；包裝自己不碰網路，所以「網路只准出現在一個檔案」不受影響。順序是 `record(retry(live))`——錄下來的必須是成功的回應而不是中途的失敗；replay 不包，離線重播不會有暫時性失敗。
+
+**4xx 一律不重試，429 尤其不能。** rate limit 由呼叫端的 `stopped` 路徑優雅處理：讀 `x-ratelimit-reset`、保住水位線、讓人稍後續跑。在這裡用幾秒的退避去重試，等於把「暫停，稍後再來」變成盲目敲門，而 reset 可能在一小時之後。404 也不重試——那是「這個 issue 不存在」的事實。只有 5xx 與丟出來的網路錯誤會重試。
+
+用完次數時**把原始錯誤照原樣拋出**（包一層會蓋掉 `ECONNRESET` 這種對排查有用的資訊），5xx 則照原樣回傳讓 `stopped` 接手。重試不靜默：每一次都印出來——看不見的降級等於沒有降級。
+
+### 理由屬於 commit，時間軸屬於 entity
+
+一次 commit 的理由是關於整次改動的，但時間軸是逐 entity 呈現的。於是一個提到 6 個 issue 的 commit，會讓 6 條引文全部掛到某個 entity 的一列 `無變更` 底下。引文逐字為真、編號正確、span 驗證通過——**但那個 entity 在該 commit 什麼都沒發生，而使用者沒有任何辦法察覺這條因果是假的**。
+
+demo 語料實測：6,367 次引文顯示裡有 **41.7% 落在 `change_level = 'none'` 的列上**，兩項都乾淨（有實際改動且引文有內容）的只有 44.9%。
+
+判準用 `change_level != 'none'`。**曾經考慮拿 `file_hunk` 的行範圍與 `revision` 的行區間相交，實作出來量過之後放棄**：兩者幾乎等價（`shape`／`alpha`／`death`／`raw`／`token` 100% 有交集、`none` 98.7% 無交集），而在不一致的地方 `change_level` 更精確——那 32 條「`none` 但有交集」是 hunk 觸及了行區間、但改的是上下文行，實體本身逐字未變，hunk 規則會誤收。既然現成的欄位更準，就不要另外蓋一套還要處理合併無 hunk 與邊界語意的比對邏輯。
+
+**保留指標、抑制引文。**「這個 commit 提到 PR #123」是關於 commit 的事實，對導覽有用；被抑制的只是被當成理由讀的那段文字。
+
+**方向偏保守：寧可濾掉，不可留錯。** 誤濾的話使用者少看到一條解釋，但參照還在，他可以自己去讀那個 PR；漏濾的話他會相信一個關於別段程式碼的理由。與「誤報斷層比漏報嚴重」同一個道理。代價實測：44 個 entity（12.5%）完全失去引文。
+
+**抑制與「交代抑制了什麼」必須由同一段程式碼負責。** 第一版把 stated 的抑制寫成 SQL 的 WHERE 條件、而標頭只數 linked 參照，結果「只有 commit message 理由、沒有任何 PR 參照」的列被靜默丟掉（Osiris 17 列、create-t3-app 3 列）。靜默丟掉與靜默誤植同樣不誠實——前者讓使用者以為沒有理由可查，而其實有。兩者分岔的根因就是邏輯被拆在兩個地方。
+
+抑制在**查詢層**而不是寫入層：`evidence` 列是事實（這段文字逐字存在於那份文件），歸屬是判斷。判斷寫進資料庫等於把門檻烤進儲存資料，而且規則一改就要重建索引。
 
 ### 為什麼是這個順序
 

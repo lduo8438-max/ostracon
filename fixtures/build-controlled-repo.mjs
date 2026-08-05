@@ -139,6 +139,28 @@ git(
 );
 const ambiguousAfter = git(["rev-parse", "HEAD"]);
 
+// ── 非 ASCII 檔名 ──────────────────────────────────────────────────────────
+//
+// git 預設 core.quotePath=true，所以 --name-status 會把這個路徑輸出成
+// "src/\347\245\250\345\210\270\350\247\243\346\236\220.ts"。走訪層若不去引號，
+// 路徑會帶著引號存進資料庫，而副檔名判定看到的是 `.ts"`——於是**檔案完全不被解析**。
+//
+// 這裡刻意做成「ASCII 路徑改名到非 ASCII 路徑」，一個案例同時守住三件事：
+//   1. 非 ASCII 檔案有沒有被解析（沒去引號的話這一版根本沒有宣告）
+//   2. R 記錄的新舊路徑是否都去引號（只去一邊會讓血緣接不起來）
+//   3. 血緣有沒有跨過改名——接不起來就會產生一個**假死亡**，
+//      而假死亡再餵給迂迴偵測就變成假的「被推翻」
+//
+// 新的 commit 一律追加在尾端，既有案例的 SHA 才不會變動。
+writeFileSync(path.join(absolute, "src/legacy.ts"), source("resolveTicket"));
+git(["add", "-A"]);
+git(["commit", "-q", "-m", "add ticket resolver"], "2026-01-07T00:00:00Z");
+const asciiPath = git(["rev-parse", "HEAD"]);
+
+git(["mv", "src/legacy.ts", "src/票券解析.ts"]);
+git(["commit", "-q", "-m", "rename onto a non-ASCII path"], "2026-01-08T00:00:00Z");
+const nonAsciiPath = git(["rev-parse", "HEAD"]);
+
 console.log(
   JSON.stringify(
     {
@@ -149,6 +171,8 @@ console.log(
       collisionAfter,
       ambiguousBefore,
       ambiguousAfter,
+      asciiPath,
+      nonAsciiPath,
     },
     null,
     2,

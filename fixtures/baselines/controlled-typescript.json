@@ -1,6 +1,11 @@
 {
   "cases": [
     {
+      "id": "ctrl-non-ascii-path-move",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
       "id": "ctrl-position-ambiguous",
       "difficulty": "adversarial",
       "status": "pass"

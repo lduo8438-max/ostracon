@@ -822,7 +822,15 @@ change_level 20、lineage 11、discontinuity 1、excursion 1。
 先前的 29/31 基準線（`reports/osiris-prehunk.json`）逐案例仍全部一致，新增的
 兩條是 L3c 的正例與負例。
 
-**受控 fixture**：主要指標 2/2 覆蓋、**2 pass / 0 fail**（2026-07-28，切片 3a 之後）。
+**受控 fixture**：主要指標 **3/3 覆蓋、3 pass / 0 fail**（2026-08-05）。
+新增 `ctrl-non-ascii-path-move`：`src/legacy.ts` 原封不動改名成 `src/票券解析.ts`。
+
+**這條案例是先驗證過會咬才收進來的**：把走訪層的去引號拿掉後它變成 `missing`，
+baseline 更新後閘門 exit code 由 0 變 1。不會失敗的 fixture 什麼都沒守到。
+
+它一個案例同時守住非 ASCII 檔案有沒有被解析、`R` 記錄的新舊路徑是否都去引號、
+以及血緣有沒有跨過改名。新 commit 一律追加在尾端，所以既有三條案例的錨點 SHA
+完全未變，只有 `index_until` 改成新的 tip。
 
 - `ctrl-position-scoped`：外層 scope 可區分、要求 `#0→#1`。**已由 L3c 位置錨定修好**
   （先前如預期 fail，是當時列的「未來改進的真實目標」）

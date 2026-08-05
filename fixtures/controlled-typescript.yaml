@@ -3,7 +3,7 @@ fixture_version: 1
 repo:
   name: controlled-typescript
   clone_url: "generated:fixtures/build-controlled-repo.mjs"
-  index_until: 63150cf0770ffc119f905d3b13b65d6a34124583
+  index_until: ad95f7aa4dc964307f149e25fbb1edfa24faae27
   language: typescript
 
 labeled_by: codex
@@ -137,3 +137,37 @@ cases:
             transition:
               type: edit
               expect_tier_at_most: L4
+
+  - id: ctrl-non-ascii-path-move
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      把 src/legacy.ts 原封不動改名成 src/票券解析.ts，內容一個 token 都沒改。
+      git 預設 core.quotePath=true，所以 --name-status 會把新路徑輸出成
+      "src/\347\245\250\345\210\270\350\247\243\346\236\220.ts"。走訪層若不去引號，
+      路徑會帶著引號與八進位逸出存進 file_change 與 path_lineage_segment，
+      而副檔名判定看到的是 `.ts"`——於是那一版根本不會被解析，這個案例會變成
+      missing 而不是 fail。實測未修正前 revision 數為 0。
+
+      一個案例同時守住三件事：非 ASCII 檔案有沒有被解析；R 記錄的新舊路徑是否
+      都去引號（只去一邊血緣就接不起來）；以及血緣有沒有跨過改名——接不起來會
+      產生一個假死亡，而假死亡再餵給迂迴偵測就變成假的「被推翻」。
+
+      內容完全未變且同名，所以正確答案是 L1：這是最強的規則，不得退到相似度層。
+    chain:
+      - anchor:
+          commit: 1c23617de66dd2942bd08964bd32b77391e107b5
+          path: src/legacy.ts
+          symbol: resolveTicket
+          occurrence: 0
+          snippet_head: "function resolveTicket(input: string): string {"
+      - anchor:
+          commit: ad95f7aa4dc964307f149e25fbb1edfa24faae27
+          path: src/票券解析.ts
+          symbol: resolveTicket
+          occurrence: 0
+          snippet_head: "function resolveTicket(input: string): string {"
+        transition:
+          type: move
+          expect_tier_at_most: L1

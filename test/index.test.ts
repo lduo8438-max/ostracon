@@ -13,6 +13,7 @@ import "./ostracised.test.ts";
 import "./position.test.ts";
 import "./retry.test.ts";
 import "./repo-pass.test.ts";
+import "./shallow.test.ts";
 import "./signature-cache.test.ts";
 import "./span.test.ts";
 import "./why.test.ts";

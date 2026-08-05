@@ -12,7 +12,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      # **fetch-depth: 0 是必要的，不是保險。** actions/checkout 預設只抓 1 個
+      # commit，而淺層 clone 的截斷點會被索引器當成「誕生」——所以索引器現在
+      # 直接拒絕淺層 repo，下面的封裝冒煙測試會對本 workspace 跑一次 why。
+      # 在加上這道偵測之前，那個冒煙測試一直在對一段截斷過的歷史跑。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 

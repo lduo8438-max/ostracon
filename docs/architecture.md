@@ -45,6 +45,23 @@ fixtures/      黃金測試集與其 baseline
 
 依賴方向仍然單向：`git` / `ast` / `match` 不得相依 `evidence` 或 `http`。
 
+### 淺層 clone 直接拒絕
+
+`git clone --depth N` 的截斷點與真正的初始 commit 在資料上無法區分，於是被當成
+「誕生」印出來——而輸出裡沒有任何跡象顯示那是假的。實測 `--depth 5` 的本 repo，
+`minhash` 被報成誕生於截斷邊界，實際誕生點在更早的初始 commit。
+
+影響不只誕生：`ostracised` 會把「歷史被截斷」讀成「這段程式碼被移除」，迂迴的
+搬移守門也看不到截斷線以外的內容。
+
+**拒絕執行而不是印警告。** 警告會捲過去，而時間軸照樣說謊，使用者分不出哪一條
+「誕生」是真的。這與「scope 不符就拒印迂迴清單」是同一個模式：使用者無從分辨
+輸出是完整的還是殘缺的時，不輸出比輸出好。檢查放在開啟資料庫之前——與其產生一個
+會說謊的索引再叫人重建，不如一開始就不要寫。
+
+partial clone（`--filter=blob:none`）不在此列：commit 歷史完整，只有 blob 延遲
+取得，所以歷史正確、只是比較慢。
+
 ### 產品與評估工具的界線
 
 `files` 白名單只有 `dist`、`db/schema.sql`、README、LICENSE。**`src/golden/` 不進封裝**：它是評估工具不是產品——只服務這個專案自己的開發流程，而且它 import `yaml`（devDependency）。要跑黃金測試集的人是 clone 整個 repo，不是裝 npm 套件。

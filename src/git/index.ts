@@ -71,6 +71,8 @@ export interface IndexGitReport {
  */
 export function indexGit(repoPath: string, opts: IndexGitOptions): IndexGitReport {
   const t0 = Date.now();
+  // 在開啟資料庫之前檢查：與其產生一個會說謊的索引再叫人重建，不如一開始就不要寫。
+  assertNotShallow(repoPath);
   const until = opts.until ?? "HEAD";
   // 版本由本次實際使用的選項算出，不是寫死的常數。
   const version = indexerVersion(opts);
@@ -179,6 +181,40 @@ export function indexerVersion(opts: WalkOptions = {}): string {
 
 /** 預設選項下的版本。既有呼叫端與測試沿用這個常數。 */
 export const INDEXER_VERSION = indexerVersion();
+
+/**
+ * 淺層 clone 會讓這個工具**斷言一個沒有發生的誕生**。
+ *
+ * `git clone --depth N` 之後，歷史在第 N 個 commit 處被截斷，而截斷點看起來
+ * 與真正的初始 commit 一模一樣。實測：對 `--depth 5` 的本 repo 查
+ * `src/match/signature.ts:minhash`，工具說它誕生於 `2a065be`（截斷邊界），
+ * 而它實際誕生於 `fd402bd`。輸出裡沒有任何跡象顯示這是假的。
+ *
+ * **這比誤報斷層更糟。** 斷層有門檻、有 `similarity` 可供檢視、UI 會標示；
+ * 假誕生沒有任何標記，與真誕生的呈現完全相同。而「這段程式碼何時誕生」
+ * 是這個工具的第一個賣點。
+ *
+ * 影響不只誕生：`ostracised` 會把「歷史被截斷」讀成「這段程式碼被移除」，
+ * 迂迴的搬移守門也看不到截斷線以外的內容。
+ *
+ * **`actions/checkout` 預設 `fetch-depth: 1`**，所以任何人把它放進 CI，
+ * 預設就是錯的。
+ *
+ * 所以是拒絕執行而不是印警告：警告會捲過去，而時間軸照樣說謊，使用者分不出
+ * 哪一條「誕生」是真的。這與「scope 不符就拒印迂迴清單」是同一個模式。
+ *
+ * **partial clone（`--filter=blob:none`）不在此列**：它的 commit 歷史是完整的，
+ * 只有 blob 是延遲取得，所以歷史正確、只是比較慢。這裡只擋 shallow。
+ */
+export function assertNotShallow(repo: string): void {
+  if (tryGit(repo, ["rev-parse", "--is-shallow-repository"]) !== "true") return;
+  throw new Error(
+    `${repo} 是淺層 clone（shallow），歷史在截斷點被切斷。\n`
+      + "截斷點會被當成「誕生」，而輸出裡看不出那是假的——這個工具的第一個賣點\n"
+      + "正是「這段程式碼何時誕生」，所以這裡拒絕產生會說謊的索引。\n"
+      + "請先取回完整歷史：git fetch --unshallow",
+  );
+}
 
 function isAncestor(repo: string, ancestor: string, descendant: string): boolean {
   try {

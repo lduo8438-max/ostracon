@@ -16,7 +16,8 @@ import type { CommitRecord, LineageResult, LineageSegment, LineageState } from "
  * 完全正確需要對每個 commit 保存樹快照，成本高一到兩個數量級。
  *
  * 實務上這種情況集中在長命分支上，多數 repo 罕見。若某個 repo 受影響嚴重，
- * 用 --first-parent 走訪可以完全避開，代價是看不到分支上的個別 commit。
+ * 用 --first-parent 走訪在原理上可以完全避開（代價是看不到分支上的個別 commit），
+ * 但那個選項尚未實作——不要在文件裡把它寫成使用者已經能用的東西。
  * 這個限制必須出現在 README，不能只留在程式碼註解裡。
  */
 export function buildLineages(

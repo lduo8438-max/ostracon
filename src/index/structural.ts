@@ -540,6 +540,64 @@ export function recreatedPathPredecessor(
 }
 
 /** 同一 slot 在目標 commit 之前最後一位佔用者。 */
+/**
+ * 某個已觀察到的宣告在資料庫裡已經屬於哪個 entity。
+ *
+ * **這是增量續跑的必要條件。** 全 repo pass 用一張記憶體 Map（`entityAt`）把
+ * 「前像的座標 → entity」帶到下一個 commit，但那張 Map 每次呼叫都重建。
+ * 續跑時 matcher 仍然接得到前像（它重新從 git 觀察父 commit，不受水位線影響），
+ * 但 Map 是空的——於是「匹配到了卻找不到 entity」被誤判成誕生，**開了一個新
+ * entity**，把血緣從水位線處切斷。
+ *
+ * 實測 create-t3-app：先索引到中繼點再續 100 個 commit，會多出 **169 個 entity**
+ * （574 對 405），而且全部誕生在水位線的 topo_order 之後。`matches` 與 tier 分佈
+ * 完全正常，所以除了 entity 數以外沒有任何指標看得出來。
+ *
+ * 使用者看到的是水位線處一次假的「誕生」，外加一句「這個檔案的歷史上有 2 個不同
+ * 的實體（slot 延續但內容血緣斷開）」——憑空報告一個不存在的斷層。
+ * 而 `why` 本身就是增量的，所以這是預設路徑而不是邊緣情境。
+ *
+ * **唯讀，不建立 slot。** 查不到就是真的沒有前像記錄，那時開新 entity 才是對的。
+ *
+ * **查的是「早於 `atSha` 的最後一筆」，不是「剛好落在前像那個 commit」。**
+ * `revision` 只在檔案被觸及時才寫入，所以前像宣告最後一次被記錄的 commit
+ * 通常比父 commit 更早——第一版用 `c.sha = observed.commit` 查，169 個多餘
+ * entity 一個都沒少。這與 `previousSlotEntity` 是同一個道理，差別只在這裡
+ * 是拿前像自己的 slot 座標去找，而不是拿後像的。
+ *
+ * **entity 與 revision 必須一起回傳。** 兩張記憶體 Map（`entityAt` / `revisionAt`）
+ * 在續跑時同時落空，而它們指的是同一筆記錄。只補 entity 的話，`revisionAt` 的
+ * 落空會走 `ensureRevision(前像)` ——在父 commit **新建**一筆全量跑從來沒寫過的
+ * revision（實測多出 169 筆），而且 match 會掛到那筆假的前像上。
+ */
+export function previousDeclarationRecord(
+  db: DatabaseSync,
+  repoId: number,
+  lineageId: number,
+  observed: ObservedDeclaration,
+  atSha: string,
+): { entityId: number; revisionId: number } | undefined {
+  const row = prep(db,
+    `SELECT r.entity_id AS entityId, r.id AS revisionId
+       FROM revision r
+       JOIN slot s ON s.id = r.slot_id
+       JOIN git_commit c ON c.id = r.commit_id
+       JOIN git_commit target ON target.repo_id = c.repo_id AND target.sha = ?
+      WHERE s.repo_id = ? AND s.lineage_id = ?
+        AND s.qualified_name = ? AND s.disambiguator = ?
+        AND c.topo_order < target.topo_order
+      ORDER BY c.topo_order DESC, r.id DESC
+      LIMIT 1`,
+  ).get(
+    atSha,
+    repoId,
+    lineageId,
+    observed.symbol,
+    String(observed.occurrence),
+  ) as { entityId: number; revisionId: number } | undefined;
+  return row;
+}
+
 export function previousSlotEntity(
   db: DatabaseSync,
   slotId: number,

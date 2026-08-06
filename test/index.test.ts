@@ -5,6 +5,7 @@ import "./git-index.test.ts";
 import "./golden-runner.test.ts";
 import "./hash.test.ts";
 import "./hunks.test.ts";
+import "./incremental.test.ts";
 import "./ladder.test.ts";
 import "./lineage.test.ts";
 import "./linked.test.ts";

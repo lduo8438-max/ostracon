@@ -118,6 +118,34 @@ deletion」等同於「一定能在 merge commit 找到 D」。
 - `file_change` 由 `UNIQUE (commit_id, path)` 保證重跑冪等；
 - 開放 segment 用部分索引加速續跑狀態重建。
 
+### 續跑時記憶體對照表必然落空，必須回資料庫查
+
+全 repo pass 用兩張記憶體 Map（`entityAt` / `revisionAt`）把「宣告座標 → entity /
+revision」帶到下一個 commit，但那兩張表**每次呼叫都重建**。續跑時 matcher 仍然
+接得到前像（它重新從 git 觀察父 commit，不受水位線影響），Map 卻是空的——
+於是「匹配到了但這一趟還沒見過它」被誤判成誕生。
+
+實測 create-t3-app 先索引到中繼點再續 100 個 commit：多出 **169 個 entity**
+（574 對 405）。`matches` 與 tier 分佈完全正常，所以除了 entity 數以外沒有任何
+指標看得出來。使用者看到的是水位線處一次假的「誕生」，外加一句
+「這個檔案的歷史上有 2 個不同的實體」——憑空報告一個不存在的斷層。
+而 `why` 本身就是增量的，所以這是預設路徑而不是邊緣情境。
+
+三件事缺一不可：
+
+1. **entity 與 revision 必須一起從資料庫解析。** 只補 entity 的話，`revisionAt`
+   的落空會走 `ensureRevision(前像)`，在父 commit 新建一筆全量跑從來沒寫過的
+   revision（實測多出 169 筆），而且 match 會掛到那筆假的前像上。
+2. **查的是「早於當前 commit 的最後一筆」，不是「剛好落在父 commit」。**
+   `revision` 只在檔案被觸及時才寫入，所以前像宣告最後一次被記錄的 commit
+   通常更早——用 `c.sha = 父 commit` 查的話，169 個一個都減不掉。
+3. **死亡分支也要同樣處理。** 它同樣讀那兩張 Map；落空時直接 `createEntity`
+   會把死亡記到一個當場生出來的 entity 上，而真正該死的那個仍標為存活
+   （實測 18 個，每個只有一筆為了記死亡而憑空補的 revision）。
+
+驗收條件是**逐個 `stable_key` 相同**，不是計數相同：`stable_key` 是對外身份
+（不變量 1），計數對而身份錯一樣是壞的。三個語料、五個切點實測完全一致。
+
 SQLite driver 使用 Node 內建 `node:sqlite`，所有呼叫集中在單一 persistence 模組。
 完整 schema 依賴 FTS5；啟動時必須先做 capability probe，缺少時明確失敗，不能等到
 建表中途或查詢時才暴露。

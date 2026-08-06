@@ -12,6 +12,7 @@ import {
   discontinuitySimilarity,
   ensureSlot,
   ensureRevision,
+  previousDeclarationRecord,
   hunksFor,
   inTransaction,
   matchPools,
@@ -296,7 +297,18 @@ export async function indexRepoStructure(
 
         // 匹配到就沿用前像的 entity——跨檔案搬移時 entity 會跟著程式碼走到新檔案，
         // 那正是 entity 血緣與 slot 的差別。沒匹配就是誕生，一律開新 entity。
-        const inherited = link ? entityAt.get(link.prevKey) : undefined;
+        //
+        // **記憶體 Map 落空時必須回資料庫查。** `entityAt` 每次呼叫都重建，所以
+        // 增量續跑的第一批 commit 一定 miss；只看 Map 的話會把「匹配到了但這一趟
+        // 還沒見過它」誤判成誕生，在水位線處切斷血緣（實測多出 169 個 entity）。
+        // 兩張 Map 在續跑時會同時落空，而它們指的是同一筆記錄，所以只查一次。
+        const resumed = link && before
+            && (!entityAt.has(link.prevKey) || !revisionAt.has(link.prevKey))
+          ? previousDeclarationRecord(db, repoId, link.prevLineage, before, commit.sha)
+          : undefined;
+        const inherited = link
+          ? entityAt.get(link.prevKey) ?? resumed?.entityId
+          : undefined;
         const entityId = inherited ?? createEntity(
           db,
           repoId,
@@ -313,6 +325,7 @@ export async function indexRepoStructure(
 
         if (before && link) {
           const prevRevision = revisionAt.get(link.prevKey)
+            ?? resumed?.revisionId
             ?? ensureRevision(db, repo, repoId, link.prevLineage, entityId, before);
           writeMatch(db, prevRevision, nextRevision, matchByNextKey.get(nextKey)!);
           report.matches++;
@@ -401,12 +414,21 @@ export async function indexRepoStructure(
         const prevKey = keyOf(lineageId, observed);
         if (matchedPrev.has(prevKey)) continue;
         // 被本次改動重新佔用的座標不算消亡（同一個 key 上換了新實體）。
-        const entityId = entityAt.get(prevKey);
+        //
+        // 這裡與存活分支一樣要處理續跑：`entityAt` 落空時若直接 createEntity，
+        // 死亡會被記到一個當場才生出來的 entity 上，而真正該死的那個仍標為存活。
+        // 實測 create-t3-app 有 18 個 entity 是這樣多出來的——每個都只有一筆
+        // revision，就是那筆為了記死亡而憑空補的。
+        const resumed = !entityAt.has(prevKey) || !revisionAt.has(prevKey)
+          ? previousDeclarationRecord(db, repoId, lineageId, observed, commit.sha)
+          : undefined;
+        const entityId = entityAt.get(prevKey) ?? resumed?.entityId;
         const resolved = entityId ?? createEntity(
           db, repoId, parent ?? commit.sha, observed.path,
           observed.symbol, String(observed.occurrence),
         );
         const prevRevision = revisionAt.get(prevKey)
+          ?? resumed?.revisionId
           ?? ensureRevision(db, repo, repoId, lineageId, resolved, observed);
         report.deaths++;
         writeChange(db, {

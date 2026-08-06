@@ -1,0 +1,79 @@
+fixture_version: 1
+
+repo:
+  name: create-t3-app
+  clone_url: https://github.com/t3-oss/create-t3-app.git
+  index_until: 4709861f7e67a15564c0460c13e7b4b6cfcae40d
+  language: typescript
+
+labeled_by: lcy
+labeled_at: 2026-08-05
+
+# 這份 fixture 專門守搬移守門——那道判準只有在真實語料上才有意義：
+# 它要分辨「內容搬到別的檔案」與「內容真的離開了 repo」，而受控 repo 造不出
+# 需要跨越多個子專案的搬移。三條案例一正一正一負，精確率與召回率都有守。
+
+cases:
+  # ── 正例：同一個 commit 刪掉的相同內容，兩者都必須被判為迂迴 ────────────
+  #
+  # 守門原本寫 `dc.topo_order >= ?`（死得不比我早），而同一個 commit 的
+  # topo_order 相等——於是這兩個 380-node 的 Home 互相抑制，兩個都不被回報。
+  # 但 git 證實兩個檔案在 index_until 都不存在：內容確實離開了 repo。
+  # 實測 77 個排除裡有 65 個（84%）是這種誤抑制。
+
+  - id: exc-t3-home-prisma-same-commit
+    kind: excursion
+    difficulty: hard
+    label_confidence: certain
+    entity: {path: template-prisma/src/pages/index.tsx, symbol: Home}
+    expect: present
+    introduce_at: 7f622c0ef368008e442e8b44a0d20c8bed1a3039
+    remove_at: e6fe4e6b913c5991e0145cc304aaeed3c547a53c
+    expect_strength_at_least: C
+    rationale: >
+      template-prisma 的首頁 Home（380 nodes）與 template-prisma-auth 的
+      同名同內容宣告在同一個 commit e6fe4e6b「general file-structure」被一起刪除。
+      git 已獨立驗證：兩個檔案在 index_until 4709861f 都不存在。
+
+      內容在誕生後改過，所以是 C／trajectory 而不是 A——這條案例同時守住
+      「不得因為同 commit 的雙胞胎而被抑制」與「強度不得被高估」。
+      配對的另一半是 exc-t3-home-prisma-auth-same-commit，那條是 A 級。
+
+  - id: exc-t3-home-prisma-auth-same-commit
+    kind: excursion
+    difficulty: hard
+    label_confidence: certain
+    entity: {path: template-prisma-auth/src/pages/index.tsx, symbol: Home}
+    expect: present
+    introduce_at: 4b434b9727a0279ed9bee7af9e5ab009e2ea0b11
+    remove_at: e6fe4e6b913c5991e0145cc304aaeed3c547a53c
+    expect_strength_at_least: A
+    rationale: >
+      與 exc-t3-home-prisma-same-commit 是互相抑制的那一對。這一個從引入到移除
+      內容逐字未變，所以是 A／inverse_diff——移除掉的正是當初加入的。
+
+      兩條的強度不同（A 與 C）本身就是證據：它們不是「同一個東西的兩份拷貝」，
+      而是兩個獨立演化過的宣告，只是最後一版內容相同。這也是為什麼呈現層
+      **不做**依（commit, 名稱）摺疊——那會宣稱它們是同一件事。
+
+  # ── 負例：內容搬到別的子專案，仍活著，不得判為迂迴 ──────────────────────
+
+  - id: exc-t3-neg-getfont-moved
+    kind: excursion
+    difficulty: adversarial
+    label_confidence: certain
+    entity: {path: upgrade/src/app/api/og/route.tsx, symbol: getFont}
+    expect: absent
+    introduce_at: e35cedfa3960c932a7f6b5c0d6c0899e7b8fb70a
+    remove_at: 519fac5a32b29704dc94ec1bd4bf938f722cd5c1
+    rationale: >
+      getFont（236 nodes）隨著 chore: nuke upgrade 一起從 upgrade/ 子專案消失，
+      但逐字相同的內容仍存在於 www/src/utils/ogFont.ts 且在 index_until 仍存活。
+      那是搬移不是放棄，**不得**被判為迂迴。
+
+      236 nodes 遠高於碰撞閘門，而且跨越 upgrade/ 與 www/ 兩個不同的子專案，
+      hash_raw 相同不可能是巧合。
+
+      這條案例守的是守門的存在本身：拿掉守門的話它會變成 present 而 fail。
+      同一次 commit 裡有 30 個宣告確實被判為迂迴（那是真的），
+      所以它守的不是「這個 commit 不該有迂迴」，而是「這一個宣告不該有」。

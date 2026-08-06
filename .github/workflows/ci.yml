@@ -64,6 +64,18 @@ jobs:
             --baseline fixtures/baselines/osiris.json \
             --report "$RUNNER_TEMP/golden-osiris.json"
 
+      # 搬移守門只有在真實語料上才守得住：它要分辨「內容搬到別的檔案」與
+      # 「內容真的離開了 repo」，而受控 repo 造不出跨越多個子專案的搬移。
+      # 代價是這一步要 clone 1,378 個 commit 並跑全 repo pass（約 15 秒）。
+      - name: 黃金測試集 — create-t3-app（搬移守門）
+        run: |
+          pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/create-t3-app" \
+            --fixture fixtures/create-t3-app.yaml --db "$RUNNER_TEMP/t3.db"
+          pnpm golden -- --fixture fixtures/create-t3-app.yaml \
+            --db "$RUNNER_TEMP/t3.db" \
+            --baseline fixtures/baselines/create-t3-app.json \
+            --report "$RUNNER_TEMP/golden-t3.json"
+
       - name: 黃金測試集 — 受控 fixture
         run: |
           pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/controlled-typescript" \

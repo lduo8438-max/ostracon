@@ -12,8 +12,9 @@ import { DatabaseSync } from "node:sqlite";
 import { parse as parseYaml } from "yaml";
 import { changeLevel } from "../ast/hash.ts";
 import { verifyParserAdapters } from "../ast/parser.ts";
-import { indexGit } from "../git/index.ts";
+import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { detectExcursions } from "../index/excursion.ts";
+import { indexRepoStructure } from "../index/repo-pass.ts";
 import { matchLadder, type Candidate } from "../match/ladder.ts";
 import { exactJaccard } from "../match/signature.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
@@ -190,24 +191,21 @@ export async function materializeGoldenCoordinates(
       await indexLineage(db, repo, gitReport.repoId, lineageId);
     }
 
-    // excursion 同樣走產品的偵測器，不在 golden 裡另寫一套只會通過 fixture 的捷徑。
-    // 錨點檔案的血緣先索引起來，`entity` 才有 birth/death 可判。
+    // excursion 走產品的偵測器，不在 golden 裡另寫一套只會通過 fixture 的捷徑。
+    //
+    // **必須是全 repo pass。** 搬移守門要回答「有沒有一份相同的內容活得比它久」，
+    // 而那個問題只在候選池涵蓋整個 repo 時才答得出來。先前這裡只索引錨點檔案的
+    // 血緣、以 `scope: "lineage"` 呼叫，守門在那裡是瞎的——`expect: absent` 的
+    // 負例（「這不是迂迴，因為內容搬到別的檔案了」）在那種 scope 下必然失敗，
+    // 因為偵測器根本看不到那個檔案。
+    //
+    // 代價是這類 fixture 要跑全 repo pass（Osiris 約 5 秒）。這是必要的：
+    // `assertExcursionScope` 已經編碼了同一條原則——守門看不到整個 repo 時，
+    // 迂迴的結論不可採信。
     const excursionCases = fixture.cases.filter((item) => item.kind === "excursion");
-    for (const c of excursionCases) {
-      if (!c.entity) continue;
-      // 移除點的血緣已經關閉，要用引入點去解析路徑。
-      const anchor = c.introduce_at ?? c.remove_at;
-      if (!anchor) continue;
-      const lineageId = lineageIdAt(db, anchor, c.entity.path);
-      if (lineageId === undefined) continue;
-      await indexLineage(db, repo, gitReport.repoId, lineageId);
-    }
-    // scope 是 `lineage`：materializer 只索引錨點檔案的血緣，所以搬移守門看不到
-    // 別的檔案。這對現有的 fixture 案例是安全的——`exc-balloons-get-git-revert`
-    // 靠死亡 commit 的 subject 判 A 級，不依賴守門——但**新增 fixture 前要先想過**
-    // 這一點，守門在這裡只會漏擋，不會誤擋。
     if (excursionCases.length > 0) {
-      detectExcursions(db, gitReport.repoId, { scope: "lineage" });
+      await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION);
+      detectExcursions(db, gitReport.repoId, { scope: "repo" });
     }
 
     for (const c of fixture.cases.filter((item) => item.kind === "lineage")) {

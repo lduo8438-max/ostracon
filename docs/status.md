@@ -850,6 +850,23 @@ change_level 20、lineage 11、discontinuity 1、excursion 1。
 先前的 29/31 基準線（`reports/osiris-prehunk.json`）逐案例仍全部一致，新增的
 兩條是 L3c 的正例與負例。
 
+**create-t3-app**：**3/3 覆蓋、3 pass / 0 fail**（2026-08-05）。專門守搬移守門——
+那道判準只有在真實語料上才有意義，受控 repo 造不出跨越多個子專案的搬移。
+
+| 案例 | 守什麼 |
+|---|---|
+| `exc-t3-home-prisma-same-commit`（C 級） | 同 commit 刪掉的雙胞胎不得互相抑制 |
+| `exc-t3-home-prisma-auth-same-commit`（A 級） | 同上，且強度不得被高估 |
+| `exc-t3-neg-getfont-moved`（`expect: absent`） | 守門的存在本身：真搬移不得被判為迂迴 |
+
+**三條各守各的，已分別驗證會咬**：判準改回 `>=` → 兩條正例 fail；
+完全拿掉守門 → 負例 fail。兩條正例的強度不同（A 與 C）本身就是證據——
+它們不是同一個東西的兩份拷貝。
+
+`golden:index` 對含 excursion 案例的 fixture 改跑**全 repo pass**（`scope: "repo"`）。
+先前只索引錨點血緣、以 `scope: "lineage"` 呼叫，守門在那裡是瞎的，
+`expect: absent` 的負例必然失敗。Osiris 逐案例零差異，materialize 由約 2 秒變 5 秒。
+
 **受控 fixture**：主要指標 **3/3 覆蓋、3 pass / 0 fail**（2026-08-05）。
 新增 `ctrl-non-ascii-path-move`：`src/legacy.ts` 原封不動改名成 `src/票券解析.ts`。
 

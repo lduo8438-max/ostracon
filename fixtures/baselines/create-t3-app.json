@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "id": "exc-t3-home-prisma-auth-same-commit",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "exc-t3-home-prisma-same-commit",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "exc-t3-neg-getfont-moved",
+      "difficulty": "adversarial",
+      "status": "pass"
+    }
+  ]
+}

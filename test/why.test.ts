@@ -512,3 +512,102 @@ describe("時間軸顯示已驗證的理由", () => {
     assert.doesNotMatch(text, /理由「because workers/, "linked 不得偽裝成作者自己的 stated 理由");
   });
 });
+
+/**
+ * 這一組守的是**接線**，不是純函式。
+ *
+ * `suppressUnrelatedRationale` 與同名存活查詢各自都有單元測試而且會咬，
+ * 但實測把它們從 `timelineOf` / `excursionOf` 拆掉之後，250 條測試**全部通過**——
+ * 純函式對不代表它真的被呼叫到。這兩條走完整的 `why`，斷言的是使用者實際看到的輸出。
+ */
+describe("why 的呈現接線（真實 git，完整路徑）", () => {
+  const makeRepo = () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "ostracon-wiring-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    const write = (rel: string, body: string) => {
+      mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+      writeFileSync(path.join(repo, rel), body);
+    };
+    const remove = (rel: string) => git("rm", "-q", path.join(repo, rel));
+    const commit = (msg: string) => {
+      git("add", "-A");
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, "--no-gpg-sign");
+      return git("rev-parse", "HEAD");
+    };
+    const dbPath = path.join(
+      mkdtempSync(path.join(tmpdir(), "ostracon-wiring-db-")),
+      "i.db",
+    );
+    return { repo, write, remove, commit, dbPath };
+  };
+
+  const fn = (name: string, body: string) => `export function ${name}(input: number): number {
+  const scaled = input * ${body};
+  const shifted = scaled + 1;
+  return shifted;
+}`;
+
+  it("**無變更的列不得顯示 commit 的理由，而且標頭要交代**", async () => {
+    // commit 的理由是關於整次改動的，時間軸卻是逐 entity 的。demo 語料實測
+    // 41.7% 的引文落在該實體毫無變動的列上——使用者沒有辦法察覺那條因果是假的。
+    const { repo, write, commit, dbPath } = makeRepo();
+    write("src/a.ts", `${fn("target", "2")}\n\n${fn("other", "3")}\n`);
+    commit("加入兩個函式");
+
+    // 只動 other，target 逐字未變 → target 在這個 commit 是 change_level='none'。
+    // commit message 帶因果標記，抽取器會產生一條 stated 理由。
+    write("src/a.ts", `${fn("target", "2")}\n\n${fn("other", "9")}\n`);
+    commit("adjust other because the old multiplier was wrong");
+
+    const text = await why(repo, "src/a.ts:target", dbPath, "HEAD");
+
+    assert.doesNotMatch(
+      text,
+      /理由「/,
+      "target 在那個 commit 沒有變更，不得掛上該 commit 的理由",
+    );
+    assert.match(
+      text,
+      /另有 1 次改動的 commit 帶著 1 段 commit message 理由/,
+      "抑制不得靜默——標頭要說出丟掉了什麼",
+    );
+    assert.match(text, /沒有修改到這個實體/);
+  });
+
+  it("**同名存活者的提示必須真的出現在輸出裡**", async () => {
+    // 內容守門比對的是雜湊，所以「名稱還在、實作被改寫」它抓不到。
+    // create-t3-app 實測 71 條 A 級裡有 11 條（15%）屬於這種，沉默會讓使用者
+    // 把「實作被換掉」讀成「概念被放棄」。
+    const { repo, write, remove, commit, dbPath } = makeRepo();
+    write("src/keep.ts", "export const keep = 1;\n");
+    write("src/old.ts", `${fn("handler", "2")}\n`);
+    // 同名但**內容不同**——內容相同的話會被搬移守門排除，就測不到這條路徑了。
+    write("src/new.ts", `export function handler(text: string): string {
+  const trimmed = text.trim();
+  const upper = trimmed.toUpperCase();
+  return \`[\${upper}]\`;
+}
+`);
+    commit("兩個同名不同實作的 handler");
+
+    remove("src/old.ts");
+    commit("移除舊的實作");
+
+    // 迂迴偵測只在全 repo pass 之後跑——守門在單一血緣下是瞎的。
+    const text = await why(repo, "src/old.ts:handler", dbPath, "HEAD", { full: true });
+
+    assert.match(text, /這個做法被推翻了/, "測試前提：這必須先是一條 A 級迂迴");
+    assert.match(
+      text,
+      /仍存在於 src\/new\.ts/,
+      "同名存活者必須被列出，否則「實作被換掉」會被讀成「概念被放棄」",
+    );
+    assert.match(
+      text,
+      /不必然是這個想法/,
+      "措辭必須保留不確定性——這是純名稱比對，不是語意判定",
+    );
+  });
+});

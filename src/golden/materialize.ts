@@ -188,7 +188,7 @@ export async function materializeGoldenCoordinates(
       if (!c.at_commit || !c.slot) continue;
       const lineageId = lineageIdAt(db, c.at_commit, c.slot.path);
       if (lineageId === undefined) continue;
-      await indexLineage(db, repo, gitReport.repoId, lineageId);
+      await indexLineage(db, repo, gitReport.repoId, lineageId, INDEXER_VERSION);
     }
 
     // excursion 走產品的偵測器，不在 golden 裡另寫一套只會通過 fixture 的捷徑。

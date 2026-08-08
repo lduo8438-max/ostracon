@@ -146,6 +146,52 @@ revision」帶到下一個 commit，但那兩張表**每次呼叫都重建**。�
 驗收條件是**逐個 `stable_key` 相同**，不是計數相同：`stable_key` 是對外身份
 （不變量 1），計數對而身份錯一樣是壞的。三個語料、五個切點實測完全一致。
 
+### 兩個結構層 pass 的候選池不同，產出不可混在同一個資料庫
+
+`indexLineage` 的候選池是一條路徑血緣，`indexRepoStructure` 的是整個 commit。
+**同一個 entity 因此會拿到不同的 `stable_key`**：Osiris 的 `isRateLimited` 在
+repo scope 下誕生於 `src/app/api/scanner/route.ts`（6 次改動），在 lineage scope
+下誕生於它被抽取進 `src/lib/ssrf-guard.ts` 的那一刻（1 次改動）。兩個答案各自
+對它看得到的範圍都是誠實的，但它們不是同一份產出（不變量 7）。
+
+混在同一個資料庫的後果是 `--full` **靜默無效**。`ensureRevision` 對
+`(commit_id, slot_id)` 已存在的列直接回傳既有 id，從不檢查 `entity_id` 是否與
+本次計算一致；於是全 repo pass 重算了整趟、L5 也確實配對到了跨檔案前像，
+**算出來的答案卻被整個丟掉**。`--db` 預設是 `.ostracon/index.db`，所以
+「先 `why` 再 `why --full`」這個最自然的序列不需要任何旗標就會踩到，
+而使用者看到的是加了旗標卻毫無變化。
+
+方向是不對稱的，兩邊都實測過：
+
+| 順序 | 結果 |
+|---|---|
+| repo → lineage | 正確。既有列全部命中，快路徑一列都插不進去 |
+| lineage → repo | 全 repo 的跨檔案血緣全數丟失 |
+
+`excursion` pass 早就把 scope 編進版本字串了；宣告層沒有。**規則寫在衍生層上，
+卻沒套用到它所依賴的那一層**——這是這個 bug 的根因，不是 `ensureRevision`。
+
+修法：`pass_state.indexer_version` 帶上 `+scope:repo|lineage`。
+
+- lineage pass **只在真的插入了 revision 時**才標記 scope。已跑過全 repo pass
+  的資料庫上它一列都插不進去，標記維持 `repo`，不會逼出無謂的重建。
+- repo pass 看到 lineage 標記就作廢重建（`mode: "rebuilt"`），並由 CLI 說出來。
+  使用者打 `--full` 表達的就是這個意圖，而全 repo pass 實測 1,378 commit 只要
+  8.88 秒。反方向不作廢。
+- 版本字串在 scope 以外還不同，代表演算法變了，照舊拋錯——那種情況系統無權
+  替使用者決定要不要丟掉舊索引。
+- lineage scope 的 `last_commit_id` 記 `NULL`。它做完的是「這幾條血緣」而不是
+  「到某個 commit 為止的全部」，寫一個 topo 進去會是謊話，而下一趟續跑會信它。
+
+作廢走 `ON DELETE CASCADE`，所以**外鍵必須是開的**（不變量 13）。`node:sqlite`
+目前預設就開著，這道斷言是深度防禦而非承重牆；留著它是因為驅動改預設的失敗
+方式是靜默的半刪除，而半修好的資料庫比兩個極端都糟。證據層刻意不刪——它
+衍生自 commit message，與結構層的候選池無關。
+
+`src/golden/materialize.ts` 自己就在跑這個壞掉的順序（discontinuity 案例走
+`indexLineage`、excursion 案例走 `indexRepoStructure`，同一個資料庫）。修正後
+Osiris 的 golden 實際會觸發一次重建，33/33 不變。
+
 SQLite driver 使用 Node 內建 `node:sqlite`，所有呼叫集中在單一 persistence 模組。
 完整 schema 依賴 FTS5；啟動時必須先做 capability probe，缺少時明確失敗，不能等到
 建表中途或查詢時才暴露。

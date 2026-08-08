@@ -53,7 +53,10 @@ const HELPER = `export function normalizeRegion(input: string): string {
 
 describe("全 repo 結構 pass", () => {
   it("斷層規則版本會進 declarations 水位線", () => {
-    assert.match(declarationIndexerVersion("walk-v1"), /discontinuity-1\.0\.0\+jaccard0\.25/);
+    assert.match(
+      declarationIndexerVersion("walk-v1", "repo"),
+      /discontinuity-1\.0\.0\+jaccard0\.25/,
+    );
   });
 
   it("路徑刪除後重現會在新 slot 記下斷層", async () => {

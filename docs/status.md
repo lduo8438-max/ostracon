@@ -757,6 +757,48 @@ linked 基準不受影響，但要繼續做結構層的話得重建一次。
 本次工作未修改 `src/`、`test/`、`fixtures/` 或 `db/schema.sql`。眼檢當下（excursion
 偵測器尚未實作）Osiris golden 為 **32 pass / 0 fail / 1 missing（32/33）**。
 
+### `--full` 在用過的資料庫上靜默無效（2026-08-08 已修）
+
+從「同一個問題，兩種執行方式給不給同一個答案」這條線掃出來的第四個缺陷，
+也是目前最嚴重的一個：**踩到它不需要任何旗標**。
+
+`--db` 預設是 `.ostracon/index.db`（`why.ts:626`），所以最自然的序列就是壞的那種：
+
+```
+$ ostracon why src/lib/ssrf-guard.ts:isRateLimited          # 只有 1 次改動，可疑
+$ ostracon why src/lib/ssrf-guard.ts:isRateLimited --full   # 加旗標重問
+  → 完全相同的錯誤答案，沒有任何提示
+$ ostracon why ... --full   # 換一個乾淨的 db
+  → 6 次改動，誕生於 src/app/api/scanner/route.ts
+```
+
+使用者加 `--full` 正是因為文件說「跨檔案搬移才看得見」。系統跑完整趟全 repo
+pass（entity 9→308）、L5 也確實配對到了，然後把答案丟掉。
+
+根因不是 `ensureRevision`（它對既有的 `(commit_id, slot_id)` 直接回傳既有 id，
+從不檢查 `entity_id`），而是**快路徑跑完不留任何痕跡**——`lineage-pass.ts`
+完全沒碰 `pass_state`，沒有任何欄位記得結構層是用哪一種候選池建的。
+`excursion` pass 早就把 scope 編進版本字串了；規則寫在衍生層上，卻沒套用到
+它所依賴的那一層。設計與方向的不對稱見 `architecture.md`。
+
+**影響範圍**（血緣跨越一條以上 lineage 的 entity ＝ 快路徑必定看不全的那些）：
+
+| 語料 | entity | 跨檔案 | 受影響的檔案 |
+|---|---:|---:|---:|
+| Osiris | 307 | 1（0.3%） | 2 / 71（2.8%） |
+| create-t3-app | 405 | 29（7.2%） | 76 / 297（**25.6%**） |
+
+create-t3-app 每四個檔案就有一個，裡面至少有一個構造的血緣是快路徑看不全的。
+
+`src/golden/materialize.ts` 自己就在跑那個順序（discontinuity 案例走
+`indexLineage`、excursion 案例走 `indexRepoStructure`，同一個資料庫）。修正後
+Osiris golden 實測會觸發一次 `mode = "rebuilt"`，**33/33 不變**；
+create-t3-app 3/3、controlled 3/3 也不變。測試 254 → 258。
+
+順帶量到的一件事：`node:sqlite` 的 `PRAGMA foreign_keys` **預設是 1**
+（SQLite 的 C 預設是 0）。不變量 13 的「每連線都要設一次」仍然該遵守，
+但要知道它目前是深度防禦而不是承重牆。
+
 ### SQLite 使用範圍
 
 正式走訪層的 persistence 呼叫集中在 `src/git/persist.ts`；但 golden 的

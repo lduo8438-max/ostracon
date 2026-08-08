@@ -37,10 +37,34 @@ import {
  * 走訪可以跑完整個 repo，宣告解析可以落後，兩者獨立恢復。
  */
 
-const PASS_NAME = "declarations";
+export const DECLARATIONS_PASS_NAME = "declarations";
+
+/**
+ * 結構層是由哪一種候選池寫出來的。
+ *
+ * - `repo`：`indexRepoStructure`，候選池涵蓋整個 commit 的所有檔案。
+ * - `lineage`：`indexLineage`，候選池只有一條路徑血緣，**跨檔案搬移在定義上看不見**。
+ *
+ * 兩者對同一個 entity 會給出不同的 `stable_key`：Osiris 的 `isRateLimited`
+ * 在 repo scope 下誕生於 `src/app/api/scanner/route.ts`（6 次改動），在 lineage
+ * scope 下誕生於它被搬進 `src/lib/ssrf-guard.ts` 的那一刻（1 次改動）。兩個答案
+ * 各自對它看得到的範圍是誠實的，但**不是同一份產出，不得混在同一個資料庫裡**
+ * （不變量 7）。
+ *
+ * `excursion` pass 早就把 scope 編進版本字串了；宣告層沒有，於是實測出這個 bug：
+ * 先跑 `why`（lineage）再跑 `why --full`（repo），全 repo pass 會重算整趟、L5 也
+ * 確實配對到了，但每一次寫入都撞上 lineage pass 留下的 `revision` 列而直接回傳
+ * 既有 id，**算對的答案被整個丟掉**。使用者看到的是 `--full` 靜默無效。
+ * 規則本來就寫在衍生層上，只是沒套用到它所依賴的那一層。
+ */
+export type DeclarationScope = "repo" | "lineage";
 
 export interface RepoPassReport {
-  mode: "full" | "incremental";
+  /**
+   * `rebuilt`：資料庫原本是 lineage scope 的產出，本趟已作廢重建。
+   * 與 `full` 分開是因為前者**刪掉了使用者既有的索引**——那件事必須說出來。
+   */
+  mode: "full" | "incremental" | "rebuilt";
   commitsScanned: number;
   commitsWithDeclarations: number;
   mergesSkipped: number;
@@ -104,27 +128,139 @@ const keyOf = (lineageId: number, o: ObservedDeclaration) =>
  * 資料庫裡會靜默混進兩族互不可比的簽章。註解裡寫「換了就要重算」但系統不強制，
  * 那不是規則，是願望。
  */
-export const declarationIndexerVersion = (structuralVersion: string): string =>
-  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}`;
+export const declarationIndexerVersion = (
+  structuralVersion: string,
+  scope: DeclarationScope,
+): string =>
+  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}+scope:${scope}`;
 
-function watermarkTopo(
+/**
+ * 作廢整個 repo 的結構層產出。
+ *
+ * 走 `ON DELETE CASCADE`：`slot` / `entity` 刪掉，`revision`、`revision_match`、
+ * `revision_change`、`slot_discontinuity`、`construct`、`excursion` 一併消失。
+ * **所以外鍵必須是開的**——不變量 13 說 `PRAGMA foreign_keys` 是每連線設定，
+ * 關著的話這裡只會刪掉一半，留下一個比重建前更難察覺的殘骸。半修好的資料庫
+ * 比兩個極端都糟，所以這裡斷言而不是預設。
+ *
+ * 證據層（`source_doc` / `evidence`）刻意不動：它衍生自 commit message，
+ * 與結構層的候選池無關，重建結構不該把它一起丟掉。
+ */
+function discardDeclarations(db: DatabaseSync, repoId: number): void {
+  const pragma = db.prepare("PRAGMA foreign_keys").get() as
+    { foreign_keys: number } | undefined;
+  if (!pragma?.foreign_keys) {
+    throw new Error(
+      "作廢結構層需要 PRAGMA foreign_keys = ON，否則級聯刪除只會刪掉一半。"
+      + "每一條連線都要自己設定一次（不變量 13）。",
+    );
+  }
+  inTransaction(db, () => {
+    // excursion 的 entity_id 可為 NULL（construct 型），級聯不保證涵蓋，明刪。
+    db.prepare("DELETE FROM excursion WHERE repo_id = ?").run(repoId);
+    db.prepare("DELETE FROM revision WHERE repo_id = ?").run(repoId);
+    db.prepare("DELETE FROM slot WHERE repo_id = ?").run(repoId);
+    db.prepare("DELETE FROM entity WHERE repo_id = ?").run(repoId);
+    // 迂迴是結構層的衍生產出，水位線一併歸零，否則它會以為自己還是最新的。
+    db.prepare(
+      "DELETE FROM pass_state WHERE repo_id = ? AND pass_name IN (?, ?)",
+    ).run(repoId, DECLARATIONS_PASS_NAME, "excursion");
+  });
+}
+
+interface DeclarationState {
+  topoOrder: number | undefined;
+  version: string;
+}
+
+function declarationState(
   db: DatabaseSync,
   repoId: number,
-  expectedVersion: string,
-): number | undefined {
+): DeclarationState | undefined {
+  // LEFT JOIN，不是 JOIN：lineage pass 記的是 scope 而非 commit 覆蓋率，
+  // last_commit_id 是 NULL。用 INNER JOIN 的話那一列會被靜默濾掉，
+  // 版本檢查就永遠看不到它——正是這次要修的那種「有算但丟掉」。
   const row = db.prepare(
     `SELECT c.topo_order AS topoOrder, p.indexer_version AS version
        FROM pass_state p
-       JOIN git_commit c ON c.id = p.last_commit_id
+       LEFT JOIN git_commit c ON c.id = p.last_commit_id
       WHERE p.repo_id = ? AND p.pass_name = ?`,
-  ).get(repoId, PASS_NAME) as { topoOrder: number; version: string } | undefined;
-  if (row && row.version !== expectedVersion) {
-    throw new Error(
-      `資料庫的 declarations indexer_version 是 ${row.version}，`
-      + `目前版本是 ${expectedVersion}。請重建 declarations pass。`,
-    );
+  ).get(repoId, DECLARATIONS_PASS_NAME) as
+    { topoOrder: number | null; version: string } | undefined;
+  return row === undefined
+    ? undefined
+    : { topoOrder: row.topoOrder ?? undefined, version: row.version };
+}
+
+/**
+ * 決定這一趟該續跑、該重建、還是該拒絕。
+ *
+ * 只有一種 scope 不合是可以自動處理的：`lineage` → `repo`。使用者打 `--full`
+ * 表達的就是「我要看得到整個 repo」，系統有權替他丟掉一份範圍更小的產出，
+ * 而且全 repo pass 實測 1,378 commit 只要 8.88 秒。反方向不作廢——repo scope
+ * 的產出對 lineage 的問題已經是正確且更完整的答案。
+ *
+ * 版本字串在 scope 以外還不同，代表演算法變了。那種情況系統無權替使用者決定
+ * 要不要丟掉舊索引，照舊拋錯。
+ */
+function resolveResumePoint(
+  db: DatabaseSync,
+  repoId: number,
+  structuralVersion: string,
+): { after: number | undefined; mode: RepoPassReport["mode"] } {
+  const state = declarationState(db, repoId);
+  if (state === undefined) return { after: undefined, mode: "full" };
+
+  const expected = declarationIndexerVersion(structuralVersion, "repo");
+  if (state.version === expected) {
+    return {
+      after: state.topoOrder,
+      mode: state.topoOrder === undefined ? "full" : "incremental",
+    };
   }
-  return row?.topoOrder;
+  if (state.version === declarationIndexerVersion(structuralVersion, "lineage")) {
+    discardDeclarations(db, repoId);
+    return { after: undefined, mode: "rebuilt" };
+  }
+  // 版本字串不符只有兩種可能：scope 不同（上面已自動處理），或演算法變了。
+  // 後者代表既有的每一列都是用另一套規則算的，系統無權替使用者決定要不要
+  // 丟掉。訊息必須說出「怎麼辦」——只說「請重建」的話，讀的人得先讀原始碼
+  // 才知道重建的動作就是刪掉檔案。
+  throw new Error(
+    `資料庫的 declarations indexer_version 是 ${state.version}，`
+    + `目前版本是 ${expected}。\n`
+    + "演算法改變後既有的索引不可續跑（不變量 7）。"
+    + "請刪除 --db 指向的檔案後重跑，索引會自動重建。",
+  );
+}
+
+/**
+ * 記下結構層是由哪一種 scope 寫出來的。
+ *
+ * `lineage` scope 傳 `lastCommitId: null`：它做完的是「這幾條血緣」而不是
+ * 「到某個 commit 為止的全部」，寫一個 topo 進去會是謊話，而下一趟續跑會信它。
+ */
+export function recordDeclarationScope(
+  db: DatabaseSync,
+  repoId: number,
+  structuralVersion: string,
+  scope: DeclarationScope,
+  lastCommitId: number | null,
+): void {
+  db.prepare(
+    `INSERT INTO pass_state (repo_id, pass_name, last_commit_id, indexer_version, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (repo_id, pass_name) DO UPDATE SET
+       last_commit_id = excluded.last_commit_id,
+       indexer_version = excluded.indexer_version,
+       updated_at = excluded.updated_at`,
+  ).run(
+    repoId,
+    DECLARATIONS_PASS_NAME,
+    lastCommitId,
+    declarationIndexerVersion(structuralVersion, scope),
+    new Date().toISOString(),
+  );
 }
 
 export async function indexRepoStructure(
@@ -135,10 +271,9 @@ export async function indexRepoStructure(
 ): Promise<RepoPassReport> {
   const t0 = Date.now();
   const { observe, prefetch } = createObserver(repo);
-  const declarationVersion = declarationIndexerVersion(indexerVersion);
-  const after = watermarkTopo(db, repoId, declarationVersion);
+  const { after, mode } = resolveResumePoint(db, repoId, indexerVersion);
   const report: RepoPassReport = {
-    mode: after === undefined ? "full" : "incremental",
+    mode,
     commitsScanned: 0,
     commitsWithDeclarations: 0,
     mergesSkipped: 0,
@@ -453,14 +588,11 @@ export async function indexRepoStructure(
   // 誤記成「已經處理到這裡」。
   const last = commits[commits.length - 1];
   if (last) {
-    db.prepare(
-      `INSERT INTO pass_state (repo_id, pass_name, last_commit_id, indexer_version, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (repo_id, pass_name) DO UPDATE SET
-         last_commit_id = excluded.last_commit_id,
-         indexer_version = excluded.indexer_version,
-         updated_at = excluded.updated_at`,
-    ).run(repoId, PASS_NAME, last.id, declarationVersion, new Date().toISOString());
+    recordDeclarationScope(db, repoId, indexerVersion, "repo", last.id);
+  } else if (report.mode === "rebuilt") {
+    // 剛作廢完卻一個 commit 都沒有：水位線也被刪了，不補一列的話資料庫會停在
+    // 「沒跑過宣告層」的狀態，下一趟又會判成 full。空 repo 才會走到這裡。
+    recordDeclarationScope(db, repoId, indexerVersion, "repo", null);
   }
 
   report.elapsedMs = Date.now() - t0;

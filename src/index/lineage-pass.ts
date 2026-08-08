@@ -20,6 +20,7 @@ import {
   writeDiscontinuity,
   writeMatch,
 } from "./structural.ts";
+import { recordDeclarationScope } from "./repo-pass.ts";
 
 /**
  * 對**單一路徑血緣**跑完整的結構層索引：解析、匹配、寫 slot / entity /
@@ -79,13 +80,22 @@ function firstParent(db: DatabaseSync, sha: string): string | undefined {
 /** 版本內部的宣告座標。相同原始碼必定產生相同編號，所以跨版本重解析仍對得上。 */
 const keyOf = (o: ObservedDeclaration) => `${o.symbol}\0${o.occurrence}`;
 
+/** 這個 repo 目前有幾列 revision。用來判斷這一趟到底有沒有真的寫東西。 */
+function revisionCount(db: DatabaseSync, repoId: number): number {
+  return (db.prepare(
+    "SELECT COUNT(*) AS n FROM revision WHERE repo_id = ?",
+  ).get(repoId) as { n: number }).n;
+}
+
 export async function indexLineage(
   db: DatabaseSync,
   repo: string,
   repoId: number,
   lineageId: number,
+  indexerVersion: string,
 ): Promise<LineagePassReport> {
   const { observe, prefetch } = createObserver(repo);
+  const before = revisionCount(db, repoId);
   const report: LineagePassReport = {
     commitsProcessed: 0,
     revisions: 0,
@@ -120,7 +130,7 @@ export async function indexLineage(
       if (!indexed) {
         // why 的快速路徑平常只索引目前血緣。路徑重現若不先補舊血緣，
         // `prev_entity` 就只能捏造；遞迴只沿著更早的 D→A，拓撲序嚴格遞減。
-        await indexLineage(db, repo, repoId, predecessor.lineageId);
+        await indexLineage(db, repo, repoId, predecessor.lineageId, indexerVersion);
       }
     }
     // 改名時父版本的路徑不同；血緣追的是檔案，不是路徑字串。
@@ -318,6 +328,20 @@ export async function indexLineage(
 
     entityAt = nextEntities;
     revisionAt = nextRevisions;
+  }
+
+  // 只有真的寫進了 revision 才把資料庫標成 lineage scope。
+  //
+  // 兩個方向都要對：
+  // - 空資料庫 → 這裡有寫 → 標 lineage → 之後的 `--full` 會作廢重建。
+  // - 已跑過全 repo pass → 這裡一列都插不進去（既有列全部命中）→ 不動標記，
+  //   之後的 `--full` 仍是增量。repo scope 的產出對這個問題已經更完整，
+  //   降級標記只會逼出一次無謂的重建。
+  //
+  // 全 repo pass 之後又出現新 commit、而使用者先跑了快路徑的情況，這裡會插入
+  // 水位線之後的列，標記因此降級——那是對的，因為那些列正是用小候選池算的。
+  if (revisionCount(db, repoId) > before) {
+    recordDeclarationScope(db, repoId, indexerVersion, "lineage", null);
   }
 
   return report;

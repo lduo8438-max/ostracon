@@ -530,8 +530,13 @@ export async function why(
       );
     }
 
+    let rebuilt = false;
     if (options.full) {
-      await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION);
+      // 這個資料庫如果是快路徑建的，全 repo pass 會先把結構層作廢重建——否則
+      // 它算出來的跨檔案配對會撞上既有的 revision 列而被丟掉，`--full` 就成了
+      // 靜默無效（實測：Osiris 的 isRateLimited 仍只顯示搬移後的 1 次改動）。
+      rebuilt = (await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION))
+        .mode === "rebuilt";
       // 迂迴偵測**只在全 repo 索引之後跑**。搬移守門的判準是「這段內容是不是還
       // 存在於別的 entity 上」，候選池只有一條血緣時它看不到別的檔案，會把搬移
       // 通通判成迂迴——create-t3-app 實測那是 41% 的候選。
@@ -540,7 +545,7 @@ export async function why(
     } else {
       // 路徑重建過的話每一條血緣都要索引，否則較早那一段會查不到 revision。
       for (const id of lineageIds) {
-        await indexLineage(db, repo, gitReport.repoId, id);
+        await indexLineage(db, repo, gitReport.repoId, id, INDEXER_VERSION);
       }
     }
 
@@ -591,6 +596,14 @@ export async function why(
       );
     });
     const notes: string[] = [];
+    if (rebuilt) {
+      // 丟掉使用者既有的索引是一件必須說出來的事，即使那份索引本來就答不出
+      // 他現在問的問題。沉默會讓「為什麼這次跑比較久」變成一個謎。
+      notes.push(
+        "注意：這個資料庫先前是用單一血緣的候選池建的，看不見跨檔案搬移。"
+          + "已作廢重建為全 repo 範圍。",
+      );
+    }
     if (current === undefined) {
       // 使用者問的是一個在終點已經不存在的路徑。不說的話，時間軸看起來會像
       // 「這個檔案還在，只是最近沒動過」——那是完全相反的意思。

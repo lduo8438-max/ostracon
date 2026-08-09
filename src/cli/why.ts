@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
-import { indexRepoStructure } from "../index/repo-pass.ts";
+import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import {
   detectExcursions,
   type ExcursionMethod,
@@ -599,10 +599,7 @@ export async function why(
     if (rebuilt) {
       // 丟掉使用者既有的索引是一件必須說出來的事，即使那份索引本來就答不出
       // 他現在問的問題。沉默會讓「為什麼這次跑比較久」變成一個謎。
-      notes.push(
-        "注意：這個資料庫先前是用單一血緣的候選池建的，看不見跨檔案搬移。"
-          + "已作廢重建為全 repo 範圍。",
-      );
+      notes.push(REBUILD_NOTICE);
     }
     if (current === undefined) {
       // 使用者問的是一個在終點已經不存在的路徑。不說的話，時間軸看起來會像

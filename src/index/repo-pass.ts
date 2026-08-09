@@ -59,10 +59,22 @@ export const DECLARATIONS_PASS_NAME = "declarations";
  */
 export type DeclarationScope = "repo" | "lineage";
 
+/**
+ * `mode === "rebuilt"` 時每一支 CLI 都要印的那句話。
+ *
+ * **共用一個常數而不是各寫一份。** 這個專案已經被「抑制與交代抑制分散在兩個
+ * 地方」咬過一次（`why` 的 stated 引文被靜默丟掉），兩份平行的文字一定會分岔。
+ * 丟掉使用者既有的索引是同一件事實，不論是哪一支指令觸發的。
+ */
+export const REBUILD_NOTICE =
+  "注意：這個資料庫先前是用單一血緣的候選池建的，看不見跨檔案搬移。"
+  + "已作廢重建為全 repo 範圍。";
+
 export interface RepoPassReport {
   /**
    * `rebuilt`：資料庫原本是 lineage scope 的產出，本趟已作廢重建。
-   * 與 `full` 分開是因為前者**刪掉了使用者既有的索引**——那件事必須說出來。
+   * 與 `full` 分開是因為前者**刪掉了使用者既有的索引**——那件事必須說出來
+   * （`REBUILD_NOTICE`）。
    */
   mode: "full" | "incremental" | "rebuilt";
   commitsScanned: number;

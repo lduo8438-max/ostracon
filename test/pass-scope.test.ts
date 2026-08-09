@@ -14,6 +14,8 @@ import {
   indexRepoStructure,
 } from "../src/index/repo-pass.ts";
 import { lineageIdAt } from "../src/index/structural.ts";
+import { why } from "../src/cli/why.ts";
+import { ostracised } from "../src/cli/ostracised.ts";
 
 /**
  * 兩個結構層 pass 的候選池不同（`indexLineage` 只看一條血緣，`indexRepoStructure`
@@ -165,6 +167,37 @@ describe("結構層的 scope", () => {
     assert.equal(row.lastCommitId, null);
     assert.equal(row.version, declarationIndexerVersion(INDEXER_VERSION, "lineage"));
     db.close();
+  });
+
+  // 作廢重建刪掉的是使用者既有的索引。這件事在兩支指令裡都必須說出來，而
+  // 「呼叫存在」與「話真的印出來」是兩件事——這個專案已經被「拿掉呼叫、
+  // 全部測試照過」咬過兩次，所以走完整路徑斷言輸出，不斷言中間狀態。
+  it("**why --full 的重建必須真的出現在輸出裡，而且答案要換成對的**", async () => {
+    await verifyParserAdapters();
+    const { repo, git } = makeMoveRepo();
+    const head = git("rev-parse", "HEAD");
+    const dbPath = freshDb();
+
+    const fast = await why(repo, "src/guard.ts:isRateLimited", dbPath, head);
+    assert.doesNotMatch(fast, /作廢重建/);
+    // 快路徑看不到 route.ts，所以誕生記在搬移那一刻。
+    assert.doesNotMatch(fast, /route\.ts/);
+
+    const full = await why(repo, "src/guard.ts:isRateLimited", dbPath, head, { full: true });
+    assert.match(full, /作廢重建/);
+    assert.match(full, /route\.ts/, "重建之後必須追得回真正的誕生");
+  });
+
+  it("**ostracised 的重建也必須說出來**", async () => {
+    await verifyParserAdapters();
+    const { repo, git } = makeMoveRepo();
+    const head = git("rev-parse", "HEAD");
+    const dbPath = freshDb();
+
+    await why(repo, "src/guard.ts:isRateLimited", dbPath, head);
+    // 搬移守門在單一血緣下是瞎的，所以這支指令沒重建的話名單本身是錯的，
+    // 不只是比較短——沉默的代價比 why 更高。
+    assert.match(await ostracised(repo, dbPath, head), /作廢重建/);
   });
 
   it("外鍵關著時拒絕作廢，不留半個殘骸", async () => {

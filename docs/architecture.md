@@ -178,6 +178,10 @@ repo scope 下誕生於 `src/app/api/scanner/route.ts`（6 次改動），在 li
 - repo pass 看到 lineage 標記就作廢重建（`mode: "rebuilt"`），並由 CLI 說出來。
   使用者打 `--full` 表達的就是這個意圖，而全 repo pass 實測 1,378 commit 只要
   8.88 秒。反方向不作廢。
+  提示文字是**共用常數 `REBUILD_NOTICE`**，`why` 與 `ostracised` 都用它：
+  兩份平行的文字一定會分岔，而這個專案已經被「抑制與交代抑制分散在兩個地方」
+  咬過一次。對 `ostracised` 而言沉默的代價更高——搬移守門在單一血緣下是瞎的，
+  沒重建的話名單**本身是錯的**（實測 41% 的候選只是被搬走），不只是比較短。
 - 版本字串在 scope 以外還不同，代表演算法變了，照舊拋錯——那種情況系統無權
   替使用者決定要不要丟掉舊索引。
 - lineage scope 的 `last_commit_id` 記 `NULL`。它做完的是「這幾條血緣」而不是

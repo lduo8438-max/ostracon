@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
-import { indexRepoStructure } from "../index/repo-pass.ts";
+import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import {
   assertExcursionScope,
   detectExcursions,
@@ -163,12 +163,16 @@ export async function ostracised(
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA foreign_keys = ON");
   try {
-    await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION);
+    // 這個資料庫如果是 `why` 的快路徑建的，全 repo pass 會先作廢重建。對這支
+    // 指令而言那不只是「看得更完整」——搬移守門在單一血緣下是瞎的，沒重建的話
+    // 名單裡會混進大量其實只是被搬走的東西（實測 41% 的候選）。
+    const pass = await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION);
     detectExcursions(db, gitReport.repoId, { scope: "repo" });
     // 索引就在上面兩行，理論上一定成立；斷言的意義是「將來有人改成可跳過索引時
     // 會在這裡爆炸」，而不是預期它現在會失敗。
     assertExcursionScope(db, gitReport.repoId);
-    return renderOstracised(listOstracised(db, gitReport.repoId, filter), filter);
+    const list = renderOstracised(listOstracised(db, gitReport.repoId, filter), filter);
+    return pass.mode === "rebuilt" ? `${REBUILD_NOTICE}\n\n${list}` : list;
   } finally {
     db.close();
   }

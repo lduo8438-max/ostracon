@@ -164,6 +164,9 @@ pnpm evidence:linked -- --db <db> [--record-dir fixtures/http | --replay-dir fix
 # 審計完整歷史中 matcher 實際產生的非 L1 配對（人工裁決負例）
 pnpm golden:audit -- --repo <repo-path> --until <sha> --output reports/audit.json
 
+# 把可疑無資訊量的引文分組列出供人工裁決（列完整聯集，不抽樣）
+pnpm quotes:audit -- --db <db> --output reports/quote-audit.md --json reports/quote-audit.json
+
 # 建立只改宣告自身名稱的可重現 L3b fixture repo
 pnpm fixtures:controlled -- <output-directory>
 

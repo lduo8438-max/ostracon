@@ -18,6 +18,7 @@
     "test": "tsc --noEmit && node --experimental-strip-types --test test/index.test.ts",
     "golden:index": "node --experimental-strip-types src/golden/materialize.ts",
     "golden:audit": "node --experimental-strip-types src/golden/audit-matches.ts",
+    "quotes:audit": "node --experimental-strip-types src/golden/audit-quotes.ts",
     "golden": "node --experimental-strip-types src/golden/cli.ts",
     "why:cli": "node --experimental-strip-types src/cli/why.ts",
     "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",

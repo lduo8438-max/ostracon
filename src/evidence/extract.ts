@@ -66,9 +66,13 @@ const CAUSAL_MARKERS = [
  * 這不是品質門檻，是**配錯詞義**：`since August.` 從來就不是一條理由，
  * 不是一條寫得太短的理由。實測 demo 語料 86 條 `since` 裡有 5 條是時間義，
  * 5 條全部沒有理由內容，而收緊長度要連帶殺掉另外 55 條有內容的短引文。
+ *
+ * 數字只認四位數年份與帶 `v`／`version` 的版本號。裸數字太寬——
+ * `since 3 people complained` 是真的理由，把它當成時間義丟掉就是這個修正
+ * 本身要消滅的那種靜默錯誤。
  */
 const TEMPORAL_SINCE =
-  /^(?:\d|v\d|version\b|then\b|last\b|early\b|late\b|yesterday\b|today\b|launch\b|the\s+(?:last|beginning|start)\b|jan(?:uary)?\b|feb(?:ruary)?\b|mar(?:ch)?\b|apr(?:il)?\b|may\b|jun(?:e)?\b|jul(?:y)?\b|aug(?:ust)?\b|sep(?:t|tember)?\b|oct(?:ober)?\b|nov(?:ember)?\b|dec(?:ember)?\b)/i;
+  /^(?:\d{4}\b|v\d|version\b|then\b|last\b|early\b|late\b|yesterday\b|today\b|launch\b|the\s+(?:last|beginning|start)\b|jan(?:uary)?\b|feb(?:ruary)?\b|mar(?:ch)?\b|apr(?:il)?\b|may\b|jun(?:e)?\b|jul(?:y)?\b|aug(?:ust)?\b|sep(?:t|tember)?\b|oct(?:ober)?\b|nov(?:ember)?\b|dec(?:ember)?\b)/i;
 
 /**
  * `so that` 後面接繫詞時是「所以，那個是……」，不是表目的的 `so that`。

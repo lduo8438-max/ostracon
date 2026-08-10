@@ -51,6 +51,12 @@ describe("因果標記的詞義", () => {
       quotes("Kept it since maybe someone depends on the old shape"),
       ["since maybe someone depends on the old shape"],
     );
+    // 裸數字不算時間：`since 3 people complained` 是理由，不是日期。
+    // 只認四位數年份與帶 v/version 的版本號。
+    assert.deepEqual(
+      quotes("Reverted it since 3 people complained about the output"),
+      ["since 3 people complained about the output"],
+    );
   });
 
   it("**被否決的標記不連累整行**", () => {

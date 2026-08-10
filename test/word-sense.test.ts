@@ -119,6 +119,66 @@ describe("因果標記的詞義", () => {
   });
 });
 
+/**
+ * 中文沒有詞界，而標記是用 `indexOf` 配的。
+ *
+ * 這一組釘住的是自我索引語料量出來的東西：33 條 evidence 裡有 15 條的引文
+ * 從詞中間開始，13 條來自裸的 `理由`。兩套黃金測試集都是英文語料，
+ * 所以中文那一半從來沒有被驗過——同一個功能、兩種語言，只驗了一種。
+ */
+describe("中文標記的詞界", () => {
+  it("**切點把否定詞留在外面，逐字為真卻意思相反**", () => {
+    // 實測案例：原文說「版本字串沒有理由改變」，舊版抽出「理由改變。」
+    // span 斷言完全擋不住——引文確實逐字出自原文。不變量 8 的字面滿足了，
+    // 誠信沒有。這是這條規則存在的全部理由。
+    assert.deepEqual(quotes("所以版本字串沒有理由改變。"), []);
+    assert.deepEqual(quotes("前者讓使用者以為沒有理由可查而其實有。"), []);
+  });
+
+  it("裸的「理由」是名詞不是連接詞，不再當標記", () => {
+    assert.deepEqual(quotes("103 條可疑引文全部人工裁決：真理由 87／空殼 9。"), []);
+    assert.deepEqual(quotes("相交就能判斷理由是不是在講這段程式碼。"), []);
+    assert.deepEqual(quotes("被抑制的只是被當成理由讀的那段文字。"), []);
+    assert.deepEqual(quotes("那些決定的理由目前只存在於 commit message 裡。"), []);
+  });
+
+  it("帶冒號的「理由：」「原因：」照常抽出，全形半形都收", () => {
+    // 與英文的 `reason:` / `why:` 是同一個形狀：名詞要靠冒號錨定成引導語。
+    assert.deepEqual(quotes("理由：界線先前不存在。"), ["理由：界線先前不存在。"]);
+    assert.deepEqual(quotes("原因：界線先前不存在。"), ["原因：界線先前不存在。"]);
+    assert.deepEqual(quotes("理由: 快取失效。"), ["理由: 快取失效。"]);
+    assert.deepEqual(quotes("原因: 快取失效。"), ["原因: 快取失效。"]);
+  });
+
+  it("連接詞類不受影響，接在漢字後面也是合法的", () => {
+    // 「這是因為…」是最常見的中文寫法。用「前一字不得是漢字」這條泛規則
+    // 會把它殺掉——實測代價 1 條、收益 0 條，所以泛規則被否決。
+    assert.deepEqual(
+      quotes("這是因為偵測器看不到內容搬去的那個檔案。"),
+      ["因為偵測器看不到內容搬去的那個檔案。"],
+    );
+    assert.deepEqual(
+      quotes("SIGNATURE_VERSION 必須進水位線否則規則只是願望。"),
+      ["否則規則只是願望。"],
+    );
+    assert.deepEqual(
+      quotes("改用 histogram，由於 Myers 的邊界不穩定。"),
+      ["由於 Myers 的邊界不穩定。"],
+    );
+  });
+
+  it("既有的中文因果標記全部還在", () => {
+    for (const [body, want] of [
+      ["因為邊界不穩定。", "因為邊界不穩定。"],
+      ["為了讓安裝零摩擦。", "為了讓安裝零摩擦。"],
+      ["改用 A 以免 B。", "以免 B。"],
+      ["先鎖版本，避免 CI 抖動。", "避免 CI 抖動。"],
+    ] as const) {
+      assert.deepEqual(quotes(body), [want], body);
+    }
+  });
+});
+
 const freshDb = () => {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");

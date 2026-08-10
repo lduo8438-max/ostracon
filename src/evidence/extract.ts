@@ -20,8 +20,8 @@ export interface ExtractedSpan {
   rule: string;
 }
 
-export const EXTRACTOR_VERSION = "rule-rationale-0.2.0";
-export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.2.0";
+export const EXTRACTOR_VERSION = "rule-rationale-0.3.0";
+export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.3.0";
 
 export interface ExtractRationaleOptions {
   /** linked 文件是 Markdown；排除程式碼 fence 與引用行，避免引用別人的理由。 */
@@ -34,6 +34,18 @@ export interface ExtractRationaleOptions {
  * 「fix」「update」這類動詞刻意不收：它們說的是做了什麼，不是為什麼。
  * 中英並列是因為這個專案自己的 commit message 就是中文——工具必須能讀
  * 使用者實際寫的語言，不是只讀英文。
+ *
+ * **中文的名詞標記一律要求冒號**（`理由：`／`原因：`），與英文的 `reason:`／
+ * `why:` 是同一個形狀。理由是中文沒有詞界而 `indexOf` 照配：裸的 `理由` 會
+ * 命中 `真理由`、`判斷理由`、`當成理由`，抽出來的引文從詞中間開始。最壞的
+ * 一種是把否定詞留在 span 外面——`版本字串沒有理由改變` 會抽出 `理由改變。`，
+ * 逐字為真、意思相反。**span 斷言擋不住這個**：它保證引文出自原文，
+ * 不保證切點沒有把句子的意思切反。
+ *
+ * 連接詞類（`因為`／`由於`／`否則`）不受此限，它們接在漢字後面是合法的
+ * （`這是因為…`）。實測自我索引語料：泛用的「前一字不得是漢字」規則
+ * **代價 1 條、收益 0 條**，所以被否決；27 次 `理由`／`原因` 裡只有 1 次
+ * 帶冒號，其餘 26 次沒有一條是真的理由。
  */
 const CAUSAL_MARKERS = [
   "because",
@@ -56,8 +68,11 @@ const CAUSAL_MARKERS = [
   "避免",
   "以免",
   "否則",
-  "理由",
-  "原因",
+  // 半形冒號一併收：中文輸入法下兩種都會打出來。
+  "理由：",
+  "理由:",
+  "原因：",
+  "原因:",
 ];
 
 /**

@@ -90,6 +90,8 @@ describe("linked 文件收取（全程 replay）", () => {
         promoted: 2,
         rejected: 0,
         byReason: {},
+        // 全新資料庫沒有舊版產出可作廢。非零就代表這次跑的是重建。
+        discarded: { evidence: 0, candidates: 0 },
       });
       const evidence = db.prepare(
         `SELECT d.external_id AS externalId, d.provenance_root AS root, e.tier

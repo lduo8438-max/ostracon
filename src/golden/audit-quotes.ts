@@ -101,15 +101,16 @@ function contextOf(body: string, start: number, end: number, radius = 2): string
     .join("\n");
 }
 
-export function collectQuoteCases(db: DatabaseSync): QuoteCase[] {
+export function collectQuoteCases(db: DatabaseSync, repoId: number): QuoteCase[] {
   const rows = db.prepare(
     `SELECT e.id AS evidenceId, e.tier AS tier, e.quoted_text AS quote,
             e.char_start AS charStart, e.char_end AS charEnd,
             d.doc_type AS docType, d.external_id AS externalId, d.body AS body
        FROM evidence e
        JOIN source_doc d ON d.id = e.source_doc_id
+      WHERE e.repo_id = ?
       ORDER BY e.id`,
-  ).all() as unknown as {
+  ).all(repoId) as unknown as {
     evidenceId: number; tier: string; quote: string;
     charStart: number; charEnd: number;
     docType: string; externalId: string; body: string;
@@ -133,18 +134,32 @@ export function collectQuoteCases(db: DatabaseSync): QuoteCase[] {
 }
 
 export interface QuoteAudit {
+  repoId: number;
   totalEvidence: number;
   /** 至少被一條規則抓到的條數。這就是要裁決的量。 */
   flagged: number;
   perRule: { id: string; description: string; hits: number }[];
   cases: QuoteCase[];
+  /** 同一個資料庫裡的其他 repo。非空代表這份報告只涵蓋其中一個。 */
+  otherRepos: { id: number; rootPath: string; evidence: number }[];
 }
 
-export function auditQuotes(db: DatabaseSync): QuoteAudit {
-  const total = (db.prepare("SELECT COUNT(*) AS n FROM evidence").get() as
-    { n: number }).n;
-  const cases = collectQuoteCases(db);
+export function auditQuotes(db: DatabaseSync, repoId: number): QuoteAudit {
+  const total = (db.prepare(
+    "SELECT COUNT(*) AS n FROM evidence WHERE repo_id = ?",
+  ).get(repoId) as { n: number }).n;
+  const cases = collectQuoteCases(db, repoId);
+  // `repo` 的身分是 root_path 原字串，相對與絕對路徑會各建一列，同一份語料
+  // 因此可能被索引兩次。跨 repo 全撈會把重複的引文算成兩條，所以這裡限定
+  // 單一 repo——但必須把「還有別的」講出來，靜默過濾一樣會誤導。
+  const others = db.prepare(
+    `SELECT r.id AS id, r.root_path AS rootPath,
+            (SELECT COUNT(*) FROM evidence e WHERE e.repo_id = r.id) AS evidence
+       FROM repo r WHERE r.id <> ? ORDER BY r.id`,
+  ).all(repoId) as unknown as { id: number; rootPath: string; evidence: number }[];
   return {
+    repoId,
+    otherRepos: others.filter((r) => r.evidence > 0),
     totalEvidence: total,
     flagged: cases.length,
     perRule: QUOTE_RULES.map((r) => ({
@@ -188,6 +203,15 @@ export function renderQuoteAudit(audit: QuoteAudit): string {
   );
   out.push(`以下是那 ${audit.flagged} 條的全部，不是抽樣——全部裁決才得到精確值。`);
   out.push("");
+  if (audit.otherRepos.length > 0) {
+    out.push(
+      `**這份報告只涵蓋 repo ${audit.repoId}。**同一個資料庫裡還有 `
+      + audit.otherRepos.map((r) => `#${r.id} \`${r.rootPath}\`（${r.evidence} 條）`).join("、")
+      + "。`repo` 以 `root_path` 原字串為身分，相對與絕對路徑會各建一列，"
+      + "所以這很可能是同一份語料被索引了兩次。",
+    );
+    out.push("");
+  }
   out.push("| 規則 | 說明 | 命中 |");
   out.push("|---|---|---:|");
   for (const r of audit.perRule) {
@@ -255,15 +279,17 @@ export async function main(args: string[]): Promise<void> {
   const dbPath = valueAfter(args, "--db");
   if (dbPath === undefined) {
     console.error(
-      "用法：pnpm quotes:audit -- --db <file> [--output <file.md>] [--json <file.json>]",
+      "用法：pnpm quotes:audit -- --db <file> [--repo-id <n>] "
+      + "[--output <file.md>] [--json <file.json>]",
     );
     process.exitCode = 2;
     return;
   }
+  const repoId = Number(valueAfter(args, "--repo-id") ?? 1);
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA foreign_keys = ON");
   try {
-    const audit = auditQuotes(db);
+    const audit = auditQuotes(db, repoId);
     const markdown = renderQuoteAudit(audit);
     const output = valueAfter(args, "--output");
     if (output) {

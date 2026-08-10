@@ -165,7 +165,9 @@ pnpm evidence:linked -- --db <db> [--record-dir fixtures/http | --replay-dir fix
 pnpm golden:audit -- --repo <repo-path> --until <sha> --output reports/audit.json
 
 # 把可疑無資訊量的引文分組列出供人工裁決（列完整聯集，不抽樣）
-pnpm quotes:audit -- --db <db> --output reports/quote-audit.md --json reports/quote-audit.json
+# --repo-id 預設 1。repo 的身分是 --repo 的原字串，相對與絕對路徑會各建一列，
+# 同一份語料可能被索引兩次；不指定範圍會把重複的引文算成兩條
+pnpm quotes:audit -- --db <db> [--repo-id <n>] --output reports/quote-audit.md --json reports/quote-audit.json
 
 # 建立只改宣告自身名稱的可重現 L3b fixture repo
 pnpm fixtures:controlled -- <output-directory>

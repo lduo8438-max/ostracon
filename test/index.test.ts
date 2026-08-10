@@ -21,3 +21,4 @@ import "./shallow.test.ts";
 import "./signature-cache.test.ts";
 import "./span.test.ts";
 import "./why.test.ts";
+import "./word-sense.test.ts";

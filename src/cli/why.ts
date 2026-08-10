@@ -16,6 +16,7 @@ import { git, lineageIdAt, lineagesEverAt } from "../index/structural.ts";
 import {
   extractFromCommitMessages,
   extractFromLinkedDocuments,
+  staleEvidenceNotice,
   ingestCommitMessages,
 } from "../evidence/store.ts";
 
@@ -552,8 +553,9 @@ export async function why(
     // 證據層：零網路、零 LLM。commit message 已經在資料庫裡，規則式抽取器只挑
     // 有明確理由標記的行，全部通過 span 斷言才會出現在時間軸上。
     ingestCommitMessages(db, gitReport.repoId);
-    extractFromCommitMessages(db, gitReport.repoId);
-    extractFromLinkedDocuments(db, gitReport.repoId);
+    const stated = extractFromCommitMessages(db, gitReport.repoId);
+    const linked = extractFromLinkedDocuments(db, gitReport.repoId);
+    const staleEvidence = stated.discarded.evidence + linked.discarded.evidence;
 
     // 多條血緣時合併，但同一個 entity 可能橫跨數條（跨檔案搬移），必須去重。
     // 排序在合併之後重做一次，否則輸出順序會隨血緣的列舉順序漂移。
@@ -600,6 +602,11 @@ export async function why(
       // 丟掉使用者既有的索引是一件必須說出來的事，即使那份索引本來就答不出
       // 他現在問的問題。沉默會讓「為什麼這次跑比較久」變成一個謎。
       notes.push(REBUILD_NOTICE);
+    }
+    if (staleEvidence > 0) {
+      // 同上：引文是舊版抽取器產生的，這次已重抽。不說的話，使用者會以為
+      // 時間軸上少掉的那幾條引文是資料掉了。
+      notes.push(staleEvidenceNotice(staleEvidence));
     }
     if (current === undefined) {
       // 使用者問的是一個在終點已經不存在的路徑。不說的話，時間軸看起來會像

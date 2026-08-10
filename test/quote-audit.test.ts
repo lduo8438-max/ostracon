@@ -14,11 +14,17 @@ const ruleById = (id: string) => {
   return rule;
 };
 
-const audit = (cases: QuoteCase[], perRule: QuoteAudit["perRule"]): QuoteAudit => ({
+const audit = (
+  cases: QuoteCase[],
+  perRule: QuoteAudit["perRule"],
+  otherRepos: QuoteAudit["otherRepos"] = [],
+): QuoteAudit => ({
+  repoId: 1,
   totalEvidence: 100,
   flagged: cases.length,
   perRule,
   cases,
+  otherRepos,
 });
 
 const caseOf = (over: Partial<QuoteCase> = {}): QuoteCase => ({

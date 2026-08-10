@@ -6,6 +6,7 @@ import {
   extractFromCommitMessages,
   extractFromLinkedDocuments,
   ingestCommitMessages,
+  staleEvidenceNotice,
 } from "../evidence/store.ts";
 
 /**
@@ -34,6 +35,9 @@ export function main(args: string[]): void {
     console.log("ingest:", JSON.stringify(ingestCommitMessages(db, repoId)));
     const report = extractFromCommitMessages(db, repoId);
     console.log("extract:", JSON.stringify(report));
+    if (report.discarded.evidence > 0) {
+      console.log(staleEvidenceNotice(report.discarded.evidence));
+    }
     const pct = report.documents === 0
       ? 0
       : (report.documentsWithRationale / report.documents) * 100;

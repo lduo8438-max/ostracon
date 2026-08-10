@@ -20,8 +20,8 @@ export interface ExtractedSpan {
   rule: string;
 }
 
-export const EXTRACTOR_VERSION = "rule-rationale-0.1.0";
-export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.1.0";
+export const EXTRACTOR_VERSION = "rule-rationale-0.2.0";
+export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.2.0";
 
 export interface ExtractRationaleOptions {
   /** linked 文件是 Markdown；排除程式碼 fence 與引用行，避免引用別人的理由。 */
@@ -60,9 +60,85 @@ const CAUSAL_MARKERS = [
   "原因",
 ];
 
+/**
+ * `since` 的時間義。英文的 `since` 同時是「因為」與「自從」，`indexOf` 分不出來。
+ *
+ * 這不是品質門檻，是**配錯詞義**：`since August.` 從來就不是一條理由，
+ * 不是一條寫得太短的理由。實測 demo 語料 86 條 `since` 裡有 5 條是時間義，
+ * 5 條全部沒有理由內容，而收緊長度要連帶殺掉另外 55 條有內容的短引文。
+ */
+const TEMPORAL_SINCE =
+  /^(?:\d|v\d|version\b|then\b|last\b|early\b|late\b|yesterday\b|today\b|launch\b|the\s+(?:last|beginning|start)\b|jan(?:uary)?\b|feb(?:ruary)?\b|mar(?:ch)?\b|apr(?:il)?\b|may\b|jun(?:e)?\b|jul(?:y)?\b|aug(?:ust)?\b|sep(?:t|tember)?\b|oct(?:ober)?\b|nov(?:ember)?\b|dec(?:ember)?\b)/i;
+
+/**
+ * `so that` 後面接繫詞時是「所以，那個是……」，不是表目的的 `so that`。
+ *
+ * 這一類的理由在標記**之前**（`X，所以那就是 Y`），與其他標記方向相反，
+ * 所以不是丟掉而是把左邊界往前拉到句首。裁決把這一類全判為「該拉長」。
+ */
+const DEMONSTRATIVE_SO_THAT = /^(?:['’]s\b|\s+(?:is|was|are|were)\b)/i;
+
 /** 行首的清單標記與空白。修剪必須反映在位移上，否則 span 會對不上。 */
 const LEADING_NOISE = /^[\s>*\-+•·]+/;
 const TRAILING_NOISE = /[\s]+$/;
+
+/**
+ * 標記之後是否還有實質內容。
+ *
+ * `the reason`、`otherwise.` 這種「標記自己就是整句」的引文毫無資訊量，
+ * 但它們短不是問題的本質——`instead of 4.` 一樣短，那個 `4` 卻正是內容。
+ * 判準是標記後有沒有字母或數字，不是剩幾個字元。
+ */
+function hasContentAfterMarker(rest: string): boolean {
+  return /[\p{L}\p{N}]/u.test(rest);
+}
+
+/**
+ * 往前找句首：標記之前最後一個句末標點之後，找不到就退回行首。
+ *
+ * 只在行內找。跨行往前拉會把別人的句子收進來——`provenance_root` 去重是
+ * 以文件為單位的，行與行之間可能根本不是同一個人在說話。
+ */
+function sentenceStart(line: string, upTo: number, leading: number): number {
+  let at = leading;
+  for (const m of line.slice(0, upTo).matchAll(/[.!?]["'’)\]]?\s+/g)) {
+    at = Math.max(at, m.index + m[0].length);
+  }
+  return at;
+}
+
+interface MarkerHit {
+  marker: string;
+  /** 標記在行內的起點。 */
+  at: number;
+  /** span 的左邊界。多數等於 `at`；結果標記會往前拉到句首。 */
+  from: number;
+}
+
+/**
+ * 行內所有通過詞義檢查的標記，依位置排序。
+ *
+ * 逐一檢查而不是「取最早的一個就算」，是因為被否決的標記不該連累整行：
+ * `since August. Dropped X to avoid Y` 的理由在第二個標記上。
+ */
+function markerHits(rawLine: string, leading: number, end: number): MarkerHit[] {
+  const lower = rawLine.toLowerCase();
+  const hits: MarkerHit[] = [];
+  for (const marker of CAUSAL_MARKERS) {
+    for (let at = lower.indexOf(marker); at >= 0; at = lower.indexOf(marker, at + 1)) {
+      const rest = rawLine.slice(at + marker.length, end);
+      if (marker === "since " && TEMPORAL_SINCE.test(rest)) continue;
+      if (!hasContentAfterMarker(rest)) continue;
+      const demonstrative = marker === "so that" && DEMONSTRATIVE_SO_THAT.test(rest);
+      hits.push({
+        marker,
+        at,
+        from: demonstrative ? sentenceStart(rawLine, at, leading) : at,
+      });
+    }
+  }
+  return hits.sort((a, b) => a.at - b.at);
+}
 
 /**
  * 從文件全文抽出「解釋動機」的候選 span。
@@ -111,30 +187,26 @@ export function extractRationale(
       if (fence !== undefined || /^\s{0,3}>/.test(rawLine)) continue;
     }
 
-    const lower = rawLine.toLowerCase();
-    // 取最早出現的標記：一行有多個時，理由通常從第一個開始。
-    let marker: string | undefined;
-    let markerAt = -1;
-    for (const candidate of CAUSAL_MARKERS) {
-      const at = lower.indexOf(candidate);
-      if (at >= 0 && (markerAt === -1 || at < markerAt)) {
-        marker = candidate;
-        markerAt = at;
-      }
-    }
-    if (marker === undefined) continue;
-
     const leading = LEADING_NOISE.exec(rawLine)?.[0].length ?? 0;
     const trailing = TRAILING_NOISE.exec(rawLine)?.[0].length ?? 0;
-    const start = lineStart + Math.max(markerAt, leading);
-    const end = lineStart + rawLine.length - trailing;
+    const lineEnd = rawLine.length - trailing;
+
+    // 取最早通過詞義檢查的標記：一行有多個時，理由通常從第一個開始。
+    const hit = markerHits(rawLine, leading, lineEnd)[0];
+    if (hit === undefined) continue;
+
+    const start = lineStart + Math.max(hit.from, leading);
+    const end = lineStart + lineEnd;
     if (end <= start) continue;
 
     out.push({
       charStart: start,
       charEnd: end,
       quotedText: body.slice(start, end),
-      rule: `causal:${marker.trim()}`,
+      rule: hit.from === hit.at
+        ? `causal:${hit.marker.trim()}`
+        // 左邊界被往前拉過，事後分析要分得出來這條與一般 span 不同。
+        : `causal:${hit.marker.trim()}/result`,
     });
   }
   return out;

@@ -249,10 +249,68 @@ export function revalidateEvidence(
 }
 
 
+/**
+ * 作廢通知。**共用一份**，因為 `why` 與 `evidence extract` 都要說同一件事，
+ * 各寫各的遲早會漂成兩種說法。
+ */
+export const staleEvidenceNotice = (evidence: number): string =>
+  `注意：資料庫裡有 ${evidence} 條引文是舊版抽取器產生的，已作廢並重新抽取。`;
+
+export interface DiscardReport {
+  /** 被作廢的 evidence 列數。 */
+  evidence: number;
+  /** 被作廢的候選列數（含從未升格的失敗候選）。 */
+  candidates: number;
+}
+
+/**
+ * 作廢由舊版抽取器產生的 rule 證據。
+ *
+ * `submitCandidates` 是純新增的，所以光升 `EXTRACTOR_VERSION` 不會讓任何既有
+ * 資料庫改變——舊演算法留下的引文會原地不動，而使用者完全看不出來。這正是
+ * 「同一個問題、兩種執行方式給不給同一個答案」那條線上重複出現的靜默錯誤：
+ * 全新資料庫得到修正後的結果，用過的資料庫得到修正前的結果。
+ *
+ * 刻意只碰 `evidence` 與 `evidence_candidate`：**`source_doc` 不動**。
+ * linked 文件是花網路取回來的，重抽取完全離線，沒有理由連帶重取。
+ *
+ * 兩道 DELETE 的順序不依賴級聯——第二道會明刪第一道漏掉的候選，所以
+ * `PRAGMA foreign_keys` 是開是關，結果都一樣。（`claim_evidence` 會跟著級聯，
+ * 但 claim 層尚未解禁；解禁後這裡要改成先檢查有沒有 claim 掛著。）
+ */
+export function discardStaleRuleEvidence(
+  db: DatabaseSync,
+  repoId: number,
+): DiscardReport {
+  // 兩個版本前綴各自對應 stated 與 linked，兩邊都算「當前」，否則跑完
+  // commit message 再跑 linked 時，後者會把前者剛寫好的列當成陳舊的刪掉。
+  const current = [EXTRACTOR_VERSION, MARKDOWN_EXTRACTOR_VERSION].map((v) => `${v}/%`);
+  const where =
+    "repo_id = ? AND generator_kind = 'rule' "
+    + "AND generator_version NOT LIKE ? AND generator_version NOT LIKE ?";
+
+  // 先數再刪：`foreign_keys` 開著時，刪 evidence 會級聯帶走已升格的候選，
+  // 第二道 DELETE 的 changes 就只剩沒升格的那些。回報的數字不該隨 pragma 而變。
+  const candidates = (db.prepare(
+    `SELECT COUNT(*) AS n FROM evidence_candidate WHERE ${where}`,
+  ).get(repoId, ...current) as { n: number }).n;
+
+  const evidence = db.prepare(
+    `DELETE FROM evidence WHERE id IN (
+       SELECT promoted_evidence_id FROM evidence_candidate
+        WHERE ${where} AND promoted_evidence_id IS NOT NULL)`,
+  ).run(repoId, ...current);
+  db.prepare(`DELETE FROM evidence_candidate WHERE ${where}`).run(repoId, ...current);
+
+  return { evidence: Number(evidence.changes), candidates };
+}
+
 export interface ExtractionReport {
   documents: number;
   /** 至少產出一條候選的文件數。低不是 bug——多數 commit message 不解釋為什麼。 */
   documentsWithRationale: number;
+  /** 舊版抽取器留下、已被作廢的產出。非零代表這次跑的是重建而不是增量。 */
+  discarded: DiscardReport;
   candidates: number;
   promoted: number;
   rejected: number;
@@ -289,6 +347,7 @@ export function extractFromLinkedDocuments(
     promoted: 0,
     rejected: 0,
     byReason: {},
+    discarded: discardStaleRuleEvidence(db, repoId),
   };
   const candidates: CandidateInput[] = [];
   for (const doc of docs) {
@@ -351,6 +410,7 @@ export function extractFromCommitMessages(
     rejected: 0,
     byReason: {},
     references: 0,
+    discarded: discardStaleRuleEvidence(db, repoId),
   };
   const candidates: CandidateInput[] = [];
 

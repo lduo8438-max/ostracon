@@ -812,9 +812,33 @@ architecture.md：`），沒有一條是對某次改動的解釋。
 
 **為什麼兩套黃金測試集抓不到：Osiris 與 create-t3-app 都是英文語料。**
 抽取器宣稱中英並列，中文那一半從來沒有語料驗過。這是掃描線的兄弟版本——
-**同一個功能、兩種語言，只驗了一種**。耐久的修法是補一個中文 controlled
-fixture（見 `CLAUDE.local.md` 的待辦），**不要拿自我索引當 golden**：
-repo 每次 commit 都在動，而黃金測試集的錨點必須釘死（不變量 14）。
+**同一個功能、兩種語言，只驗了一種**。
+
+#### 中文 controlled fixture 與 `kind: evidence`（2026-08-10）
+
+上一條的耐久修法。**沒有拿自我索引當 golden**：repo 每次 commit 都在動，
+而黃金測試集的錨點必須釘死（不變量 14）。改成在既有的 controlled repo 尾端
+追加四則中文 commit message——`build-controlled-repo.mjs` 是決定性的，
+實測兩次產生逐位元相同，既有案例的 SHA 一個都沒變。
+
+`kind: evidence` **先前只寫在 `golden-fixtures-spec.md` 裡、沒有實作**
+（evaluate.ts 與 materialize.ts 零命中），所以證據層的任何退步都沒有黃金測試集
+在擋。中文標記的 bug 就是這樣溜過去的。這次一併實作：
+
+| 案例 | 難度 | 守什麼 |
+|---|---|---|
+| `evd-zh-negation-outside-span` | adversarial | `沒有理由改變` 不得抽成 `理由改變。` |
+| `evd-zh-marker-mid-word` | adversarial | `真理由`／`判斷理由` 不得命中 |
+| `evd-zh-colon-marker` | hard | `理由：…` 照常抽出（負例的價格標籤） |
+| `evd-zh-conjunction-after-han` | hard | `這是因為…` 不得被詞界規則誤殺 |
+
+**這組案例確認過它會失敗。** 把抽取器改回裸的 `理由` 之後重跑，恰好
+兩條 adversarial 失敗、其餘五條照常通過，`binary` 回報
+`{"expected":{"spans":0},"actual":{"spans":1}}`，`observed` 直接列出
+`理由改變。`。沒看過失敗的黃金案例只是裝飾。
+
+controlled 基準線 4 → 8 條，全部 pass；既有四條的判定一字未改。
+Osiris 33/33、create-t3-app 3/3 不變。
 
 #### entity 相關性已處理（2026-08-02）
 

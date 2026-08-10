@@ -18,6 +18,11 @@ import { indexRepoStructure } from "../index/repo-pass.ts";
 import { matchLadder, type Candidate } from "../match/ladder.ts";
 import { exactJaccard } from "../match/signature.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
+import {
+  extractFromCommitMessages,
+  extractFromLinkedDocuments,
+  ingestCommitMessages,
+} from "../evidence/store.ts";
 // 結構層的寫入語意與產品 pass 共用同一份實作。各寫一份的話，黃金測試集驗證的
 // 就不是產品實際跑的程式碼。
 import {
@@ -206,6 +211,15 @@ export async function materializeGoldenCoordinates(
     if (excursionCases.length > 0) {
       await indexRepoStructure(db, repo, gitReport.repoId, INDEXER_VERSION);
       detectExcursions(db, gitReport.repoId, { scope: "repo" });
+    }
+
+    // 證據層走產品的抽取器，不在 golden 裡另寫一套只會通過 fixture 的捷徑。
+    // 兩支都跑：`linked` 完全離線（只讀已收進 source_doc 的文件），沒有
+    // linked 文件時是 no-op，有的話 fixture 就能同時涵蓋兩個 tier。
+    if (fixture.cases.some((item) => item.kind === "evidence")) {
+      ingestCommitMessages(db, gitReport.repoId);
+      extractFromCommitMessages(db, gitReport.repoId);
+      extractFromLinkedDocuments(db, gitReport.repoId);
     }
 
     for (const c of fixture.cases.filter((item) => item.kind === "lineage")) {

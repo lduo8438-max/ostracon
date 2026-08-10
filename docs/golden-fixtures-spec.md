@@ -167,21 +167,40 @@ labeled_at: 2026-07-26
     但那是預定要移除的過渡設計，不是試錯後回退。系統若報成迂迴即為誤判。
 ```
 
-### F. evidence — 證據 span（第五週才用，格式先定下來）
+### F. evidence — 證據 span（**已實作**）
+
+錨點是 `at_commit` 加上來源文件的種類。commit message 的 `external_id` 就是
+commit sha，所以整條案例只用 git 原生座標，不引用索引器產生的 ID（不變量 14）。
 
 ```yaml
 - id: evd-001
   kind: evidence
   difficulty: hard
   at_commit: 333...
-  entity: {path: src/worker/dispatch.ts, symbol: RequestDispatcher.handle}
   expect_spans:
     - source: {type: pr_body, external_id: "442"}
       contains: "lock contention under load"    # 子字串比對即可，不必逐字全等
       tier: linked
-  must_not_infer: true       # 此案有明確文字證據，系統不得標成 inferred
   rationale: commit message 只寫 "refactor dispatcher"，真正的理由在 PR body。
 ```
+
+**正負兩種語意刻意不對稱：**
+
+- `expect_spans: []` 是**負例，而且是窮舉的**——這則訊息一條引文都不得產出。
+  過度抽取正是抽取器的主要失效模式，所以負例不留餘地。這種案例的 polarity
+  自動算成 `negative`，不必另外寫 `expect: absent`。
+- 有列出 span 的是**正例，只要求列出的都在**，不禁止另有別的。span 的右邊界
+  是抽取器的自由度，窮舉正例會讓 fixture 在無關的調整上碎掉。
+
+**「文件沒被收進來」與「文件在、但沒有引文」是兩件事**：前者是覆蓋不足
+（`missing`），後者是一個真實的觀測值。混為一談會讓覆蓋率失去意義。
+
+`must_not_infer` 尚未實作——`claim` 層還沒解禁，`inferred` 目前不會被產生。
+
+**負例是這一類案例的主要價值。** `controlled-typescript` 的
+`evd-zh-negation-outside-span` 守的是：原文「版本字串**沒有**理由改變」不得
+被抽成「理由改變。」。那條引文逐字為真、span 斷言通過、意思相反——
+**span 斷言擋不住這一類，只有 fixture 擋得住**。
 
 ---
 

@@ -24,6 +24,15 @@ interface FixtureCase {
       transition?: FixtureTransition;
     }>;
   }>;
+  /** evidence 案例：這則來源文件應該（或不應該）產出哪些引文。 */
+  expect_spans?: FixtureSpan[];
+}
+
+interface FixtureSpan {
+  source?: { type?: string; external_id?: string };
+  /** 子字串比對即可，不必逐字全等——span 的右邊界是抽取器的自由度。 */
+  contains?: string;
+  tier?: string;
 }
 
 /**
@@ -80,7 +89,11 @@ function result<T>(
 
 function fixturePolarity(c: FixtureCase): "positive" | "negative" | "neutral" {
   if (c.expect === "absent") return "negative";
-  if (["lineage", "discontinuity", "construct", "excursion"].includes(c.kind)) {
+  // evidence 的負例不寫 `expect: absent`，而是 `expect_spans: []`——
+  // 「這則訊息不得產出任何引文」本身就是完整的語意，另外再加一個旗標
+  // 只會多一種說法可以與它分岔。
+  if (c.kind === "evidence" && (c.expect_spans ?? []).length === 0) return "negative";
+  if (["lineage", "discontinuity", "construct", "excursion", "evidence"].includes(c.kind)) {
     return "positive";
   }
   return "neutral";
@@ -315,6 +328,84 @@ function ambiguitySizeOf(
   return row?.size ?? undefined;
 }
 
+/**
+ * 證據案例的判定。
+ *
+ * 錨點是 `at_commit` 加上來源文件的種類——**都是 git 原生座標**（commit message
+ * 的 `external_id` 就是 sha），不引用索引器產生的 ID（不變量 14）。
+ *
+ * 正負兩種語意刻意不對稱：
+ *
+ * - `expect_spans: []`（負例）要求**這則訊息一條引文都不得產出**。過度抽取
+ *   正是抽取器的主要失效模式，所以負例是窮舉的。
+ * - 有列出 span 的（正例）只要求列出的都在，不禁止另有別的。span 的右邊界是
+ *   抽取器的自由度，窮舉正例會讓 fixture 在無關的調整上碎掉。
+ *
+ * 「文件根本沒被收進來」與「文件在、但沒有引文」是兩件事：前者是覆蓋不足
+ * （missing），後者是一個真實的觀測值（absent）。混為一談會讓覆蓋率失去意義。
+ */
+function evaluateEvidence(db: DatabaseSync, c: FixtureCase): CaseEvaluation {
+  const sha = required(c.at_commit, "at_commit", c.id);
+  const wanted = c.expect_spans ?? [];
+  const docType = wanted[0]?.source?.type ?? "commit_message";
+  const externalId = wanted[0]?.source?.external_id ?? sha;
+
+  const base = {
+    id: c.id,
+    kind: c.kind,
+    difficulty: c.difficulty,
+    labelConfidence: c.label_confidence,
+    polarity: fixturePolarity(c),
+  };
+
+  const doc = db.prepare(
+    "SELECT id FROM source_doc WHERE doc_type = ? AND external_id = ?",
+  ).get(docType, externalId) as { id: number } | undefined;
+  if (doc === undefined) {
+    return {
+      ...base,
+      status: "missing",
+      binary: { expected: wanted.map(spanKey), actual: null },
+      detail: `${docType} ${externalId} 還沒被收進 source_doc`,
+    };
+  }
+
+  const quotes = db.prepare(
+    "SELECT tier, quoted_text AS quote FROM evidence "
+    + "WHERE source_doc_id = ? ORDER BY char_start",
+  ).all(doc.id) as unknown as { tier: string; quote: string }[];
+
+  if (wanted.length === 0) {
+    return {
+      ...base,
+      status: quotes.length === 0 ? "pass" : "fail",
+      binary: { expected: { spans: 0 }, actual: { spans: quotes.length } },
+      observed: { quotes: quotes.map((q) => q.quote) },
+      detail: quotes.length === 0
+        ? undefined
+        : `這則訊息不得產出引文，實際產出 ${quotes.length} 條`,
+    };
+  }
+
+  const expected = wanted.map(spanKey);
+  const actual = wanted.map((span) =>
+    quotes.some((q) =>
+        q.tier === span.tier
+        && span.contains !== undefined
+        && q.quote.includes(span.contains))
+      ? spanKey(span)
+      : "absent");
+  return {
+    ...base,
+    status: expected.every((want, i) => actual[i] === want) ? "pass" : "fail",
+    binary: { expected, actual },
+    observed: { quotes: quotes.map((q) => q.quote) },
+  };
+}
+
+const spanKey = (span: FixtureSpan): string =>
+  `${span.tier ?? "?"}: ${span.contains ?? "?"}`;
+
 function evaluateLineage(db: DatabaseSync, c: FixtureCase): CaseEvaluation {
   if (c.label_confidence === "ambiguous") {
     return evaluateAmbiguousLineage(db, c);
@@ -346,6 +437,7 @@ export function evaluateFixtureCase(
   if (c.kind === "lineage") return evaluateLineage(db, c);
   if (c.kind === "discontinuity") return evaluateDiscontinuity(db, c);
   if (c.kind === "excursion") return evaluateExcursion(db, c);
+  if (c.kind === "evidence") return evaluateEvidence(db, c);
   return result(c, c.expect ?? "present", null, `${c.kind} 查詢尚未接入`);
 }
 

@@ -2,6 +2,7 @@ import "./adapter.integration.test.ts";
 import "./fixture-tools.test.mjs";
 import "./excursion.test.ts";
 import "./git-index.test.ts";
+import "./golden-evidence.test.ts";
 import "./golden-runner.test.ts";
 import "./hash.test.ts";
 import "./hunks.test.ts";

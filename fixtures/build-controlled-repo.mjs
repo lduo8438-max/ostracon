@@ -161,6 +161,54 @@ git(["mv", "src/legacy.ts", "src/票券解析.ts"]);
 git(["commit", "-q", "-m", "rename onto a non-ASCII path"], "2026-01-08T00:00:00Z");
 const nonAsciiPath = git(["rev-parse", "HEAD"]);
 
+// ── 中文 commit message ────────────────────────────────────────────────────
+//
+// 兩套黃金語料（Osiris、create-t3-app）都是英文，所以抽取器宣稱的中英並列
+// 只有英文那一半被驗過。中文沒有詞界而標記是用 indexOf 配的，裸的「理由」
+// 會命中「真理由」「判斷理由」「沒有理由」——引文從詞中間開始。
+//
+// 最嚴重的一種是把否定詞留在 span 外面：「沒有理由改變」抽出「理由改變。」，
+// **逐字為真、span 斷言通過、意思相反**。span 斷言擋不住這一類，所以它必須
+// 由 fixture 擋。每則訊息只測一件事，判定才不會互相汙染。
+const zhCommit = (file, fn, message, date) => {
+  writeFileSync(path.join(absolute, `src/${file}`), source(fn));
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", message], date);
+  return git(["rev-parse", "HEAD"]);
+};
+
+// 負例：否定詞在標記之前。抽出「理由改變。」就是把原意講反了。
+const zhNegation = zhCommit(
+  "zh-negation.ts",
+  "normalizeLabel",
+  "調整標籤正規化\n\n量過之後 5 個 entity 一個不差，所以版本字串沒有理由改變。",
+  "2026-01-09T00:00:00Z",
+);
+
+// 負例：「真理由」「判斷理由」——標記是別的詞的後半段。
+const zhMidWord = zhCommit(
+  "zh-mid-word.ts",
+  "collectSummary",
+  "整理裁決樣本\n\n103 條可疑引文全部人工裁決：真理由 87、空殼 9。\n相交就能判斷理由是不是在講這段程式碼。",
+  "2026-01-10T00:00:00Z",
+);
+
+// 正例：名詞標記帶冒號，與英文的 reason: / why: 同一個形狀。
+const zhColon = zhCommit(
+  "zh-colon.ts",
+  "parseWindow",
+  "改用 histogram 切 diff\n\n理由：Myers 的 hunk 邊界不穩定。",
+  "2026-01-11T00:00:00Z",
+);
+
+// 正例：連接詞類。接在漢字後面（「這是因為」）是合法中文，不得被詞界規則誤殺。
+const zhConjunction = zhCommit(
+  "zh-conjunction.ts",
+  "resolveScope",
+  "改走全 repo 候選池\n\n這是因為偵測器看不到內容搬去的那個檔案。",
+  "2026-01-12T00:00:00Z",
+);
+
 console.log(
   JSON.stringify(
     {
@@ -173,6 +221,10 @@ console.log(
       ambiguousAfter,
       asciiPath,
       nonAsciiPath,
+      zhNegation,
+      zhMidWord,
+      zhColon,
+      zhConjunction,
     },
     null,
     2,

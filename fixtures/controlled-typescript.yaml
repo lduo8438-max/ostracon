@@ -3,7 +3,7 @@ fixture_version: 1
 repo:
   name: controlled-typescript
   clone_url: "generated:fixtures/build-controlled-repo.mjs"
-  index_until: ad95f7aa4dc964307f149e25fbb1edfa24faae27
+  index_until: 464a245ba611511eac15f1e0298b6e18feeb9671
   language: typescript
 
 labeled_by: codex
@@ -171,3 +171,57 @@ cases:
         transition:
           type: move
           expect_tier_at_most: L1
+
+  # ── 中文 commit message ───────────────────────────────────────────────────
+  #
+  # 兩套黃金語料（Osiris、create-t3-app）都是英文，所以抽取器宣稱的中英並列
+  # 只有英文那一半被驗過。這四條把中文那一半補上。
+
+  - id: evd-zh-negation-outside-span
+    kind: evidence
+    difficulty: adversarial
+    label_confidence: certain
+    at_commit: a1450f05e05be7f927b052faa70a393848600669
+    expect_spans: []
+    rationale: >
+      原文是「所以版本字串沒有理由改變。」。裸的「理由」當標記時會抽出
+      「理由改變。」——否定詞留在 span 外面，逐字為真、span 斷言通過、
+      意思剛好相反。**span 斷言擋不住這一類**，所以必須由 fixture 擋。
+      這是整組案例裡最重要的一條：它守的是誠信，不是覆蓋率。
+
+  - id: evd-zh-marker-mid-word
+    kind: evidence
+    difficulty: adversarial
+    label_confidence: certain
+    at_commit: 8b2cfdced0789fae462f25dbe657b4cc81f3845a
+    expect_spans: []
+    rationale: >
+      「真理由 87」與「判斷理由是不是」裡的「理由」是別的詞的後半段。
+      中文沒有詞界而標記是用 indexOf 配的，引文會從詞中間開始。
+      名詞標記要求冒號（理由：／原因：）之後這則訊息不得產出任何引文。
+
+  - id: evd-zh-colon-marker
+    kind: evidence
+    difficulty: hard
+    label_confidence: certain
+    at_commit: 7a92ab3783902575a85d055026a7f11df8455bea
+    expect_spans:
+      - source: {type: commit_message}
+        contains: "理由：Myers 的 hunk 邊界不穩定。"
+        tier: stated
+    rationale: >
+      名詞標記帶冒號時是真的引導語，與英文的 reason: / why: 同一個形狀。
+      這是前兩條負例的價格標籤：收緊詞界不得把合法的中文理由一起殺掉。
+
+  - id: evd-zh-conjunction-after-han
+    kind: evidence
+    difficulty: hard
+    label_confidence: certain
+    at_commit: 464a245ba611511eac15f1e0298b6e18feeb9671
+    expect_spans:
+      - source: {type: commit_message}
+        contains: "因為偵測器看不到內容搬去的那個檔案。"
+        tier: stated
+    rationale: >
+      「這是因為……」接在漢字後面是合法中文。實測「前一字不得是漢字」這條
+      泛用規則代價 1 條、收益 0 條，已否決；這條案例守住它不會被重新引入。

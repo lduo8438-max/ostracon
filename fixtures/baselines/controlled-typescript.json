@@ -16,6 +16,26 @@
       "status": "pass"
     },
     {
+      "id": "evd-zh-colon-marker",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "evd-zh-conjunction-after-han",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "evd-zh-marker-mid-word",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
+      "id": "evd-zh-negation-outside-span",
+      "difficulty": "adversarial",
+      "status": "pass"
+    },
+    {
       "id": "lin-controlled-pure-self-rename",
       "difficulty": "hard",
       "status": "pass"

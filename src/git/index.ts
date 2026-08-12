@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { collectHunksForCommits, DIFF_ALGORITHM, walkCommits } from "./walk.ts";
 import { attachHunks } from "./hunks.ts";
 import { buildLineages } from "./lineage.ts";
 import {
+  consolidateRepoPaths,
   findRepo,
   getIndexerVersion,
   getNextLineageId,
@@ -11,6 +14,7 @@ import {
   loadLineageState,
   openDb,
   persistWalk,
+  type RepoConsolidation,
 } from "./persist.ts";
 import type { WalkOptions } from "./types.ts";
 
@@ -46,6 +50,8 @@ export interface IndexGitReport {
   repoId: number;
   /** 本次是從頭建索引還是接續既有水位 */
   mode: "full" | "incremental";
+  /** 舊拼法留下的重複 repo 列的收斂結果。`absorbed` 非空時呼叫端必須說出來。 */
+  consolidation: RepoConsolidation;
   commits: number;
   merges: number;
   fileChanges: number;
@@ -69,16 +75,24 @@ export interface IndexGitReport {
  * pass 1 的走訪部分：commit 串、路徑血緣、file_change。
  * 完全不讀檔案內容，也不呼叫任何模型。解析與雜湊是下一個模組的事。
  */
-export function indexGit(repoPath: string, opts: IndexGitOptions): IndexGitReport {
+export function indexGit(inputPath: string, opts: IndexGitOptions): IndexGitReport {
   const t0 = Date.now();
   // 在開啟資料庫之前檢查：與其產生一個會說謊的索引再叫人重建，不如一開始就不要寫。
-  assertNotShallow(repoPath);
+  assertNotShallow(inputPath);
+  // 身分一律用正規路徑。整個函式往下都用它，包含餵給 git 的 -C——
+  // 留一個未正規化的變數在作用域裡，遲早有人接錯。
+  const repoPath = canonicalRepoPath(inputPath);
   const until = opts.until ?? "HEAD";
   // 版本由本次實際使用的選項算出，不是寫死的常數。
   const version = indexerVersion(opts);
   const db = openDb(opts.dbPath);
 
   try {
+    // 舊資料庫可能用別的拼法存過同一個 repo。不先收斂的話，改用正規路徑當身分
+    // 反而會再插一列，親手製造出這個修正要消滅的重複狀態。
+    const consolidation = consolidateRepoPaths(db, repoPath, (candidate) =>
+      existsSync(candidate) ? canonicalRepoPath(candidate) : undefined);
+
     // 增量：只走水位線之後的 commit，並從資料庫載回血緣續跑狀態。
     const existingRepo = findRepo(db, repoPath);
     const watermark = existingRepo !== undefined ? getWatermark(db, existingRepo) : undefined;
@@ -139,6 +153,7 @@ export function indexGit(repoPath: string, opts: IndexGitOptions): IndexGitRepor
     return {
       repoId,
       mode,
+      consolidation,
       commits: commits.length,
       merges: commits.filter((c) => c.isMerge).length,
       fileChanges: commits.reduce((n, c) => n + c.changes.length, 0),
@@ -233,6 +248,24 @@ function isAncestor(repo: string, ancestor: string, descendant: string): boolean
   } catch {
     return false;
   }
+}
+
+/**
+ * repo 的正規身分。
+ *
+ * 先前直接拿 `--repo` 的原字串當身分，所以同一個 repo 的不同拼法會在同一個
+ * 資料庫裡各建一列。那不只是浪費：`lineageIdAt` 的快路徑不綁 repo，同一個 sha
+ * 出現多次時會挑到別列的血緣，`why` 於是印出「slot 延續但內容血緣斷開」——
+ * **假斷層，不變量 2 指名的最嚴重失效模式**。實測 `ostracon why X` 之後再
+ * `ostracon why X --repo .` 就會發生，不需要任何特殊參數。
+ *
+ * 用 `git rev-parse --show-toplevel` 而不是 `path.resolve`，因為三種拼法都要
+ * 收斂而後者只收斂第一種（實測）：相對路徑、**repo 內的子目錄**、
+ * 以及 **symlink**（macOS 的 `/tmp` 就是）。
+ */
+export function canonicalRepoPath(repoPath: string): string {
+  // 不是 git repo 時退回 resolve；該報的錯由後面的走訪自己報，這裡不搶著失敗。
+  return tryGit(repoPath, ["rev-parse", "--show-toplevel"]) ?? path.resolve(repoPath);
 }
 
 function tryGit(repo: string, args: string[]): string | undefined {

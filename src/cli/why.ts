@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import {
@@ -253,8 +254,21 @@ export function suppressUnrelatedRationale(row: TimelineRow): TimelineRow {
  * 同名宣告可能有多個 entity（同一個 slot 在歷史上被換過內容）。回傳全部，
  * 由呼叫端決定怎麼呈現——**不得**替使用者挑一個而不說明。
  */
+/**
+ * 這條血緣上叫這個名字的實體。
+ *
+ * **`repoId` 是必要的，不是防禦性的多餘參數。** `lineage_id` 全域唯一，但只用它
+ * 過濾的話，資料庫裡任何一列指向同一血緣的舊資料都會被算進來——同一段程式碼
+ * 於是變成多個實體，輸出印成「slot 延續但內容血緣斷開」。那是**假斷層**，
+ * 不變量 2 指名的最嚴重失效模式：它會叫使用者忽略真實歷史。
+ *
+ * 身分正規化（`canonicalRepoPath`）擋的是「別再產生重複的 repo 列」；這一層
+ * 擋的是「已經有重複列的舊資料庫也不能得到錯答案」。兩者都要，因為存下來的
+ * 相對路徑無法還原成正規路徑，舊列不保證清得掉。
+ */
 export function entitiesFor(
   db: DatabaseSync,
+  repoId: number,
   lineageId: number,
   symbol: string,
 ): Array<{ entityId: number; stableKey: string; revisions: number }> {
@@ -264,10 +278,10 @@ export function entitiesFor(
        FROM revision r
        JOIN slot   s ON s.id = r.slot_id
        JOIN entity e ON e.id = r.entity_id
-      WHERE r.lineage_id = ? AND s.qualified_name = ?
+      WHERE r.repo_id = ? AND r.lineage_id = ? AND s.qualified_name = ?
       GROUP BY r.entity_id, e.stable_key
       ORDER BY COUNT(*) DESC, e.stable_key`,
-  ).all(lineageId, symbol) as unknown as Array<
+  ).all(repoId, lineageId, symbol) as unknown as Array<
     { entityId: number; stableKey: string; revisions: number }
   >;
 }
@@ -519,10 +533,10 @@ export async function why(
   try {
     // 先問「此刻誰擁有這個路徑」；檔案已被刪除時才回頭問「以前誰擁有過」。
     // 順序不能反過來——路徑還活著時 `lineageIdAt` 才是正確答案。
-    const current = lineageIdAt(db, untilSha, target.path);
+    const current = lineageIdAt(db, gitReport.repoId, untilSha, target.path);
     const lineageIds = current !== undefined
       ? [current]
-      : lineagesEverAt(db, untilSha, target.path);
+      : lineagesEverAt(db, gitReport.repoId, untilSha, target.path);
     const resurrected = current === undefined && lineageIds.length > 1;
     if (lineageIds.length === 0) {
       throw new Error(
@@ -561,7 +575,7 @@ export async function why(
     // 排序在合併之後重做一次，否則輸出順序會隨血緣的列舉順序漂移。
     const byEntity = new Map<number, ReturnType<typeof entitiesFor>[number]>();
     for (const id of lineageIds) {
-      for (const entity of entitiesFor(db, id, target.symbol)) {
+      for (const entity of entitiesFor(db, gitReport.repoId, id, target.symbol)) {
         const seen = byEntity.get(entity.entityId);
         if (seen === undefined || entity.revisions > seen.revisions) {
           byEntity.set(entity.entityId, entity);
@@ -598,6 +612,10 @@ export async function why(
       );
     });
     const notes: string[] = [];
+    if (gitReport.consolidation.absorbed.length > 0) {
+      // 合併掉使用者資料庫裡的列必須說出來，而且要說是哪幾條。
+      notes.push(repoConsolidationNotice(gitReport.consolidation));
+    }
     if (rebuilt) {
       // 丟掉使用者既有的索引是一件必須說出來的事，即使那份索引本來就答不出
       // 他現在問的問題。沉默會讓「為什麼這次跑比較久」變成一個謎。

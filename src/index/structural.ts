@@ -396,6 +396,7 @@ export function commitId(db: DatabaseSync, sha: string): number {
  */
 export function lineagesEverAt(
   db: DatabaseSync,
+  repoId: number,
   sha: string,
   pathName: string,
 ): number[] {
@@ -404,15 +405,25 @@ export function lineagesEverAt(
        FROM path_lineage_segment s
        JOIN git_commit from_c ON from_c.id = s.from_commit_id
        JOIN git_commit target ON target.sha = ? AND target.repo_id = from_c.repo_id
-      WHERE s.path = ?
+      WHERE from_c.repo_id = ? AND s.path = ?
         AND from_c.topo_order <= target.topo_order
       GROUP BY s.lineage_id
       ORDER BY lastSeen DESC, s.lineage_id`,
-  ).all(sha, pathName) as unknown as Array<{ id: number }>).map((row) => row.id);
+  ).all(sha, repoId, pathName) as unknown as Array<{ id: number }>).map((row) => row.id);
 }
 
+/**
+ * 「此刻誰擁有這個路徑」。
+ *
+ * **`repoId` 不是可有可無的。** 快路徑先前只用 `sha` 與 `path` 定位，同一個 sha
+ * 在資料庫裡出現不只一次時（同一個 repo 被不同拼法索引兩次，或上游與 fork
+ * 共用歷史）會挑到別個 repo 的血緣。`why` 接著拿那條血緣去索引、卻寫上自己的
+ * repo_id，於是同一段程式碼變成多個 entity，輸出印成「slot 延續但內容血緣
+ * 斷開」——**假斷層，不變量 2 指名的最嚴重失效模式**。
+ */
 export function lineageIdAt(
   db: DatabaseSync,
+  repoId: number,
   sha: string,
   pathName: string,
 ): number | undefined {
@@ -420,8 +431,8 @@ export function lineageIdAt(
     `SELECT fc.lineage_id AS id
        FROM file_change fc
        JOIN git_commit gc ON gc.id = fc.commit_id
-      WHERE gc.sha = ? AND fc.path = ?`,
-  ).get(sha, pathName) as { id: number } | undefined;
+      WHERE gc.repo_id = ? AND gc.sha = ? AND fc.path = ?`,
+  ).get(repoId, sha, pathName) as { id: number } | undefined;
   if (direct) return direct.id;
 
   const row = db.prepare(
@@ -430,12 +441,12 @@ export function lineageIdAt(
        JOIN git_commit from_c ON from_c.id = s.from_commit_id
        LEFT JOIN git_commit to_c ON to_c.id = s.to_commit_id
        JOIN git_commit target ON target.sha = ? AND target.repo_id = from_c.repo_id
-      WHERE s.path = ?
+      WHERE from_c.repo_id = ? AND s.path = ?
         AND from_c.topo_order <= target.topo_order
         AND (to_c.id IS NULL OR target.topo_order < to_c.topo_order)
       ORDER BY from_c.topo_order DESC
       LIMIT 1`,
-  ).get(sha, pathName) as { id: number } | undefined;
+  ).get(sha, repoId, pathName) as { id: number } | undefined;
   return row?.id;
 }
 

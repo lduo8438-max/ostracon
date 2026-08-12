@@ -391,6 +391,29 @@ bucket」的配對；它們集中在 25 個 commit 的 `Dashboard.fetchEndpoint`
 
 **貪婪而非最佳指派**是刻意的簡化。最佳二分指派（匈牙利演算法）在單一 commit 的候選規模下收益極小，但會讓結果難以解釋——而「為什麼系統認為這兩個是同一個」必須能對使用者說清楚。
 
+### repo 的身分是正規路徑，查詢一律綁 repo
+
+repo 的身分是 `git rev-parse --show-toplevel`，**不是 `--repo` 的原字串，
+也不是 `path.resolve`**。要收斂的有三種拼法，而 `path.resolve` 只解得開第一種：
+相對路徑、**repo 內的子目錄**（`--repo` 預設是 `process.cwd()`）、以及
+**symlink**（macOS 的 `/tmp` 就是）。
+
+沒有正規化時，同一個 repo 的不同拼法會在同一個資料庫裡各建一列。後果不是
+重複索引而已：以 sha 或 lineage 為鍵而**不綁 repo** 的查詢會撈到別列的資料，
+同一段程式碼於是被算成多個實體，`why` 印出「slot 延續但內容血緣斷開」——
+**假斷層**。實測 `ostracon why X` 之後再 `ostracon why X --repo .` 就會發生。
+
+所以防線有兩層，缺一不可：
+
+- **身分正規化**讓重複列不再產生；
+- **查詢綁 repo**（`lineageIdAt`、`lineagesEverAt`、`entitiesFor`）讓既有的
+  重複列也不能汙染答案。存下來的相對 `root_path` 無從還原成正規路徑
+  （不知道當初的 cwd），所以收斂**不保證**清得乾淨。
+
+改用正規路徑當身分時必須**同時**遷移舊列（`consolidateRepoPaths`），否則舊列
+找不到就會再插一列——修正親手製造出它要消滅的狀態。目錄已不存在的舊列不動：
+無從證明它是同一個 repo，而刪除是不可逆的。
+
 ### 相似度只由 MinHash 召回，不由它判定
 
 `revision.minhash`（128 permutations，token n-gram）僅用於產生 L4/L5 候選。**接受前必須計算精確 Jaccard 並寫入 `exact_jaccard`、`exact_verified = 1`**，schema 層級以 CHECK 強制。

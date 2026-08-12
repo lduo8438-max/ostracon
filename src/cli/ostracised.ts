@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import {
   assertExcursionScope,
@@ -172,7 +173,13 @@ export async function ostracised(
     // 會在這裡爆炸」，而不是預期它現在會失敗。
     assertExcursionScope(db, gitReport.repoId);
     const list = renderOstracised(listOstracised(db, gitReport.repoId, filter), filter);
-    return pass.mode === "rebuilt" ? `${REBUILD_NOTICE}\n\n${list}` : list;
+    const notes = [
+      ...(gitReport.consolidation.absorbed.length > 0
+        ? [repoConsolidationNotice(gitReport.consolidation)]
+        : []),
+      ...(pass.mode === "rebuilt" ? [REBUILD_NOTICE] : []),
+    ];
+    return notes.length > 0 ? `${notes.join("\n")}\n\n${list}` : list;
   } finally {
     db.close();
   }

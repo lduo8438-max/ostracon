@@ -96,7 +96,7 @@ function shape(db: DatabaseSync): string[] {
 async function fastPass(repo: string, dbPath: string, at: string, file: string) {
   const report = indexGit(repo, { dbPath, until: at });
   const db = open(dbPath);
-  const lineageId = lineageIdAt(db, at, file);
+  const lineageId = lineageIdAt(db, report.repoId, at, file);
   assert.ok(lineageId !== undefined, `${file} 在 ${at} 沒有血緣`);
   await indexLineage(db, repo, report.repoId, lineageId, INDEXER_VERSION);
   return { db, repoId: report.repoId };
@@ -142,7 +142,7 @@ describe("結構層的 scope", () => {
     const before = shape(db);
 
     // repo scope 的產出對單一血緣的問題已經更完整，快路徑一列都插不進去。
-    const lineageId = lineageIdAt(db, head, "src/guard.ts");
+    const lineageId = lineageIdAt(db, report.repoId, head, "src/guard.ts");
     await indexLineage(db, repo, report.repoId, lineageId!, INDEXER_VERSION);
 
     const again = await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);

@@ -125,11 +125,11 @@ describe("已消失的構造：定址與清單", () => {
     const { db, dbPath, repoId } = await indexAll(repo);
     // 前提：舊的解析方式在這裡必然失敗，否則這條測試沒有在測東西。
     assert.equal(
-      lineageIdAt(db, tip, "src/tried.ts"),
+      lineageIdAt(db, repoId, tip, "src/tried.ts"),
       undefined,
       "路徑已刪除，lineageIdAt 本來就該回 undefined",
     );
-    assert.equal(lineagesEverAt(db, tip, "src/tried.ts").length, 1);
+    assert.equal(lineagesEverAt(db, repoId, tip, "src/tried.ts").length, 1);
     detectExcursions(db, repoId, { scope: "repo" });
     db.close();
 
@@ -157,7 +157,7 @@ describe("已消失的構造：定址與清單", () => {
     const tip = commit("後續的無關改動");
 
     const { db, dbPath, repoId } = await indexAll(repo);
-    const all = lineagesEverAt(db, tip, "src/twice.ts");
+    const all = lineagesEverAt(db, repoId, tip, "src/twice.ts");
     assert.equal(all.length, 2, "同一路徑被兩條血緣先後佔用");
     detectExcursions(db, repoId, { scope: "repo" });
     db.close();
@@ -180,9 +180,9 @@ describe("已消失的構造：定址與清單", () => {
     write("src/live.ts", `${HELPER}\n`);
     const tip = commit("加入");
 
-    const { db, dbPath } = await indexAll(repo);
+    const { db, dbPath, repoId } = await indexAll(repo);
     assert.notEqual(
-      lineageIdAt(db, tip, "src/live.ts"),
+      lineageIdAt(db, repoId, tip, "src/live.ts"),
       undefined,
       "活著的路徑必須由 lineageIdAt 命中",
     );

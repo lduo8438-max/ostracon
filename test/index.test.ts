@@ -17,6 +17,7 @@ import "./paths.test.ts";
 import "./position.test.ts";
 import "./quote-audit.test.ts";
 import "./retry.test.ts";
+import "./repo-identity.test.ts";
 import "./repo-pass.test.ts";
 import "./shallow.test.ts";
 import "./signature-cache.test.ts";

@@ -97,6 +97,76 @@ export function findRepo(db: DatabaseSync, rootPath: string): number | undefined
   return r?.id;
 }
 
+export interface RepoConsolidation {
+  /** 被改寫成正規路徑的舊列數（0 或 1）。 */
+  migrated: number;
+  /** 被合併掉的重複列的舊 root_path。非空代表這個資料庫先前被索引了不只一次。 */
+  absorbed: string[];
+}
+
+/**
+ * 把「同一個 repo 的其他拼法」收斂成一列。
+ *
+ * 光是改用正規路徑當身分還不夠：既有資料庫裡那些用舊拼法存的列**找不到就會
+ * 再插一列**，於是這個修正自己製造出它要消滅的重複狀態。那正是
+ * 「升版本但不作廢舊產出」的同型錯誤，只是換成由修正本身造成。
+ *
+ * 判準是「舊列的 `root_path` 正規化之後與這次相同」，所以只收斂真正的同一個
+ * repo；目錄已經不存在的舊列一律不動——那可能是別台機器搬過來的資料庫，
+ * 我們無從判斷它是不是同一個 repo。
+ *
+ * 保留 commit 數最多的那一列，其餘經由 `ON DELETE CASCADE` 整列移除。刪除是
+ * 有代價的動作，但這些列**依定義是同一份語料的重複索引**，留著只會繼續產生
+ * 假斷層；而且重跑索引就能完全重建。呼叫端必須把這件事說出來。
+ */
+export function consolidateRepoPaths(
+  db: DatabaseSync,
+  canonicalPath: string,
+  canonicalise: (candidate: string) => string | undefined,
+): RepoConsolidation {
+  const rows = db.prepare(
+    `SELECT r.id AS id, r.root_path AS rootPath,
+            (SELECT COUNT(*) FROM git_commit c WHERE c.repo_id = r.id) AS commits
+       FROM repo r ORDER BY r.id`,
+  ).all() as unknown as { id: number; rootPath: string; commits: number }[];
+
+  const same = rows.filter((row) =>
+    row.rootPath === canonicalPath || canonicalise(row.rootPath) === canonicalPath);
+  if (same.length === 0) return { migrated: 0, absorbed: [] };
+
+  // 留 commit 最多的那一列；同數時留 id 最小的，讓結果與列的順序無關。
+  const keep = same.reduce((best, row) =>
+    row.commits > best.commits || (row.commits === best.commits && row.id < best.id)
+      ? row
+      : best);
+  const absorbed = same.filter((row) => row.id !== keep.id);
+
+  // 交易就地展開而不從 src/index/ 借 `inTransaction`——git 層不該反向依賴索引層。
+  db.exec("BEGIN");
+  try {
+    for (const row of absorbed) {
+      db.prepare("DELETE FROM repo WHERE id = ?").run(row.id);
+    }
+    if (keep.rootPath !== canonicalPath) {
+      db.prepare("UPDATE repo SET root_path = ? WHERE id = ?").run(canonicalPath, keep.id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    migrated: keep.rootPath === canonicalPath ? 0 : 1,
+    absorbed: absorbed.map((row) => row.rootPath),
+  };
+}
+
+export const repoConsolidationNotice = (c: RepoConsolidation): string =>
+  `注意：這個資料庫裡有 ${c.absorbed.length + 1} 列指向同一個 repo`
+  + `（${[...c.absorbed, "本次"].join("、")}），已合併成一列並重新索引。`
+  + "repo 的身分先前是 --repo 的原字串，同一個 repo 的不同拼法會各建一列。";
+
 /**
  * 從資料庫重建血緣續跑狀態。
  *

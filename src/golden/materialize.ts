@@ -132,8 +132,8 @@ export async function materializeGoldenCoordinates(
       ]);
       if (!prev && !next) continue;
       const lineageId =
-        lineageIdAt(db, c.at_commit, c.entity.path)
-        ?? (parent ? lineageIdAt(db, parent, c.entity.path) : undefined);
+        lineageIdAt(db, gitReport.repoId, c.at_commit, c.entity.path)
+        ?? (parent ? lineageIdAt(db, gitReport.repoId, parent, c.entity.path) : undefined);
       if (lineageId === undefined) continue;
       const representative = next ?? prev!;
       const slotId = ensureSlot(
@@ -191,7 +191,7 @@ export async function materializeGoldenCoordinates(
     // slot_discontinuity，而不是在 golden 裡另寫一套只會通過 fixture 的捷徑。
     for (const c of fixture.cases.filter((item) => item.kind === "discontinuity")) {
       if (!c.at_commit || !c.slot) continue;
-      const lineageId = lineageIdAt(db, c.at_commit, c.slot.path);
+      const lineageId = lineageIdAt(db, gitReport.repoId, c.at_commit, c.slot.path);
       if (lineageId === undefined) continue;
       await indexLineage(db, repo, gitReport.repoId, lineageId, INDEXER_VERSION);
     }
@@ -243,8 +243,8 @@ export async function materializeGoldenCoordinates(
             nextAnchor.occurrence ?? 0
           ];
         if (!prev || !next) continue;
-        const prevLineage = lineageIdAt(db, prev.commit, prev.path);
-        const nextLineage = lineageIdAt(db, next.commit, next.path);
+        const prevLineage = lineageIdAt(db, gitReport.repoId, prev.commit, prev.path);
+        const nextLineage = lineageIdAt(db, gitReport.repoId, next.commit, next.path);
         if (prevLineage === undefined || nextLineage === undefined) continue;
         const candidates = (
           side: "prev" | "next",

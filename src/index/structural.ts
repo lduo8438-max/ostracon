@@ -371,11 +371,27 @@ export function inTransaction<T>(db: DatabaseSync, work: () => T): T {
   }
 }
 
-export function commitId(db: DatabaseSync, sha: string): number {
-  const row = db.prepare("SELECT id FROM git_commit WHERE sha = ?").get(sha) as
-    | { id: number }
-    | undefined;
-  if (!row) throw new Error(`資料庫找不到 commit ${sha}`);
+/**
+ * sha → `git_commit.id`。**必須綁 repo。**
+ *
+ * sha 在單一 repo 內唯一，在**資料庫內不唯一**：上游與 fork、clone、worktree
+ * 都共用歷史，而 `--db` 預設是 `.ostracon/index.db`（相對 cwd），所以在同一個
+ * 目錄下對兩個 repo 各跑一次就會落進同一個資料庫。
+ *
+ * 不綁 repo 的話這裡回傳的是**任意一列**，而它在寫入路徑上——`ensureRevision`、
+ * `ensureEntity`、`revision_change` 都經過它。結果是 revision 掛到別的 repo 的
+ * commit 上。實測（12 個 commit 的 fork/upstream）：`why` 之後 5 筆跨 repo 關聯，
+ * 跑過全 repo pass 之後 66 筆，且隨 repo 大小成長。
+ *
+ * 目前輸出還是對的——查詢鏈都繞過 `commit_id`——但那是巧合不是保證：
+ * `DELETE FROM repo` 已經因此直接失敗（entity.birth_commit_id 沒有 CASCADE），
+ * 而下一個加上 `commit_id` join 的人會直接踩到。
+ */
+export function commitId(db: DatabaseSync, repoId: number, sha: string): number {
+  const row = db.prepare(
+    "SELECT id FROM git_commit WHERE repo_id = ? AND sha = ?",
+  ).get(repoId, sha) as { id: number } | undefined;
+  if (!row) throw new Error(`資料庫的 repo ${repoId} 找不到 commit ${sha}`);
   return row.id;
 }
 
@@ -450,21 +466,32 @@ export function lineageIdAt(
   return row?.id;
 }
 
-/** 讀回某個 commit／路徑的 hunk。零列代表沒有 hunk 證據，不是沒有改動。 */
-export function hunksFor(db: DatabaseSync, sha: string, pathName: string): DiffHunk[] {
+/**
+ * 讀回某個 commit／路徑的 hunk。零列代表沒有 hunk 證據，不是沒有改動。
+ *
+ * 綁 repo 的理由同 `commitId`，但後果不同：這裡沒有 LIMIT，所以共用歷史的兩個
+ * repo 會讓同一個 hunk 被回傳兩次，而 hunk 是 L3c 的位置證據。
+ */
+export function hunksFor(
+  db: DatabaseSync,
+  repoId: number,
+  sha: string,
+  pathName: string,
+): DiffHunk[] {
   return db.prepare(
     `SELECT h.old_start AS oldStart, h.old_count AS oldCount,
             h.new_start AS newStart, h.new_count AS newCount
        FROM file_hunk h
        JOIN file_change f ON f.id = h.file_change_id
        JOIN git_commit c ON c.id = f.commit_id
-      WHERE c.sha = ? AND f.path = ?
+      WHERE c.repo_id = ? AND c.sha = ? AND f.path = ?
       ORDER BY h.hunk_index`,
-  ).all(sha, pathName) as unknown as DiffHunk[];
+  ).all(repoId, sha, pathName) as unknown as DiffHunk[];
 }
 
 export function isParentOf(
   db: DatabaseSync,
+  repoId: number,
   parentSha: string,
   childSha: string,
 ): boolean {
@@ -472,9 +499,50 @@ export function isParentOf(
     `SELECT 1 AS ok FROM git_commit_parent p
        JOIN git_commit child  ON child.id  = p.child_id
        JOIN git_commit parent ON parent.id = p.parent_id
-      WHERE child.sha = ? AND parent.sha = ?`,
-  ).get(childSha, parentSha) as { ok: number } | undefined;
+      WHERE child.repo_id = ? AND child.sha = ? AND parent.sha = ?`,
+  ).get(repoId, childSha, parentSha) as { ok: number } | undefined;
   return row !== undefined;
+}
+
+/**
+ * 結構層寫入之後，這個 repo 不得有任何一列指向別的 repo 的 commit。
+ *
+ * 這是**不變式檢查，不是防禦性程式碼**。以 sha 為鍵而不綁 repo 的查詢會靜默
+ * 挑到別列，而 sha 在資料庫內並不唯一（上游／fork／clone／worktree 共用歷史，
+ * 且 `--db` 預設相對 cwd，同一個目錄下對兩個 repo 各跑一次就落進同一個檔案）。
+ *
+ * 汙染的性質是**潛伏**的：實測輸出仍然正確，因為查詢鏈都繞過 `commit_id`。
+ * 但它隨每次索引累積（12 個 commit 的 fork 實測：快路徑 5 筆、全 repo pass
+ * 66 筆），而且已經讓 `DELETE FROM repo` 直接違反外鍵。所以要在寫入端就擋，
+ * 不是等某個查詢開始說謊才發現。
+ *
+ * 成本實測：demo 語料 7,212 列 revision，三道檢查合計 29.8 ms。每次指令呼叫
+ * 跑一次（不是每次查詢），相對於索引本身的秒級耗時可以忽略。
+ */
+export function assertNoCrossRepoRows(db: DatabaseSync, repoId: number): void {
+  const checks: Array<[string, string]> = [
+    ["revision", `SELECT COUNT(*) AS n FROM revision r
+        JOIN git_commit c ON c.id = r.commit_id
+       WHERE r.repo_id = ? AND c.repo_id <> r.repo_id`],
+    ["entity 的誕生 commit", `SELECT COUNT(*) AS n FROM entity e
+        JOIN git_commit c ON c.id = e.birth_commit_id
+       WHERE e.repo_id = ? AND c.repo_id <> e.repo_id`],
+    ["revision_change", `SELECT COUNT(*) AS n FROM revision_change rc
+        JOIN git_commit c ON c.id = rc.commit_id
+        JOIN entity e ON e.id = rc.entity_id
+       WHERE e.repo_id = ? AND c.repo_id <> e.repo_id`],
+  ];
+  const bad = checks
+    .map(([name, sql]) =>
+      [name, (db.prepare(sql).get(repoId) as { n: number }).n] as const)
+    .filter(([, n]) => n > 0);
+  if (bad.length === 0) return;
+  throw new Error(
+    `repo ${repoId} 有 ${bad.map(([name, n]) => `${n} 列 ${name}`).join("、")}`
+    + "指向別的 repo 的 commit。\n"
+    + "sha 在單一 repo 內唯一，在資料庫內不唯一——共用歷史的 repo（上游與 fork、"
+    + "clone、worktree）會讓不綁 repo 的查詢挑到別列。請重建此 repo 的索引。",
+  );
 }
 
 export function ensureSlot(
@@ -673,6 +741,7 @@ export function discontinuitySimilarity(
 export function writeDiscontinuity(
   db: DatabaseSync,
   args: {
+    repoId: number;
     slotId: number;
     commitSha: string;
     prevEntity: number;
@@ -693,7 +762,7 @@ export function writeDiscontinuity(
        similarity = excluded.similarity`,
   ).run(
     args.slotId,
-    commitId(db, args.commitSha),
+    commitId(db, args.repoId, args.commitSha),
     args.prevEntity,
     args.nextEntity,
     args.similarity,
@@ -721,7 +790,7 @@ export function createEntity(
     `INSERT INTO entity (repo_id, stable_key, birth_commit_id)
      VALUES (?, ?, ?)
      ON CONFLICT (repo_id, stable_key) DO NOTHING`,
-  ).run(repoId, key, commitId(db, birthSha));
+  ).run(repoId, key, commitId(db, repoId, birthSha));
   return (prep(db, 
     "SELECT id FROM entity WHERE repo_id = ? AND stable_key = ?",
   ).get(repoId, key) as { id: number }).id;
@@ -746,7 +815,7 @@ export function ensureEntity(
     `INSERT INTO entity (repo_id, stable_key, birth_commit_id)
      VALUES (?, ?, ?)
      ON CONFLICT (repo_id, stable_key) DO NOTHING`,
-  ).run(repoId, key, commitId(db, birthSha));
+  ).run(repoId, key, commitId(db, repoId, birthSha));
   return (prep(db, 
     "SELECT id FROM entity WHERE repo_id = ? AND stable_key = ?",
   ).get(repoId, key) as { id: number }).id;
@@ -779,7 +848,7 @@ export function ensureRevision(
   );
   const existing = prep(db, 
     "SELECT id FROM revision WHERE commit_id = ? AND slot_id = ?",
-  ).get(commitId(db, observed.commit), slotId) as { id: number } | undefined;
+  ).get(commitId(db, repoId, observed.commit), slotId) as { id: number } | undefined;
   if (existing) return existing.id;
 
   const bytes = utf8ByteRange(observed.node, observed.source);
@@ -806,7 +875,7 @@ export function ensureRevision(
      )`,
   ).run(
     repoId,
-    commitId(db, observed.commit),
+    commitId(db, repoId, observed.commit),
     slotId,
     entityId,
     lineageId,
@@ -869,6 +938,7 @@ export function writeMatch(
 export function writeChange(
   db: DatabaseSync,
   args: {
+    repoId: number;
     prevRevision?: number;
     nextRevision?: number;
     commitSha: string;
@@ -889,7 +959,7 @@ export function writeChange(
   ).run(
     args.prevRevision ?? null,
     args.nextRevision ?? null,
-    commitId(db, args.commitSha),
+    commitId(db, args.repoId, args.commitSha),
     args.entityId,
     args.changeLevel,
     args.sigChanged ? 1 : 0,

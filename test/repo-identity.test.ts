@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import { canonicalRepoPath, indexGit } from "../src/git/index.ts";
 import { consolidateRepoPaths } from "../src/git/persist.ts";
 import { entitiesFor, why } from "../src/cli/why.ts";
+import { assertNoCrossRepoRows } from "../src/index/structural.ts";
 
 /**
  * repo 的身分先前是 `--repo` 的**原字串**，所以同一個 repo 的不同拼法會在同一個
@@ -154,6 +155,73 @@ describe("repo 的身分", () => {
     const report = indexGit(repo, { dbPath });
     assert.equal(report.consolidation.migrated, 1, "舊列該被改寫，不是被略過");
     assert.deepEqual(repoRows(dbPath), [canonicalRepoPath(repo)]);
+  });
+
+  it("**共用歷史的兩個 repo 進同一個資料庫，不得互相掛載**", async () => {
+    // sha 在單一 repo 內唯一，在資料庫內不唯一：上游與 fork、clone、worktree
+    // 都共用歷史。而 `--db` 預設是相對 cwd 的 `.ostracon/index.db`，所以在同一個
+    // 目錄下對兩個 repo 各跑一次就落進同一個檔案——這是預設參數下的路徑。
+    //
+    // 修正前實測：`why` 之後 5 筆跨 repo 關聯，跑過全 repo pass 之後 66 筆，
+    // 且 `DELETE FROM repo` 會直接違反外鍵。輸出當時仍然正確，所以這是潛伏
+    // 汙染而不是錯答案——正因為看不見，才需要斷言而不是靠眼睛。
+    const { repo: upstream } = makeRepo();
+    const fork = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-fork-")), "f");
+    execFileSync("git", ["clone", "-q", upstream, fork]);
+    const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-db5-")), "i.db");
+    const target = "src/account.ts:serializeAccount";
+
+    await why(upstream, target, dbPath, "HEAD");
+    await why(fork, target, dbPath, "HEAD");
+
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA foreign_keys = ON");
+    const repos = (db.prepare("SELECT id FROM repo ORDER BY id").all() as
+      unknown as { id: number }[]).map((r) => r.id);
+    assert.equal(repos.length, 2, "前提：兩個不同的 repo，各自一列");
+    assert.ok(
+      (db.prepare(
+        "SELECT COUNT(*) AS n FROM git_commit GROUP BY sha HAVING COUNT(*) > 1 LIMIT 1",
+      ).get() as { n: number } | undefined) !== undefined,
+      "前提：至少有一個 sha 同時存在於兩列 repo",
+    );
+    for (const id of repos) assertNoCrossRepoRows(db, id);
+
+    // 掛載乾淨的話，刪掉其中一個 repo 不會違反外鍵，也不會動到另一個。
+    const others = db.prepare(
+      "SELECT COUNT(*) AS n FROM revision WHERE repo_id = ?",
+    ).get(repos[1]!) as { n: number };
+    db.prepare("DELETE FROM repo WHERE id = ?").run(repos[0]!);
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM revision WHERE repo_id = ?")
+        .get(repos[1]!) as { n: number }).n,
+      others.n,
+      "刪掉一個 repo 不得連帶刪掉另一個的資料",
+    );
+    db.close();
+  });
+
+  it("assertNoCrossRepoRows 抓得到被汙染的資料庫", () => {
+    // 斷言本身要有測試，否則它可能永遠回傳 true 而沒人發現。
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+    db.exec(
+      `INSERT INTO repo (id, root_path, created_at) VALUES
+         (1, '/a', '2026-01-01'), (2, '/b', '2026-01-01');
+       INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order) VALUES
+         (1, 1, 'aaa', '2026-01-01', '2026-01-01', 'x', 0);
+       -- repo 2 的 entity 誕生於 repo 1 的 commit：commitId 挑錯列的結果
+       INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+         VALUES (1, 2, 'key', 1);`,
+    );
+    assert.doesNotThrow(() => assertNoCrossRepoRows(db, 1));
+    assert.throws(
+      () => assertNoCrossRepoRows(db, 2),
+      /指向別的 repo 的 commit/,
+    );
+    db.close();
   });
 
   it("解不開的舊列不刪除——無從證明它是同一個 repo", () => {

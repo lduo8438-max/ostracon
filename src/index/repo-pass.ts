@@ -383,7 +383,7 @@ export async function indexRepoStructure(
         lineageOfNext.set(o, change.lineageId);
         nextDecls.push(o);
       }
-      hunksByLineage.set(change.lineageId, hunksFor(db, commit.sha, change.path));
+      hunksByLineage.set(change.lineageId, hunksFor(db, repoId, commit.sha, change.path));
       if (predecessor) {
         recreatedByLineage.set(change.lineageId, {
           predecessor,
@@ -477,6 +477,7 @@ export async function indexRepoStructure(
           writeMatch(db, prevRevision, nextRevision, matchByNextKey.get(nextKey)!);
           report.matches++;
           writeChange(db, {
+        repoId,
             prevRevision,
             nextRevision,
             commitSha: commit.sha,
@@ -493,6 +494,7 @@ export async function indexRepoStructure(
         } else {
           report.births++;
           writeChange(db, {
+        repoId,
             nextRevision,
             commitSha: commit.sha,
             entityId,
@@ -517,6 +519,7 @@ export async function indexRepoStructure(
             // 卻不能授權我們任選一個 entity 填進外鍵。
             if (priorEntity !== undefined) {
               writeDiscontinuity(db, {
+          repoId,
                 slotId,
                 commitSha: commit.sha,
                 prevEntity: priorEntity,
@@ -541,6 +544,7 @@ export async function indexRepoStructure(
               && similarity <= OCCUPANT_REPLACEMENT_MAX_SIMILARITY
             ) {
               writeDiscontinuity(db, {
+          repoId,
                 slotId,
                 commitSha: commit.sha,
                 prevEntity: previousOccupant,
@@ -579,6 +583,7 @@ export async function indexRepoStructure(
           ?? ensureRevision(db, repo, repoId, lineageId, resolved, observed);
         report.deaths++;
         writeChange(db, {
+        repoId,
           prevRevision,
           commitSha: commit.sha,
           entityId: resolved,

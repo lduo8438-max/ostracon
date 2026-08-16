@@ -414,6 +414,17 @@ repo 的身分是 `git rev-parse --show-toplevel`，**不是 `--repo` 的原字�
 找不到就會再插一列——修正親手製造出它要消滅的狀態。目錄已不存在的舊列不動：
 無從證明它是同一個 repo，而刪除是不可逆的。
 
+**sha 也不是資料庫層級的身分。** sha 在單一 repo 內唯一，但上游與 fork、
+`git clone`、`git worktree` 共用歷史，而 `--db` 預設相對 cwd——在同一個目錄下
+對兩個 repo 各跑一次就落進同一個檔案。所以 `commitId`、`hunksFor`、`isParentOf`
+一律帶 `repoId`。`commitId` 尤其關鍵：它在**寫入路徑**上，挑錯列會把 revision
+掛到別的 repo 的 commit 上。
+
+那類汙染是**潛伏**的——輸出仍然正確，因為查詢鏈繞過 `commit_id`；`stable_key`
+也不受影響（雜湊的是 sha 字串而非列）。但它隨每次索引累積，並讓
+`DELETE FROM repo` 直接違反外鍵。看不見的東西不能靠眼睛擋，所以結構層寫入之後
+以 `assertNoCrossRepoRows` 斷言，與 `assertExcursionScope` 同一個模式。
+
 ### 相似度只由 MinHash 召回，不由它判定
 
 `revision.minhash`（128 permutations，token n-gram）僅用於產生 L4/L5 候選。**接受前必須計算精確 Jaccard 並寫入 `exact_jaccard`、`exact_verified = 1`**，schema 層級以 CHECK 強制。

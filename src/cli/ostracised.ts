@@ -7,6 +7,7 @@ import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
+import { assertNoCrossRepoRows } from "../index/structural.ts";
 import {
   assertExcursionScope,
   detectExcursions,
@@ -172,6 +173,7 @@ export async function ostracised(
     // 索引就在上面兩行，理論上一定成立；斷言的意義是「將來有人改成可跳過索引時
     // 會在這裡爆炸」，而不是預期它現在會失敗。
     assertExcursionScope(db, gitReport.repoId);
+    assertNoCrossRepoRows(db, gitReport.repoId);
     const list = renderOstracised(listOstracised(db, gitReport.repoId, filter), filter);
     const notes = [
       ...(gitReport.consolidation.absorbed.length > 0

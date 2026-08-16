@@ -871,10 +871,41 @@ WHERE gc.sha = ? AND fc.path = ?     -- 沒有 repo 過濾，也沒有 LIMIT
 實測（同一個 repo 四種拼法：預設、`--repo .`、絕對路徑、從子目錄 `--repo ..`）：
 修正前第二次起就報假斷層，修正後**四種輸出逐字相同、repo 表只有一列**。
 
-**殘留（已知，未修）**：`commitId`、`hunksFor` 等十餘支以 sha 為鍵的查詢同樣
-沒綁 repo。身分正規化之後，路徑拼法已無法再製造重複列，殘留的暴露面只剩
-「上游與 fork 共存於同一資料庫」。那是一次機械式的參數穿透，拆成獨立切片才
-看得出退步歸屬。
+#### 以 sha 為鍵的查詢全面綁 repo（2026-08-12）
+
+上一條的殘留。**sha 在單一 repo 內唯一，在資料庫內不唯一**：上游與 fork、
+`git clone`、`git worktree` 都共用歷史。`--db` 預設是相對 cwd 的
+`.ostracon/index.db`，所以**在同一個目錄下對兩個 repo 各跑一次就落進同一個
+檔案**——拿 fork 跟上游比對正是這個工具的自然用法。
+
+`commitId(db, sha)` 在**寫入路徑**上（`ensureRevision`、`ensureEntity`、
+`revision_change` 都經過它），不綁 repo 就回傳任意一列。實測（12 個 commit 的
+fork／upstream，預設參數）：
+
+| | 修正前 | 修正後 |
+|---|---:|---:|
+| `why` 之後的跨 repo 關聯 | 5 | **0** |
+| `ostracised`（全 repo pass）之後 | **66** | **0** |
+| `DELETE FROM repo` | FK 違反，**失敗** | 成功，另一個 repo 未受影響 |
+| `why` / `ostracised` 的輸出 | 四組比對全部相同 | 同左 |
+
+**這是潛伏汙染，不是錯答案。** 輸出當時仍然正確，因為查詢鏈都繞過
+`commit_id`；`stable_key` 也不受影響（它雜湊的是 sha 字串而不是列，所以
+不變量 1 安全）。但汙染隨每次索引累積、隨 repo 大小成長，而且已經讓資料庫
+變得刪不掉。**下一個加上 `commit_id` join 的人會直接踩到。**
+
+修正是機械式的參數穿透：`commitId`、`hunksFor`、`isParentOf` 全部加 `repoId`，
+`writeChange` 與 `writeDiscontinuity` 的 args 補上 `repoId`。
+
+**真正耐久的是 `assertNoCrossRepoRows`**：結構層寫入之後檢查這個 repo 沒有任何
+一列指向別的 repo 的 commit，`why` 與 `ostracised` 各呼叫一次。潛伏汙染看不見，
+所以不能靠眼睛擋——這與 `assertExcursionScope` 是同一個模式。
+成本實測：demo 語料 7,212 列 revision，三道檢查合計 **29.8 ms**（每次指令一次，
+不是每次查詢），相對於索引本身的秒級耗時可以忽略。
+
+`topo_order` 的排序風險量過：共用前綴的 12 個 sha **topo_order 全部一致**，
+所以排序目前不會出錯。那是線性歷史的性質，不是保證——但綁 repo 之後這條路
+已經封死，不必再依賴它。
 
 #### 中文 controlled fixture 與 `kind: evidence`（2026-08-10）
 

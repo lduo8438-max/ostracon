@@ -167,7 +167,7 @@ export async function indexLineage(
     const ladder = matchPools(
       prevPool,
       nextPool,
-      new Map([[lineageId, hunksFor(db, touch.sha, touch.path)]]),
+      new Map([[lineageId, hunksFor(db, repoId, touch.sha, touch.path)]]),
     );
     // 用對照表把匹配還原成宣告座標，不從 id 字串切——id 是不透明識別碼。
     const matchedPrev = new Map<string, string>(); // prevKey → nextKey
@@ -233,6 +233,7 @@ export async function indexLineage(
           writeMatch(db, prevRevision, nextRevision, matchByNextKey.get(nextKey)!);
           report.matches++;
           writeChange(db, {
+        repoId,
             prevRevision,
             nextRevision,
             commitSha: touch.sha,
@@ -244,6 +245,7 @@ export async function indexLineage(
         } else {
           report.births++;
           writeChange(db, {
+        repoId,
             nextRevision,
             commitSha: touch.sha,
             entityId,
@@ -265,6 +267,7 @@ export async function indexLineage(
             );
             if (priorEntity !== undefined) {
               writeDiscontinuity(db, {
+          repoId,
                 slotId,
                 commitSha: touch.sha,
                 prevEntity: priorEntity,
@@ -287,6 +290,7 @@ export async function indexLineage(
               && similarity <= OCCUPANT_REPLACEMENT_MAX_SIMILARITY
             ) {
               writeDiscontinuity(db, {
+          repoId,
                 slotId,
                 commitSha: touch.sha,
                 prevEntity: previousOccupant,
@@ -314,6 +318,7 @@ export async function indexLineage(
           ?? ensureRevision(db, repo, repoId, lineageId, resolved, observed);
         report.deaths++;
         writeChange(db, {
+        repoId,
           prevRevision,
           commitSha: touch.sha,
           entityId: resolved,
@@ -322,7 +327,7 @@ export async function indexLineage(
         });
         db.prepare(
           "UPDATE entity SET death_commit_id = ? WHERE id = ? AND death_commit_id IS NULL",
-        ).run(commitId(db, touch.sha), resolved);
+        ).run(commitId(db, repoId, touch.sha), resolved);
       }
     });
 

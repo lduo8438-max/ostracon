@@ -13,7 +13,12 @@ import {
   type ExcursionMethod,
   type ExcursionStrength,
 } from "../index/excursion.ts";
-import { git, lineageIdAt, lineagesEverAt } from "../index/structural.ts";
+import {
+  assertNoCrossRepoRows,
+  git,
+  lineageIdAt,
+  lineagesEverAt,
+} from "../index/structural.ts";
 import {
   extractFromCommitMessages,
   extractFromLinkedDocuments,
@@ -563,6 +568,11 @@ export async function why(
         await indexLineage(db, repo, gitReport.repoId, id, INDEXER_VERSION);
       }
     }
+    // 寫入端的不變式：這個 repo 的列不得指向別的 repo 的 commit。共用歷史的
+    // repo（上游與 fork、clone、worktree）落進同一個資料庫時，以 sha 為鍵而
+    // 不綁 repo 的查詢會靜默挑錯——那類汙染是潛伏的，輸出還是對的，所以只能
+    // 在這裡擋，不能等某個查詢開始說謊。
+    assertNoCrossRepoRows(db, gitReport.repoId);
 
     // 證據層：零網路、零 LLM。commit message 已經在資料庫裡，規則式抽取器只挑
     // 有明確理由標記的行，全部通過 span 斷言才會出現在時間軸上。

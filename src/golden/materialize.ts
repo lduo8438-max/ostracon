@@ -177,7 +177,7 @@ export async function materializeGoldenCoordinates(
       ).run(
         prevRevision ?? null,
         nextRevision ?? null,
-        commitId(db, c.at_commit),
+        commitId(db, gitReport.repoId, c.at_commit),
         entityId,
         actual,
         prev && next && prev.node.text.split("\n", 1)[0] !== next.node.text.split("\n", 1)[0]
@@ -279,8 +279,8 @@ export async function materializeGoldenCoordinates(
         }
         // hunk 描述的是「next commit 相對它的父」。鏈上的兩個錨點若不是父子，
         // 那份 hunk 就不是這一步的差異，餵下去會算出錯誤的位置。寧可不給。
-        const hunks = isParentOf(db, prev.commit, next.commit)
-          ? hunksFor(db, next.commit, next.path)
+        const hunks = isParentOf(db, gitReport.repoId, prev.commit, next.commit)
+          ? hunksFor(db, gitReport.repoId, next.commit, next.path)
           : undefined;
         const ladder = matchLadder(
           prevCandidates,

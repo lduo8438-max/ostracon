@@ -66,7 +66,7 @@ CI、文件與這支指令全都從它讀，沒有第二份 SHA 可以分岔。�
 
 ```bash
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
-pnpm test        # 先跑 typecheck，再跑單元測試（293 個）
+pnpm test        # 先跑 typecheck，再跑單元測試（295 個）
 
 # 印出一段程式碼的演化史
 pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo

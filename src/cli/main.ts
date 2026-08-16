@@ -22,6 +22,9 @@ const USAGE = `ostracon — 從 git history 重建程式碼的決策演化史
   ostracon ostracised [--repo <path>] [--db <file>] [--until <sha>] [--strength A|C]
         列出試過又被推翻的做法。一律跑全 repo pass——搬移守門在單一血緣下是瞎的。
 
+  ostracon ui [--db <file>] [--port <n>] [--repo-id <n>]
+        三欄畫面：結構 → 演化 → 意圖。只讀不建索引，只綁 127.0.0.1。
+
   ostracon evidence extract --db <file> [--repo-id <n>]
         從 commit message 抽取理由並驗證 span。零網路、零 LLM。
 
@@ -40,6 +43,9 @@ async function dispatch(argv: string[]): Promise<void> {
 
     case "ostracised":
       return (await import("./ostracised.ts")).main(rest);
+
+    case "ui":
+      return (await import("./ui.ts")).main(rest);
 
     case "evidence": {
       const [sub, ...args] = rest;

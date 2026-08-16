@@ -23,5 +23,6 @@ import "./repo-pass.test.ts";
 import "./shallow.test.ts";
 import "./signature-cache.test.ts";
 import "./span.test.ts";
+import "./ui.test.ts";
 import "./why.test.ts";
 import "./word-sense.test.ts";

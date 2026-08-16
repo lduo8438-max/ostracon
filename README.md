@@ -41,6 +41,7 @@ ostracon why <path>:<symbol>     印出一段程式碼的演化史
 ostracon ostracised              列出試過又被推翻的做法
 ostracon evidence extract        從 commit message 抽取理由並驗證 span
 ostracon evidence linked         取回被參照的 GitHub PR / issue 討論串
+ostracon ui                      三欄畫面：結構 → 演化 → 意圖（只綁 127.0.0.1）
 ```
 
 ## 自己驗證它的宣稱
@@ -66,7 +67,7 @@ CI、文件與這支指令全都從它讀，沒有第二份 SHA 可以分岔。�
 
 ```bash
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
-pnpm test        # 先跑 typecheck，再跑單元測試（302 個）
+pnpm test        # 先跑 typecheck，再跑單元測試（310 個）
 
 # 印出一段程式碼的演化史
 pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo
@@ -79,6 +80,9 @@ pnpm ostracised -- --repo /path/to/repo [--strength A]
 
 # 取回已參照的 GitHub PR / issue 文件（無 token 時安全略過）
 GITHUB_TOKEN=... pnpm evidence:linked -- --db /path/to/index.db
+
+# 三欄畫面。只讀不建索引，零相依、零建置流程、不連外
+pnpm ui -- --db /path/to/index.db
 ```
 
 輸出長這樣：
@@ -172,7 +176,21 @@ revert，或移除掉的內容與當初加入的逐字相同）；C 只有生命
 
 預設的快路徑只索引目標檔案的血緣，看不到跨檔案搬移；`--full` 看得到，代價是慢。
 全 repo 索引的效能已達標：`create-t3-app` 1,378 commits 實測 8.3 秒、峰值 RSS
-446 MiB，線性外推一萬 commit 約 1 分鐘（預算 10 分鐘）。**還沒有前端。**
+446 MiB，線性外推一萬 commit 約 1 分鐘（預算 10 分鐘）。
+
+### 三欄畫面
+
+`ostracon ui` 開一個本機頁面：**結構 → 演化 → 意圖**。`node:http` 加手寫
+HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁 `127.0.0.1`——
+資料庫裡是整個 repo 的歷史。
+
+意圖欄替**每一次改動保留一格，沒有證據的就留白**。這是刻意的：實測 Osiris
+只有 4.0% 的 commit 說得出為什麼，把空格填滿或摺疊掉都是對資料說謊。標頭直接
+印出「N / M 次改動說得出為什麼」。
+
+版面上唯一的暖色只給逐字引文——看到那個顏色就是看到有人真的寫下了那句話。
+介面其餘部分一律等寬字（路徑、符號、sha 都是機器座標），只有引文用比例字體
+並放大：排版的分野就是認識論的分野。
 
 `stated` commit-message 證據完全離線。`linked` 文件收取需要網路與 GitHub token；
 沒有 token 時其餘索引仍正常完成，只是 linked 層為空。測試與 golden 只讀

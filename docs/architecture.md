@@ -716,6 +716,46 @@ excursion 升成 B 級——B 級要求文字明確提到該做法，現有 span
 那次改動「有意圖」。`v_presentable_claim` 的門仍然不變：只有 verified 支持證據的
 stated／linked 能進正式畫面，inferred 仍永遠不進。
 
+### 聚合訊息不得歸因
+
+squash merge 把 N 個 PR 壓成一顆 commit，body 是那些 PR 標題串成的清單。對證據層
+來說那些句子逐字為真；對 claim 層來說是災難——**「哪一條 bullet 對應哪一個檔案
+改動」這個映射已經被 squash 銷毀，git 裡不再存在**。照常升格的話，甲 PR 的理由會
+掛到乙 entity 上。
+
+這是不變量 11 的反面：那些條目各有各的 `provenance_root`，我們卻把它們當成同一份
+文件在用。去重救不了——拆開也還原不了遺失的 PR → file/entity join key。
+
+**判準是結構，不是數量。**「body 裡有幾條 bullet」是語料門檻，換個 repo 就要重調；
+`src/claim/aggregate.ts` 要求**至少兩條帶 PR 參照的清單條目，且指向至少兩個不同的
+PR**——一段普通的 commit body 不會逐條標註不同的 PR 編號。實測 create-t3-app
+1,378 顆 commit 判出 8 顆聚合，而兩顆各有 5、6 條分點但沒有相異 PR 參照的普通
+commit 正確地沒有被判進來。
+
+判為聚合之後：
+
+- **主旨行的 evidence 照常升格**——那是作者替整顆 commit 寫的，沒有被 squash 打散。
+- **body 的 evidence 保留為 verified evidence，但不升格成任何 claim。** 事實
+  「這句話存在於這則訊息」仍然成立；壞掉的只是歸屬。**不刪證據。**
+- **經由該 commit 連入的 linked PR evidence 一律不得歸因。** 那條 `reference_link`
+  只證明「這顆 commit 提到那個 PR」，而聚合 commit 提到上百個。
+
+實測（create-t3-app fresh DB，1,378 commit）：claim **271 → 18**，
+`abandoned_reason` **55 → 0**，verified evidence 維持 30 條不變。存活的 18 條是
+主旨行 14 條加上一般 commit body 的 4 條，沒有一條來自聚合 commit。Osiris
+**74 → 74**，完全不受影響——它的引文全部在主旨行。
+
+**抑制不得靜默。** CLI 印出「253 個候選來自 5 顆聚合 commit」，UI 標頭另掛一條
+說明帶。沒有這個數字，使用者會把大片空白讀成「這個團隊不寫理由」，而實情是理由
+寫了、只是對應關係已經遺失。
+
+這條規則會讓「主流 GitHub squash 工作流的 repo，意圖層近乎全空」。**0 是誠實的
+答案**：歷史已經丟掉映射，Ostracon 不替它補寫。
+
+順帶一提，第一版偵測器用 `.` 搭配 `$` 比對整行，而 `.` 不匹配 `\r`，於是 CRLF
+語料一條清單條目都認不出來、靜默回報零。create-t3-app 的 body 正是 CRLF。
+**這是「同一個功能，兩種輸入，只驗了一種」的又一發**，這次是 LF 與 CRLF。
+
 ### 三欄畫面：結構 → 演化 → 意圖
 
 `src/ui/`。`node:http` 加手寫 HTML/CSS/JS，**零新相依、零建置流程、不連外**。

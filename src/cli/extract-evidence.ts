@@ -2,7 +2,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { deriveClaims } from "../claim/derive.ts";
+import { aggregateSuppressionNotice, deriveClaims } from "../claim/derive.ts";
 import {
   extractFromCommitMessages,
   extractFromLinkedDocuments,
@@ -48,7 +48,10 @@ export function main(args: string[]): void {
     console.log("extract-linked:", JSON.stringify(extractFromLinkedDocuments(db, repoId)));
     // claim 是證據 pass 的確定式投影；不在這裡接上的話，CLI 雖然抽到了證據，
     // 三欄 UI 卻永遠只會看到空白，端到端實際上沒有跑通。
-    console.log("claim:", JSON.stringify(deriveClaims(db, repoId)));
+    const claims = deriveClaims(db, repoId);
+    console.log("claim:", JSON.stringify(claims));
+    const suppressed = aggregateSuppressionNotice(claims);
+    if (suppressed !== undefined) console.log(suppressed);
   } finally {
     db.close();
   }

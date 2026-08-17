@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
-import { deriveClaims } from "../claim/derive.ts";
+import { aggregateSuppressionNotice, deriveClaims } from "../claim/derive.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
@@ -173,7 +173,7 @@ export async function ostracised(
     detectExcursions(db, gitReport.repoId, { scope: "repo" });
     // `abandoned_reason` 的主體是剛產生的 excursion，不是死亡 revision。
     // 先偵測再升格，UI 才能在移除那列呈現這段做法為何被放棄。
-    deriveClaims(db, gitReport.repoId);
+    const claims = deriveClaims(db, gitReport.repoId);
     // 索引就在上面兩行，理論上一定成立；斷言的意義是「將來有人改成可跳過索引時
     // 會在這裡爆炸」，而不是預期它現在會失敗。
     assertExcursionScope(db, gitReport.repoId);
@@ -184,6 +184,9 @@ export async function ostracised(
         ? [repoConsolidationNotice(gitReport.consolidation)]
         : []),
       ...(pass.mode === "rebuilt" ? [REBUILD_NOTICE] : []),
+      ...(aggregateSuppressionNotice(claims) !== undefined
+        ? [aggregateSuppressionNotice(claims)!]
+        : []),
     ];
     return notes.length > 0 ? `${notes.join("\n")}\n\n${list}` : list;
   } finally {

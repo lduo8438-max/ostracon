@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { attributable } from "./aggregate.ts";
 
 /**
  * 意圖層的第一刀：把已驗證的證據升格成**分型的 claim**。**零 LLM。**
@@ -61,7 +62,7 @@ const CLAIM_TYPE_BY_MARKER: Record<string, Exclude<RuleClaimType, "abandoned_rea
  * 版本一變，舊規則產生的 claim 必須作廢重建，否則這個模組的任何修正在用過的
  * 資料庫上都是靜默無效的——證據層與結構層都各踩過一次同型的坑。
  */
-export const CLAIM_DERIVATION_VERSION = "rule-claim-0.2.0+excursion-subject";
+export const CLAIM_DERIVATION_VERSION = "rule-claim-0.3.0+aggregate-guard";
 export const CLAIM_PASS_NAME = "claim";
 
 /** 從 `generator_version`（形如 `rule-rationale-0.3.0/causal:since`）取回標記。 */
@@ -80,6 +81,11 @@ export interface ClaimReport {
   discarded: number;
   /** 記錄的版本與目前不同——跨版本重建，不只是重算。 */
   rebuilt: boolean;
+  /**
+   * 因為來自聚合訊息而無法歸因到單一改動的候選。**證據沒有被刪**，
+   * 壞掉的只是歸屬；抑制也不得靜默，所以要報出來。
+   */
+  unattributable: { candidates: number; commits: number };
 }
 
 interface Candidate {
@@ -90,6 +96,13 @@ interface Candidate {
   tier: "stated" | "linked";
   marker: string | undefined;
   confidence: number;
+  /** 這條候選所屬 commit 的完整訊息，用來判定是不是聚合。 */
+  commitMessage: string;
+  commitSha: string;
+  /**
+   * 引文在 commit 訊息裡的起點；`undefined` 代表證據不在訊息裡（`linked`）。
+   */
+  charStart: number | undefined;
 }
 
 /**
@@ -102,7 +115,8 @@ interface Candidate {
 const STATED_SQL = `
   SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
-         cand.generator_version AS gen, 1.0 AS confidence
+         cand.generator_version AS gen, 1.0 AS confidence,
+         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart
     FROM evidence e
     JOIN source_doc d ON d.id = e.source_doc_id
     JOIN git_commit gc ON gc.repo_id = e.repo_id AND gc.sha = d.external_id
@@ -124,7 +138,8 @@ const STATED_SQL = `
 const LINKED_SQL = `
   SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
-         cand.generator_version AS gen, rl.confidence AS confidence
+         cand.generator_version AS gen, rl.confidence AS confidence,
+         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart
     FROM evidence e
     JOIN source_doc d ON d.id = e.source_doc_id
     JOIN reference_link rl ON rl.repo_id = e.repo_id
@@ -151,7 +166,8 @@ const LINKED_SQL = `
 const STATED_EXCURSION_SQL = `
   SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
-         cand.generator_version AS gen, 1.0 AS confidence
+         cand.generator_version AS gen, 1.0 AS confidence,
+         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart
     FROM excursion x
     JOIN git_commit gc ON gc.id = x.remove_commit
     JOIN revision_change rc ON rc.commit_id = gc.id
@@ -170,7 +186,8 @@ const STATED_EXCURSION_SQL = `
 const LINKED_EXCURSION_SQL = `
   SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
-         cand.generator_version AS gen, rl.confidence AS confidence
+         cand.generator_version AS gen, rl.confidence AS confidence,
+         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart
     FROM excursion x
     JOIN git_commit gc ON gc.id = x.remove_commit
     JOIN revision_change rc ON rc.commit_id = gc.id
@@ -197,6 +214,9 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
     tier: "stated" | "linked";
     gen: string | null;
     confidence: number;
+    commitMessage: string;
+    commitSha: string;
+    charStart: number | null;
   }>).map((row) => ({
     revisionChangeId: row.revisionChangeId,
     excursionId: row.excursionId,
@@ -205,6 +225,9 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
     tier: row.tier,
     marker: markerOf(row.gen),
     confidence: row.confidence,
+    commitMessage: row.commitMessage,
+    commitSha: row.commitSha,
+    charStart: row.charStart ?? undefined,
   }));
 }
 
@@ -261,7 +284,16 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
 
   let written = 0;
   let unmapped = 0;
+  let suppressed = 0;
+  const aggregateCommits = new Set<string>();
   for (const c of candidates) {
+    // 聚合訊息的歸屬先擋，再談型別：這條候選被丟掉的理由是「無法歸因」，
+    // 不是「標記不認得」，兩個數字混在一起就看不出畫面為什麼是空的。
+    if (!attributable(c.commitMessage, c.charStart)) {
+      suppressed++;
+      aggregateCommits.add(c.commitSha);
+      continue;
+    }
     const mappedType = c.marker === undefined
       ? undefined
       : CLAIM_TYPE_BY_MARKER[c.marker];
@@ -296,7 +328,27 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
        updated_at = excluded.updated_at`,
   ).run(repoId, CLAIM_PASS_NAME, CLAIM_DERIVATION_VERSION, now);
 
-  return { candidates: candidates.length, written, unmapped, discarded, rebuilt };
+  return {
+    candidates: candidates.length,
+    written,
+    unmapped,
+    discarded,
+    rebuilt,
+    unattributable: { candidates: suppressed, commits: aggregateCommits.size },
+  };
+}
+
+/**
+ * 抑制不能靜默：使用者看到空白時必須分得出「沒人寫理由」與「有人寫了但
+ * 這段歷史已經無法歸因」。
+ */
+export function aggregateSuppressionNotice(
+  report: ClaimReport,
+): string | undefined {
+  const { candidates, commits } = report.unattributable;
+  if (candidates === 0) return undefined;
+  return `注意：${candidates} 個候選來自 ${commits} 顆聚合 commit（squash 合併了`
+    + `多個 PR），因無法歸因到單一改動而未升格成意圖。證據本身仍保留。`;
 }
 
 export interface PresentableClaim {

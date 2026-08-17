@@ -115,6 +115,32 @@ UI 本身只讀，不會偷偷修資料，因此這次目視使用它的暫存�
 現行 schema 關係的暫存 excursion 驗 `abandoned_reason`。W3 的 fresh DB 端到端重跑
 刻意排在最前面，舊 demo DB 不得拿來當新版本的正確性證據。
 
+### 聚合訊息誤歸因的修正（2026-08-17）
+
+W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻抓到意圖層的誤報。
+
+| 指標 | 修正前 | 修正後 |
+|---|---|---|
+| claim 總數 | 271 | **18** |
+| `abandoned_reason` | 55 | **0** |
+| verified evidence | 30 | 30（不變） |
+| 主旨行 claim | 14 | 14（不受影響） |
+| Osiris claim | 74 | **74**（不受影響） |
+
+271 條 claim 只來自 11 顆 commit，而其中 5 顆是 release squash，**貢獻 253 條
+（93.4%）**；55 條 `abandoned_reason` 全部出自它們，一條例外都沒有。`2dd37e138d`
+把約 200 個 PR 壓成一顆，抽取器從 body 三條互不相關的 PR 標題各挖一句，全被當成
+該 commit 移除的 13 個 entity 的放棄理由。
+
+`change_level = 'death'` 那道守門擋不住：commit 確實移除了那些 entity，壞掉的是
+訊息本身是 N 份文件的串接。判準與設計理由見 `architecture.md`
+§6「聚合訊息不得歸因」。
+
+**兩套語料在這個指標上完全相反**：Osiris 74/74 全部來自單一訊息 commit、全部在
+主旨行、聚合為零。意圖層從頭到尾只在 Osiris 上驗過。**這是「同一個功能，兩種輸入，
+只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
+第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
+
 ### 全 repo 結構 pass 的效能（2026-07-31 實測，Osiris 99 commit）
 
 | 指標 | 值 |

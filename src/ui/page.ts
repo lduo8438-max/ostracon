@@ -45,6 +45,9 @@ body {
   color: var(--ink);
   font: 12px/1.5 var(--mono);
   -webkit-font-smoothing: antialiased;
+  /* 直欄 flex 而不是替 main 算 calc(100% - 41px)：標頭上方可能多出一條
+     說明帶，寫死的高度會讓三欄整個被推出視窗底下。 */
+  display: flex; flex-direction: column;
 }
 header {
   display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
@@ -62,7 +65,13 @@ header .density b { color: var(--ink); font-weight: 700; }
 
 main {
   display: grid; grid-template-columns: 22rem 1fr 24rem;
-  height: calc(100% - 41px);
+  flex: 1; min-height: 0;
+}
+/* 無法歸因的聚合證據。**空白必須有解釋**，否則會被讀成「沒有人寫理由」。 */
+.aggregate {
+  margin: 0; padding: 8px 16px;
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--voice-ground); color: var(--voice);
 }
 section { overflow: auto; border-right: 1px solid var(--rule); background: var(--surface); }
 section:last-child { border-right: 0; background: var(--ground); }
@@ -148,6 +157,7 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
   <span class="repo" id="repo"></span>
   <span class="density" id="density"></span>
 </header>
+<p class="aggregate" id="aggregate" hidden></p>
 
 <main>
   <section aria-label="結構">
@@ -194,6 +204,14 @@ async function boot() {
   // 稀疏度講在最上面。這個工具的價值不在於把空格填滿。
   $("density").innerHTML =
     \`<b>\${summary.changesWithIntent}</b> / \${summary.changes} 次改動說得出為什麼（\${pct.toFixed(1)}%）\`;
+  // **抑制不能靜默。** 沒有這一行，使用者會把大片空白讀成「這個團隊不寫理由」，
+  // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
+  if (summary.aggregate.quotes > 0) {
+    $("aggregate").textContent =
+      \`另有 \${summary.aggregate.quotes} 條引文來自 \${summary.aggregate.commits} 顆聚合 commit\`
+      + \`（squash 合併了多個 PR）。證據仍在，但無法歸因到單一改動，因此意圖欄留白。\`;
+    $("aggregate").hidden = false;
+  }
 
   entities = await (await fetch("./api/entities")).json();
   $("entity-count").textContent = entities.length + " 個";

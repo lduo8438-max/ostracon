@@ -124,6 +124,42 @@ describe("三欄 UI 的資料層", () => {
     db.close();
   });
 
+  it("**無法歸因的聚合證據要出現在標頭上**", () => {
+    // 沒有這個數字，使用者會把大片空白讀成「這個團隊不寫理由」，
+    // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
+    const db = open(fixtureDb());
+    assert.deepEqual(repoSummary(db, 1).aggregate, { commits: 0, quotes: 0 });
+
+    const squash = [
+      "chore: next-merge (#494)",
+      "",
+      "* fix: use auth instead of question (#330)",
+      "",
+      "* refactor: use path instead of passing prop (#395)",
+    ].join("\r\n");
+    const quote = "instead of question (#330)";
+    const at = squash.indexOf(quote);
+    db.exec(
+      `INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order)
+       VALUES (3, 1, 'cccccccccccc', '2026-01-03', '2026-01-03', ${lit(squash)}, 2);
+       INSERT INTO source_doc
+         (id, repo_id, doc_type, provenance_root, external_id, author, created_at,
+          body, body_sha256)
+       VALUES (3, 1, 'commit_message', 'commit:cccccccccccc', 'cccccccccccc', 'x',
+               '2026-01-03', ${lit(squash)}, '${sha256(squash)}');`,
+    );
+    db.prepare(
+      `INSERT INTO evidence
+         (repo_id, source_doc_id, char_start, char_end, quoted_text, doc_body_sha,
+          tier, verified)
+       VALUES (1, 3, ?, ?, ?, ?, 'stated', 1)`,
+    ).run(at, at + quote.length, quote, sha256(squash));
+
+    assert.deepEqual(repoSummary(db, 1).aggregate, { commits: 1, quotes: 1 });
+    db.close();
+  });
+
   it("excursion 主體的 abandoned_reason 對回移除那一列", () => {
     const db = open(fixtureDb());
     db.exec(

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
+  aggregateSuppressionNotice,
   CLAIM_DERIVATION_VERSION,
   deriveClaims,
   markerOf,
@@ -287,6 +288,144 @@ describe("意圖層：證據升格為 claim", () => {
     assert.ok(linked, "linked 證據要產出 claim");
     assert.equal(linked.c, 0.4, "裸的 #N 是 0.4，不得升成 1.0");
     assert.equal(linked.t, "constraint");
+    db.close();
+  });
+});
+
+/**
+ * squash merge：一顆 commit 的訊息裡裝著好幾份變更紀錄。
+ *
+ * 這一組釘住的不是召回率，是**歸屬的正確性**。實測 create-t3-app 有 253 條
+ * claim 是這樣長出來的——甲 PR 的理由掛到乙 entity 上，產生錯誤的歷史。
+ */
+const SQUASH = [
+  "chore: next-merge (#494), ship edge instead of lambda",
+  "",
+  "* fix: use auth instead of question while merging the router (#330)",
+  "",
+  "* refactor: using path instead of passing prop (#395)",
+].join("\r\n");
+
+function squashFixture(): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+  db.exec(
+    `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
+     INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
+     INSERT INTO git_commit
+       (id, repo_id, sha, authored_at, committed_at, message, topo_order) VALUES
+       (1, 1, 'aaa', '2026-01-01', '2026-01-01', 'feat: born', 0),
+       (2, 1, 'bbb', '2026-01-02', '2026-01-02', ${lit(SQUASH)}, 1);
+     INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+       VALUES (1, 1, 1, 'alpha', 'function');
+     INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+       VALUES (1, 1, 'k1', 1);
+     INSERT INTO revision
+       (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
+        byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
+        hash_alpha, hash_alpha_self, hash_shape, shape_profile,
+        node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+     VALUES (1, 1, 1, 1, 1, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
+             'r','t','a','as','sh','p', 30, 10, 'exact', x'00');
+     -- death 必然沒有後繼（schema 的 CHECK），所以掛在 prev_revision 上。
+     INSERT INTO revision_change (id, prev_revision, commit_id, entity_id, change_level)
+       VALUES (1, 1, 2, 1, 'death');
+     INSERT INTO excursion
+       (id, repo_id, entity_id, introduce_commit, remove_commit, duration_days,
+        strength, method)
+       VALUES (1, 1, 1, 1, 2, 1.0, 'C', 'short_lifecycle');
+     INSERT INTO source_doc
+       (id, repo_id, doc_type, provenance_root, external_id, author, created_at,
+        body, body_sha256)
+     VALUES (1, 1, 'commit_message', 'commit:bbb', 'bbb', 'x', '2026-01-02',
+             ${lit(SQUASH)}, '${sha256(SQUASH)}');`,
+  );
+  return db;
+}
+
+function addSquashEvidence(db: DatabaseSync, quote: string): void {
+  const at = SQUASH.indexOf(quote);
+  assert.ok(at >= 0, `squash fixture 裡沒有 ${quote}`);
+  const ev = db.prepare(
+    `INSERT INTO evidence
+       (repo_id, source_doc_id, char_start, char_end, quoted_text, doc_body_sha,
+        tier, verified)
+     VALUES (1, 1, ?, ?, ?, ?, 'stated', 1)`,
+  ).run(at, at + quote.length, quote, sha256(SQUASH));
+  db.prepare(
+    `INSERT INTO evidence_candidate
+       (repo_id, source_doc_id, proposed_char_start, proposed_char_end,
+        proposed_quoted_text, expected_doc_body_sha, proposed_tier, generator_kind,
+        generator_version, status, promoted_evidence_id, created_at)
+     VALUES (1, 1, ?, ?, ?, ?, 'stated', 'rule',
+             'rule-rationale-0.3.0/causal:instead of', 'promoted', ?, '2026-01-02')`,
+  ).run(at, at + quote.length, quote, sha256(SQUASH), Number(ev.lastInsertRowid));
+}
+
+describe("意圖層：聚合訊息不得歸因", () => {
+  it("**body 深處的引文不升格，主旨行的照升**", () => {
+    const db = squashFixture();
+    addSquashEvidence(db, "instead of lambda");
+    addSquashEvidence(db, "instead of question while merging the router (#330)");
+    const report = deriveClaims(db, 1);
+
+    const rows = claimRows(db);
+    assert.deepEqual(rows.map((r) => r.text),
+      ["instead of lambda", "instead of lambda"],
+      "只有主旨行那條可以歸因；它同時是這次改動的 tradeoff 與這段迂迴的放棄理由");
+    const types = db.prepare("SELECT claim_type AS t FROM claim ORDER BY id")
+      .all() as unknown as { t: string }[];
+    assert.deepEqual(types.map((x) => x.t), ["tradeoff", "abandoned_reason"]);
+    // 一條 body 引文會同時撞到 revision_change 與 excursion 兩個主體，
+    // 所以被擋下的是 2 個候選而不是 2 條證據。
+    assert.deepEqual(report.unattributable, { candidates: 2, commits: 1 });
+    db.close();
+  });
+
+  it("**證據沒有被刪——壞掉的只是歸屬**", () => {
+    // 「這句話存在於這則訊息」仍然為真，而且是可驗證的事實。刪掉它等於
+    // 讓系統忘記自己曾經看過什麼。
+    const db = squashFixture();
+    addSquashEvidence(db, "instead of question while merging the router (#330)");
+    deriveClaims(db, 1);
+    const kept = db.prepare(
+      "SELECT COUNT(*) AS n FROM evidence WHERE verified = 1",
+    ).get() as { n: number };
+    assert.equal(kept.n, 1, "verified evidence 數量不得改變");
+    assert.deepEqual(claimRows(db), []);
+    db.close();
+  });
+
+  it("**abandoned_reason 在聚合 commit 上必須歸零**", () => {
+    // 這是最危險的一種：它宣稱「這個做法為什麼被放棄」，而依據是一條
+    // 跟該 entity 毫無關係的 PR 標題。
+    const db = squashFixture();
+    addSquashEvidence(db, "instead of question while merging the router (#330)");
+    deriveClaims(db, 1);
+    const abandoned = db.prepare(
+      "SELECT COUNT(*) AS n FROM claim WHERE claim_type = 'abandoned_reason'",
+    ).get() as { n: number };
+    assert.equal(abandoned.n, 0);
+    db.close();
+  });
+
+  it("抑制不得靜默", () => {
+    const db = squashFixture();
+    addSquashEvidence(db, "instead of question while merging the router (#330)");
+    const notice = aggregateSuppressionNotice(deriveClaims(db, 1));
+    assert.match(notice ?? "", /2 個候選/);
+    assert.match(notice ?? "", /1 顆聚合 commit/);
+    assert.match(notice ?? "", /證據本身仍保留/);
+    db.close();
+  });
+
+  it("沒有聚合訊息時不報這件事", () => {
+    const db = fixture();
+    addEvidence(db, "to avoid the CI flake.", "to avoid");
+    const report = deriveClaims(db, 1);
+    assert.deepEqual(report.unattributable, { candidates: 0, commits: 0 });
+    assert.equal(aggregateSuppressionNotice(report), undefined);
     db.close();
   });
 });

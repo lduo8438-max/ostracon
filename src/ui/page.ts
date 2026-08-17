@@ -176,7 +176,12 @@ const LEVEL = {
   birth: "誕生", death: "消亡", none: "無變更", raw: "格式／註解",
   token: "區域改名", alpha: "字面量或呼叫目標", shape: "結構重構",
 };
-const TYPE = { why: "理由", constraint: "約束", tradeoff: "被拒絕的替代方案" };
+const TYPE = {
+  why: "理由",
+  constraint: "約束",
+  tradeoff: "被拒絕的替代方案",
+  abandoned_reason: "放棄理由",
+};
 
 let entities = [];
 let current = null;
@@ -268,7 +273,12 @@ function alignRows() {
     slots[i].style.minHeight = "";
   }
   for (let i = 0; i < revs.length; i++) {
-    const tallest = Math.max(revs[i].offsetHeight, slots[i].offsetHeight);
+    // offsetHeight 會把子像素捨入成整數；長時間軸會把每列的小誤差累積成
+    // 看得見的錯位。實際渲染高度保留小數，才能讓第 n 列的上下界都吻合。
+    const tallest = Math.max(
+      revs[i].getBoundingClientRect().height,
+      slots[i].getBoundingClientRect().height,
+    );
     revs[i].style.minHeight = tallest + "px";
     slots[i].style.minHeight = tallest + "px";
   }
@@ -279,10 +289,15 @@ $("entities").addEventListener("click", (event) => {
   if (button) select(Number(button.dataset.id));
 });
 $("filter").addEventListener("input", (event) => renderEntities(event.target.value));
-// 兩欄各自捲動會讓對齊在視覺上斷掉，所以同步。
-$("evolution").parentElement.addEventListener("scroll", (event) => {
-  $("intent").parentElement.scrollTop = event.target.scrollTop;
-});
+// 兩欄各自捲動會讓對齊在視覺上斷掉，所以**雙向**同步。只有一個方向的話，
+// 滑鼠停在意圖欄捲動時仍會立刻拆開；Chrome 實測第一版正是這個 bug。
+const evolutionPane = $("evolution").parentElement;
+const intentPane = $("intent").parentElement;
+const mirrorScroll = (source, target) => {
+  if (target.scrollTop !== source.scrollTop) target.scrollTop = source.scrollTop;
+};
+evolutionPane.addEventListener("scroll", () => mirrorScroll(evolutionPane, intentPane));
+intentPane.addEventListener("scroll", () => mirrorScroll(intentPane, evolutionPane));
 addEventListener("resize", alignRows);
 boot();
 </script>

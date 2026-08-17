@@ -31,10 +31,24 @@ export function listEntities(
   limit = 400,
 ): EntityRow[] {
   return db.prepare(
-    `SELECT e.id AS entityId, e.stable_key AS stableKey,
+    `WITH claim_change AS (
+       SELECT cl.id AS claim_id, rc.id AS revision_change_id
+         FROM v_presentable_claim cl
+         JOIN revision_change rc ON rc.id = cl.revision_change_id
+        WHERE cl.repo_id = ?
+       UNION ALL
+       SELECT cl.id AS claim_id, rc.id AS revision_change_id
+         FROM v_presentable_claim cl
+         JOIN excursion x ON x.id = cl.excursion_id
+         JOIN revision_change rc ON rc.entity_id = x.entity_id
+                                AND rc.commit_id = x.remove_commit
+                                AND rc.change_level = 'death'
+        WHERE cl.repo_id = ?
+     )
+     SELECT e.id AS entityId, e.stable_key AS stableKey,
             last.path AS path, last.symbol AS symbol,
             COUNT(DISTINCT rc.id) AS revisions,
-            COUNT(DISTINCT CASE WHEN cl.id IS NOT NULL THEN rc.id END) AS withIntent
+            COUNT(DISTINCT CASE WHEN cc.claim_id IS NOT NULL THEN rc.id END) AS withIntent
        FROM entity e
        JOIN revision_change rc ON rc.entity_id = e.id
        JOIN (SELECT r.entity_id AS entity_id, r.path AS path,
@@ -45,12 +59,12 @@ export function listEntities(
                FROM revision r JOIN slot s ON s.id = r.slot_id
               WHERE r.repo_id = ?) last
             ON last.entity_id = e.id AND last.rn = 1
-       LEFT JOIN v_presentable_claim cl ON cl.revision_change_id = rc.id
+       LEFT JOIN claim_change cc ON cc.revision_change_id = rc.id
       WHERE e.repo_id = ?
       GROUP BY e.id
       ORDER BY revisions DESC, last.path, last.symbol
       LIMIT ?`,
-  ).all(repoId, repoId, limit) as unknown as EntityRow[];
+  ).all(repoId, repoId, repoId, repoId, limit) as unknown as EntityRow[];
 }
 
 export interface IntentRow {
@@ -58,6 +72,8 @@ export interface IntentRow {
   text: string;
   tier: string;
   confidence: number;
+  /** 非 NULL 代表這不是單次改動的理由，而是整段迂迴的放棄理由。 */
+  excursionId: number | null;
 }
 
 export interface EvolutionRow extends Omit<TimelineRow, "rationale"> {
@@ -80,11 +96,13 @@ export function evolutionOf(
 ): EvolutionRow[] {
   const claims = db.prepare(
     `SELECT gc.sha AS sha, cl.claim_type AS claimType, cl.text AS text,
-            cl.tier AS tier, cl.confidence AS confidence
+            cl.tier AS tier, cl.confidence AS confidence,
+            cl.excursion_id AS excursionId
        FROM v_presentable_claim cl
-       JOIN revision_change rc ON rc.id = cl.revision_change_id
-       JOIN git_commit gc ON gc.id = rc.commit_id
-      WHERE cl.repo_id = ? AND rc.entity_id = ?
+       LEFT JOIN revision_change rc ON rc.id = cl.revision_change_id
+       LEFT JOIN excursion x ON x.id = cl.excursion_id
+       JOIN git_commit gc ON gc.id = COALESCE(rc.commit_id, x.remove_commit)
+      WHERE cl.repo_id = ? AND COALESCE(rc.entity_id, x.entity_id) = ?
       ORDER BY gc.topo_order, cl.claim_type, cl.id`,
   ).all(repoId, entityId) as unknown as Array<IntentRow & { sha: string }>;
 
@@ -114,13 +132,26 @@ export interface RepoSummary {
 
 export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
   const row = db.prepare(
-    `SELECT r.root_path AS rootPath,
+    `WITH claim_change AS (
+       SELECT rc.id AS revision_change_id
+         FROM v_presentable_claim cl
+         JOIN revision_change rc ON rc.id = cl.revision_change_id
+        WHERE cl.repo_id = ?
+       UNION
+       SELECT rc.id AS revision_change_id
+         FROM v_presentable_claim cl
+         JOIN excursion x ON x.id = cl.excursion_id
+         JOIN revision_change rc ON rc.entity_id = x.entity_id
+                                AND rc.commit_id = x.remove_commit
+                                AND rc.change_level = 'death'
+        WHERE cl.repo_id = ?
+     )
+     SELECT r.root_path AS rootPath,
             (SELECT COUNT(*) FROM revision_change rc
                JOIN entity e ON e.id = rc.entity_id WHERE e.repo_id = r.id) AS changes,
-            (SELECT COUNT(DISTINCT cl.revision_change_id)
-               FROM v_presentable_claim cl WHERE cl.repo_id = r.id) AS changesWithIntent
+            (SELECT COUNT(*) FROM claim_change) AS changesWithIntent
        FROM repo r WHERE r.id = ?`,
-  ).get(repoId) as
+  ).get(repoId, repoId, repoId) as
     | { rootPath: string; changes: number; changesWithIntent: number }
     | undefined;
   if (row === undefined) throw new Error(`資料庫裡沒有 repo ${repoId}`);

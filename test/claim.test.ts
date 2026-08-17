@@ -131,6 +131,61 @@ describe("意圖層：證據升格為 claim", () => {
     db.close();
   });
 
+  it("迂迴的放棄理由綁 excursion_id，不冒充單次改動的 claim", () => {
+    const db = fixture();
+    addEvidence(db, "to avoid the CI flake.", "to avoid");
+    db.exec(
+      `INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order)
+       VALUES (2, 1, 'bbb', '2026-01-02', '2026-01-02', ${lit(BODY)}, 1);
+       UPDATE source_doc
+          SET external_id = 'bbb', provenance_root = 'commit:bbb'
+        WHERE id = 1;
+       INSERT INTO excursion
+         (id, repo_id, entity_id, introduce_commit, remove_commit, duration_days,
+          strength, method)
+       VALUES (1, 1, 1, 1, 2, 1, 'A', 'inverse_diff')`,
+    );
+
+    // 同一個 commit 有理由還不夠；它必須真的是這個 entity 的死亡改動。
+    deriveClaims(db, 1);
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM claim WHERE excursion_id = 1")
+        .get() as { n: number }).n,
+      0,
+    );
+
+    db.exec(
+      `INSERT INTO revision_change
+         (id, prev_revision, next_revision, commit_id, entity_id, change_level)
+       VALUES (3, 1, NULL, 2, 1, 'death');
+       UPDATE entity SET death_commit_id = 2 WHERE id = 1`,
+    );
+    deriveClaims(db, 1);
+    const abandoned = db.prepare(
+      `SELECT revision_change_id AS revisionChangeId, excursion_id AS excursionId,
+              claim_type AS claimType, text
+         FROM v_presentable_claim WHERE excursion_id = 1`,
+    ).get() as {
+      revisionChangeId: number | null;
+      excursionId: number;
+      claimType: string;
+      text: string;
+    };
+    assert.deepEqual({ ...abandoned }, {
+      revisionChangeId: null,
+      excursionId: 1,
+      claimType: "abandoned_reason",
+      text: "to avoid the CI flake.",
+    });
+    assert.equal(
+      presentableClaimsFor(db, 1, 1).some((c) => c.excursionId === 1),
+      true,
+      "entity 的意圖查詢必須沿 excursion 主體接得到這條 claim",
+    );
+    db.close();
+  });
+
   it("寫進去的每一條都進得了 v_presentable_claim", () => {
     // 支持關係與 claim 必須同一輪寫入，否則會留下永遠看不見的列。
     const db = fixture();

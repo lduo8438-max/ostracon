@@ -124,6 +124,35 @@ describe("三欄 UI 的資料層", () => {
     db.close();
   });
 
+  it("excursion 主體的 abandoned_reason 對回移除那一列", () => {
+    const db = open(fixtureDb());
+    db.exec(
+      `UPDATE revision_change
+          SET change_level = 'death', prev_revision = 2, next_revision = NULL
+        WHERE id = 2;
+       INSERT INTO excursion
+         (id, repo_id, entity_id, introduce_commit, remove_commit, duration_days,
+          strength, method)
+       VALUES (1, 1, 1, 1, 2, 1, 'C', 'trajectory');
+       INSERT INTO claim
+         (repo_id, excursion_id, claim_type, text, tier, confidence, created_at)
+       VALUES (1, 1, 'abandoned_reason', 'to avoid the quota burn.',
+               'stated', 1.0, '2026-01-02');
+       INSERT INTO claim_evidence (claim_id, evidence_id, role)
+       VALUES (last_insert_rowid(), 1, 'supports');`,
+    );
+
+    const rows = evolutionOf(db, 1, 1);
+    assert.deepEqual(
+      rows.map((r) => r.intent.map((i) => i.claimType)),
+      [["constraint"], ["abandoned_reason"]],
+      "放棄理由屬於 excursion 的 remove_commit，不是 introduce_commit",
+    );
+    assert.equal(listEntities(db, 1)[0]!.withIntent, 2);
+    assert.equal(repoSummary(db, 1).changesWithIntent, 2);
+    db.close();
+  });
+
   it("**inferred 不會經由這一層外洩到畫面上**", () => {
     // 資料層一律走 `v_presentable_claim`。這條測試釘住不變量 9 在 UI 這一側。
     const dbPath = fixtureDb();
@@ -189,5 +218,13 @@ describe("三欄 UI 的伺服器", () => {
     // 零相依、可離線是這個專案的賣點之一；一個 CDN 連結就足以毀掉它。
     assert.equal(/(?:src|href)="(?:https?:)?\/\//.test(PAGE), false);
     assert.match(PAGE, /system-ui/, "字體用系統堆疊，不下載字體檔");
+  });
+
+  it("逐列高度保留子像素，而且從任一欄捲動都同步", () => {
+    // Chrome 目視驗證抓到第一版只同步「演化 → 意圖」；從意圖欄捲就會拆開。
+    assert.match(PAGE, /getBoundingClientRect\(\)\.height/);
+    assert.doesNotMatch(PAGE, /\.offsetHeight/);
+    assert.match(PAGE, /evolutionPane\.addEventListener\("scroll"/);
+    assert.match(PAGE, /intentPane\.addEventListener\("scroll"/);
   });
 });

@@ -3,7 +3,7 @@
 > 這份文件記錄「現在長什麼樣」，隨程式碼變動更新。定義與理由在 `architecture.md`，
 > 規則在 `../CLAUDE.md`，資料模型的唯一真相是 `../db/schema.sql`。
 >
-> 最後更新：2026-08-02
+> 最後更新：2026-08-17
 
 ---
 
@@ -82,6 +82,10 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/http/fixtures.ts` | HTTP fixture 錄製／replay、敏感 header 濾除 | 測試與 golden 只用 replay |
 | `src/evidence/linked.ts` | PR/issue body、comments、reviews → `source_doc`；修正 `to_kind`；linked 水位線 | 不知道 live/replay 的差別 |
 | `src/cli/linked-evidence.ts` | 注入 live／record／replay fetcher | `pnpm evidence:linked`；無 token 時安全略過 |
+| `src/claim/derive.ts` | verified evidence → 分型 claim（含 excursion 主體的 `abandoned_reason`） | 零 LLM；規則版本 `rule-claim-0.2.0+excursion-subject` |
+| `src/ui/data.ts` | 組裝結構／時間軸／意圖，將 excursion claim 對回 remove commit | 一律讀 `v_presentable_claim` |
+| `src/ui/page.ts` | 三欄 HTML／CSS／JS | 列高逐列量測、演化／意圖雙向同步捲動 |
+| `src/ui/server.ts` | 唯讀本機 HTTP server | 只綁 `127.0.0.1`，零外部資源 |
 | `src/golden/materialize.ts` | 從 fixture + 真實 repo 建立 golden DB 座標、revision 與 match | fixture 專用；寫入層已改用 `src/index/structural.ts` |
 | `src/golden/evaluate.ts` | 查詢 golden DB，將單一案例判為 pass/fail/missing | 會讀 SQLite，不是純函式 |
 | `src/golden/report.ts` | **純函式**：分層彙總、Markdown、逐案例迴歸偵測 | 比率排除 ambiguous 案例，**迴歸閘門不排除** |
@@ -91,6 +95,25 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 **把核心邏輯寫成純函式（不吃 git、不吃 tree-sitter、不吃 DB）是刻意的架構決定**，
 已多次兌現：npm 被封鎖時仍能完整測試雜湊層；一個跨批次血緣的嚴重 bug 只有純函式
 的單元測試踩到，整合路徑剛好繞過了它。
+
+### 意圖層與 Chrome 算繪驗證（2026-08-17）
+
+`abandoned_reason` 已接上 entity 層級 excursion：只收 remove commit 上 verified 的
+stated／linked evidence，並要求同一 entity 在該 commit 有 `death` change；claim
+主體是 `excursion_id`，不是 `revision_change_id`。UI 查詢再把它對回 remove commit
+那列。`evidence:extract` 與 `ostracised` 都會在自己的輸入完成後重跑這個零 LLM 的
+claim 投影，所以兩種執行順序最後會得到同一份意圖資料。
+
+Chrome 1280×535 實測 60 列時間軸：第一版演化／意圖的列數同為 60，但只有從演化欄
+捲動才同步；從意圖欄捲動後兩者實測相差 420 px。另因 `offsetHeight` 捨入，最長時間軸
+有 0.5625 px 的累積頂端偏差。修正後雙向捲動同為 7420 px，含多行 claim 的列高與
+頂端偏差都為 0。
+
+既有 `reports/demo-create-t3.db` 是 repo 身分與跨 repo 汙染修正前的歷史產物：同一語料
+有相對／絕對路徑兩個 repo row，且 excursion 的 `repo_id` 與 entity 所屬 repo 不一致。
+UI 本身只讀，不會偷偷修資料，因此這次目視使用它的暫存副本驗一般 claim，再用符合
+現行 schema 關係的暫存 excursion 驗 `abandoned_reason`。W3 的 fresh DB 端到端重跑
+刻意排在最前面，舊 demo DB 不得拿來當新版本的正確性證據。
 
 ### 全 repo 結構 pass 的效能（2026-07-31 實測，Osiris 99 commit）
 

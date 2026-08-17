@@ -209,7 +209,8 @@ pnpm fixtures:validate    fixtures --repos <name>=<repo-path>
 長期成立的階段性限制寫在這裡：
 
 - **W1–W6 只支援 TypeScript。** W5 加 Python 僅為驗證架構沒有寫死在單一語言。
-- **`claim` 相關的表尚未解禁**，意圖層還沒開始。
+- **`claim` 與前端已解禁，但仍禁止任何 LLM 呼叫。** 正式畫面只呈現有 verified
+  支持證據的 `stated`／`linked`；`inferred` 仍不得進 `v_presentable_claim`。
 - **網路只准出現在 `src/http/github.ts`。** 其餘任何檔案出現 `fetch` 都是 bug。
 
 實測基準（測試數、golden 覆蓋率、效能）一律看 `docs/status.md`，不要在這裡複述——

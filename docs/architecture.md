@@ -700,6 +700,22 @@ claim 與 evidence 的差別在**主體**：evidence 掛在文件上（「這個
 正確的：那確實是這 N 個 entity 各自改動的理由。呈現端要**依改動分組**，
 不是把一個 entity 的所有理由攤平成一張清單。
 
+### `abandoned_reason` 的主體是 excursion
+
+一般 `why`／`constraint`／`tradeoff` 綁 `revision_change_id`；「這個做法為何被
+放棄」講的卻是從 introduce 到 remove 的整段迂迴，所以 `abandoned_reason` 必須綁
+`excursion_id`。把它也掛在死亡 revision 上，會把「一次改動的理由」與「整個方案的
+放棄理由」混成同一個主體，資料庫雖然存得下，語意卻是錯的。
+
+確定式升格只收 excursion 的 **remove commit** 上已驗證的 stated／linked evidence，
+而且該 commit 必須有這個 entity 的 `change_level = 'death'`。同一個 commit 有因果
+引文還不夠；它必須真的移除該 entity。這仍是 commit 粒度的保守相關性，不因此把
+excursion 升成 B 級——B 級要求文字明確提到該做法，現有 span 尚未提供那個語意判定。
+
+畫面把 excursion claim 對回 `remove_commit` 的死亡列；結構欄與整體稀疏度也把它算成
+那次改動「有意圖」。`v_presentable_claim` 的門仍然不變：只有 verified 支持證據的
+stated／linked 能進正式畫面，inferred 仍永遠不進。
+
 ### 三欄畫面：結構 → 演化 → 意圖
 
 `src/ui/`。`node:http` 加手寫 HTML/CSS/JS，**零新相依、零建置流程、不連外**。
@@ -731,6 +747,10 @@ claim 與 evidence 的差別在**主體**：evidence 掛在文件上（「這個
 因此自動沿用 `suppressUnrelatedRationale`。另寫一份 SQL 的話，畫面與
 `ostracon why` 遲早會對同一個 entity 給出兩種說法。意圖與改動**一次查完**，
 因為兩欄必須逐列對齊——對齊錯了就是把 A 改動的理由印在 B 底下。
+
+Chrome 實測抓到兩個只靠 DOM 存在性測試看不到的問題：第一版只同步「演化 → 意圖」
+的捲動，從意圖欄滾動會立即拆開；`offsetHeight` 又會把每列的子像素捨入，長時間軸
+累積出不到一像素但真實存在的漂移。現在兩欄雙向同步，列高用實際渲染矩形量測。
 
 API 的錯誤一律回 4xx／5xx 而**不是空陣列**：空陣列在這個畫面上的意思是
 「查過了，真的沒有」，拿它當失敗值就是讓畫面說謊。

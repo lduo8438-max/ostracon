@@ -26,7 +26,9 @@ import type { DatabaseSync } from "node:sqlite";
  *
  * 沒有列在這裡的標記**不產出 claim**，不是預設歸 `why`——沉默比猜一個型別好。
  */
-const CLAIM_TYPE_BY_MARKER: Record<string, "why" | "constraint" | "tradeoff"> = {
+type RuleClaimType = "why" | "constraint" | "tradeoff" | "abandoned_reason";
+
+const CLAIM_TYPE_BY_MARKER: Record<string, Exclude<RuleClaimType, "abandoned_reason">> = {
   "instead of": "tradeoff",
   "rather than": "tradeoff",
   "to avoid": "constraint",
@@ -59,7 +61,7 @@ const CLAIM_TYPE_BY_MARKER: Record<string, "why" | "constraint" | "tradeoff"> = 
  * 版本一變，舊規則產生的 claim 必須作廢重建，否則這個模組的任何修正在用過的
  * 資料庫上都是靜默無效的——證據層與結構層都各踩過一次同型的坑。
  */
-export const CLAIM_DERIVATION_VERSION = "rule-claim-0.1.0";
+export const CLAIM_DERIVATION_VERSION = "rule-claim-0.2.0+excursion-subject";
 export const CLAIM_PASS_NAME = "claim";
 
 /** 從 `generator_version`（形如 `rule-rationale-0.3.0/causal:since`）取回標記。 */
@@ -81,7 +83,8 @@ export interface ClaimReport {
 }
 
 interface Candidate {
-  revisionChangeId: number;
+  revisionChangeId: number | null;
+  excursionId: number | null;
   evidenceId: number;
   text: string;
   tier: "stated" | "linked";
@@ -97,7 +100,7 @@ interface Candidate {
  * 時間軸不承認的理由。
  */
 const STATED_SQL = `
-  SELECT rc.id AS revisionChangeId, e.id AS evidenceId,
+  SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, 1.0 AS confidence
     FROM evidence e
@@ -119,7 +122,7 @@ const STATED_SQL = `
  * 的可信度不可能高於「這個 commit 真的跟那個討論串有關」。
  */
 const LINKED_SQL = `
-  SELECT rc.id AS revisionChangeId, e.id AS evidenceId,
+  SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, rl.confidence AS confidence
     FROM evidence e
@@ -135,9 +138,60 @@ const LINKED_SQL = `
      AND rc.change_level <> 'none'
    ORDER BY rc.id, e.id`;
 
+/**
+ * 迂迴的放棄理由只取**移除 commit** 的證據，主體綁 `excursion_id`。
+ *
+ * 同一段文字仍會另外產生一般的改動 claim；那條說的是「這次改動為什麼發生」。
+ * 這條說的是「這個曾經存在的做法為什麼被放棄」。兩者文字可以相同，主體不能
+ * 混用——迂迴是跨越 introduce/remove 的整段歷史，不是一個 revision。
+ *
+ * `change_level = 'death'` 是既有 entity 相關性判準在這裡最窄的版本：只因為同一個
+ * commit 有因果引文還不夠，該 commit 必須真的移除了這個 excursion 的 entity。
+ */
+const STATED_EXCURSION_SQL = `
+  SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
+         e.quoted_text AS text, e.tier AS tier,
+         cand.generator_version AS gen, 1.0 AS confidence
+    FROM excursion x
+    JOIN git_commit gc ON gc.id = x.remove_commit
+    JOIN revision_change rc ON rc.commit_id = gc.id
+                           AND rc.entity_id = x.entity_id
+                           AND rc.change_level = 'death'
+    JOIN source_doc d ON d.repo_id = x.repo_id
+                     AND d.doc_type = 'commit_message'
+                     AND d.external_id = gc.sha
+    JOIN evidence e ON e.source_doc_id = d.id
+    LEFT JOIN evidence_candidate cand ON cand.promoted_evidence_id = e.id
+   WHERE x.repo_id = ? AND x.entity_id IS NOT NULL
+     AND e.tier = 'stated' AND e.verified = 1
+     AND e.doc_body_sha = d.body_sha256
+   ORDER BY x.id, e.id`;
+
+const LINKED_EXCURSION_SQL = `
+  SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
+         e.quoted_text AS text, e.tier AS tier,
+         cand.generator_version AS gen, rl.confidence AS confidence
+    FROM excursion x
+    JOIN git_commit gc ON gc.id = x.remove_commit
+    JOIN revision_change rc ON rc.commit_id = gc.id
+                           AND rc.entity_id = x.entity_id
+                           AND rc.change_level = 'death'
+    JOIN reference_link rl ON rl.repo_id = x.repo_id
+                          AND rl.from_kind = 'commit'
+                          AND rl.from_key = gc.sha
+    JOIN source_doc d ON d.repo_id = x.repo_id
+                     AND d.provenance_root = rl.to_kind || ':' || rl.to_key
+    JOIN evidence e ON e.source_doc_id = d.id
+    LEFT JOIN evidence_candidate cand ON cand.promoted_evidence_id = e.id
+   WHERE x.repo_id = ? AND x.entity_id IS NOT NULL
+     AND e.tier = 'linked' AND e.verified = 1
+     AND e.doc_body_sha = d.body_sha256
+   ORDER BY x.id, e.id`;
+
 function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
   return (db.prepare(sql).all(repoId) as unknown as Array<{
-    revisionChangeId: number;
+    revisionChangeId: number | null;
+    excursionId: number | null;
     evidenceId: number;
     text: string;
     tier: "stated" | "linked";
@@ -145,6 +199,7 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
     confidence: number;
   }>).map((row) => ({
     revisionChangeId: row.revisionChangeId,
+    excursionId: row.excursionId,
     evidenceId: row.evidenceId,
     text: row.text,
     tier: row.tier,
@@ -188,12 +243,15 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
   const candidates = [
     ...collect(db, STATED_SQL, repoId),
     ...collect(db, LINKED_SQL, repoId),
+    ...collect(db, STATED_EXCURSION_SQL, repoId),
+    ...collect(db, LINKED_EXCURSION_SQL, repoId),
   ];
 
   const insertClaim = db.prepare(
     `INSERT INTO claim
-       (repo_id, revision_change_id, claim_type, text, tier, confidence, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (repo_id, revision_change_id, excursion_id, claim_type, text, tier,
+        confidence, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertLink = db.prepare(
     `INSERT INTO claim_evidence (claim_id, evidence_id, role)
@@ -204,16 +262,20 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
   let written = 0;
   let unmapped = 0;
   for (const c of candidates) {
-    const claimType = c.marker === undefined
+    const mappedType = c.marker === undefined
       ? undefined
       : CLAIM_TYPE_BY_MARKER[c.marker];
-    if (claimType === undefined) {
+    if (mappedType === undefined) {
       unmapped++;
       continue;
     }
+    const claimType: RuleClaimType = c.excursionId === null
+      ? mappedType
+      : "abandoned_reason";
     const info = insertClaim.run(
       repoId,
       c.revisionChangeId,
+      c.excursionId,
       claimType,
       c.text,
       c.tier,
@@ -242,8 +304,9 @@ export interface PresentableClaim {
   text: string;
   tier: string;
   confidence: number;
-  /** 這條 claim 依附的改動所屬的 entity。 */
+  /** 這條 claim 的主體所屬的 entity。 */
   entityId: number;
+  excursionId: number | null;
   sha: string;
 }
 
@@ -260,11 +323,14 @@ export function presentableClaimsFor(
 ): PresentableClaim[] {
   return db.prepare(
     `SELECT cl.claim_type AS claimType, cl.text AS text, cl.tier AS tier,
-            cl.confidence AS confidence, rc.entity_id AS entityId, gc.sha AS sha
+            cl.confidence AS confidence,
+            COALESCE(rc.entity_id, x.entity_id) AS entityId,
+            cl.excursion_id AS excursionId, gc.sha AS sha
        FROM v_presentable_claim cl
-       JOIN revision_change rc ON rc.id = cl.revision_change_id
-       JOIN git_commit gc ON gc.id = rc.commit_id
-      WHERE cl.repo_id = ? AND rc.entity_id = ?
+       LEFT JOIN revision_change rc ON rc.id = cl.revision_change_id
+       LEFT JOIN excursion x ON x.id = cl.excursion_id
+       JOIN git_commit gc ON gc.id = COALESCE(rc.commit_id, x.remove_commit)
+      WHERE cl.repo_id = ? AND COALESCE(rc.entity_id, x.entity_id) = ?
       ORDER BY gc.topo_order, cl.claim_type, cl.id`,
   ).all(repoId, entityId) as unknown as PresentableClaim[];
 }

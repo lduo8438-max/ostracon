@@ -716,6 +716,22 @@ excursion 升成 B 級——B 級要求文字明確提到該做法，現有 span
 那次改動「有意圖」。`v_presentable_claim` 的門仍然不變：只有 verified 支持證據的
 stated／linked 能進正式畫面，inferred 仍永遠不進。
 
+### 對比標記的引文要含被拒方案
+
+`instead of`／`rather than` 的內容是**一組對比**：「本來要用 A，改用 B」。
+span 從標記處開始的通則在這裡會切掉左半邊，得到
+`instead of question while merging the router (#330)`——逐字為真、span 斷言通過、
+意思殘缺。這與中文標記那條 `理由改變。` 是同一型：**抽取式加驗證是誠信的必要
+條件，不是充分條件。**
+
+左邊界沿用 `so that` 迂迴義既有的 `sentenceStart`，只在行內往前找到句首。
+`to avoid`／`to prevent` 這類**不**擴張——它們的內容在標記右邊，往前拉只會把
+不相干的前文收進引文。
+
+左邊界拉長過的 span 在 `generator_version` 寫成 `causal:<marker>/result`，
+所以 `markerOf` 必須吃掉那個後綴；漏掉的話標記變成 `undefined`、claim 被算成
+`unmapped`，畫面靜默少一整類意圖。
+
 ### 聚合訊息不得歸因
 
 squash merge 把 N 個 PR 壓成一顆 commit，body 是那些 PR 標題串成的清單。對證據層

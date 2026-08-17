@@ -141,6 +141,31 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### 對比標記的引文補回被拒方案（抽取器 0.4.0，2026-08-17）
+
+`instead of`／`rather than` 的**被拒方案在標記左邊**，而 span 從標記處開始，
+於是四條實測引文全部只剩右半：
+
+| 掉掉的左側 | 舊引文 |
+|---|---|
+| `fix: use auth` | `instead of question while merging the router (#330)` |
+| `fix: load all CCTV regions globally` | `instead of UK-only hardcode` |
+| `Fix active fires layer to use global NASA FIRMS Open Data CSVs` | `instead of US-biased EONET` |
+| `refactor: using path` | `instead of passing prop` |
+
+`tradeoff` 的定義就是那組對比，只留右半邊等於把型別的內容拿掉。與中文那條
+`理由改變。` 同型：**逐字為真、span 斷言通過、意思殘缺**。修法沿用 `so that`
+迂迴義既有的 `sentenceStart`，`to avoid`／`to prevent` 不跟著擴張（它們的內容在
+標記右邊）。
+
+**claim 數量與歸屬完全不變**（create-t3-app 18 條、Osiris 74 條，分型分布逐列
+相同），改的只有引文範圍；`rejected: 0` 表示每一條新 span 仍通過驗證。
+
+修這一條時撞到一個既有的靜默缺陷：左邊界拉長過的 span 規則字串寫成
+`causal:instead of/result`，而 `markerOf` 的樣式錨在 `$`，對它**整個失配**——
+標記變成 `undefined`、claim 被算成 `unmapped`。原本只有 `so that` 的迂迴義會踩到，
+量太小沒被發現；對比標記一改就會變成整類意圖靜默消失。已修並加上回歸測試。
+
 ### 全 repo 結構 pass 的效能（2026-07-31 實測，Osiris 99 commit）
 
 | 指標 | 值 |

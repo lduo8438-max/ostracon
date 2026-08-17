@@ -65,9 +65,15 @@ const CLAIM_TYPE_BY_MARKER: Record<string, Exclude<RuleClaimType, "abandoned_rea
 export const CLAIM_DERIVATION_VERSION = "rule-claim-0.3.0+aggregate-guard";
 export const CLAIM_PASS_NAME = "claim";
 
-/** 從 `generator_version`（形如 `rule-rationale-0.3.0/causal:since`）取回標記。 */
+/**
+ * 從 `generator_version`（形如 `rule-rationale-0.4.0/causal:since`）取回標記。
+ *
+ * **`/result` 後綴必須吃掉。** 左邊界被往前拉過的 span 會寫成
+ * `causal:instead of/result`，而原本錨在 `$` 的樣式對它整個失配——結果是
+ * 標記變成 `undefined`、claim 被算成 `unmapped`，畫面靜默少一整類意圖。
+ */
 export function markerOf(generatorVersion: string | null): string | undefined {
-  return /causal:([^/]+)$/.exec(generatorVersion ?? "")?.[1];
+  return /causal:([^/]+)(?:\/result)?$/.exec(generatorVersion ?? "")?.[1];
 }
 
 export interface ClaimReport {

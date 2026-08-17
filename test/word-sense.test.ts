@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { markerOf } from "../src/claim/derive.ts";
 import {
   EXTRACTOR_VERSION,
   MARKDOWN_EXTRACTOR_VERSION,
@@ -77,8 +78,11 @@ describe("因果標記的詞義", () => {
   it("**判準是有沒有內容，不是剩幾個字元**", () => {
     // 裁決樣本 #164：`4` 只有一個字元，但它就是內容——被拒絕的替代方案
     // 正是這個工具的題目。以「標記後不足 4 字元」為判準會殺掉它。
-    assert.deepEqual(quotes("Pinned to 3 instead of 4."), ["instead of 4."]);
-    assert.deepEqual(quotes("Use pnpm instead of npm"), ["instead of npm"]);
+    //
+    // 抽取器 0.4.0 起對比標記的左邊界拉到句首，所以引文連「選了什麼」一起
+    // 帶出來。這兩條的期望值因此變長——變的是引文範圍，不是判準。
+    assert.deepEqual(quotes("Pinned to 3 instead of 4."), ["Pinned to 3 instead of 4."]);
+    assert.deepEqual(quotes("Use pnpm instead of npm"), ["Use pnpm instead of npm"]);
   });
 
   it("so that 接繫詞時理由在標記之前，左邊界往前拉到句首", () => {
@@ -280,5 +284,65 @@ describe("舊版抽取器的產出會被作廢", () => {
     // linked 的舊產出會被誤判成當前版本而留下來。
     assert.ok(!MARKDOWN_EXTRACTOR_VERSION.startsWith(`${EXTRACTOR_VERSION}/`));
     assert.ok(!EXTRACTOR_VERSION.startsWith(`${MARKDOWN_EXTRACTOR_VERSION}/`));
+  });
+});
+
+describe("對比標記要引到被拒方案", () => {
+  const only = (line: string) => {
+    const spans = extractRationale(line);
+    assert.equal(spans.length, 1, `${line} 應該只抽出一條`);
+    return spans[0]!;
+  };
+
+  it("**`instead of` 的左半邊才是被拒絕的那個方案**", () => {
+    // 只引右半邊會得到「instead of question while merging the router」——
+    // 逐字為真、span 斷言通過、意思殘缺。tradeoff 的定義就是那組對比。
+    const line = "* fix: use auth instead of question while merging the router (#330)";
+    const span = only(line);
+    assert.equal(
+      span.quotedText,
+      "fix: use auth instead of question while merging the router (#330)",
+    );
+    assert.equal(line.slice(span.charStart, span.charEnd), span.quotedText,
+      "span 仍須逐字可驗證");
+  });
+
+  it("Osiris 的兩條乾淨案例補回左側方案", () => {
+    assert.equal(
+      only("fix: load all CCTV regions globally instead of UK-only hardcode").quotedText,
+      "fix: load all CCTV regions globally instead of UK-only hardcode",
+    );
+    assert.equal(
+      only("Fix active fires layer to use global NASA FIRMS Open Data CSVs"
+        + " instead of US-biased EONET").quotedText,
+      "Fix active fires layer to use global NASA FIRMS Open Data CSVs"
+      + " instead of US-biased EONET",
+    );
+  });
+
+  it("往前只拉到句首，不吃掉前一句", () => {
+    const span = only("We shipped it. Use edge rather than lambda for the cold start.");
+    assert.equal(span.quotedText, "Use edge rather than lambda for the cold start.");
+  });
+
+  it("**`to avoid`／`to prevent` 不跟著擴張**", () => {
+    // 它們的內容在標記右邊，往前拉只會把不相干的前文收進引文。
+    assert.equal(
+      only("chore: pin the runner to avoid the CI flake").quotedText,
+      "to avoid the CI flake",
+    );
+    assert.equal(
+      only("fix: disable ISR to prevent quota burn").quotedText,
+      "to prevent quota burn",
+    );
+  });
+
+  it("**左邊界拉長過的規則字串仍取得回標記**", () => {
+    // `/result` 後綴會讓錨在 `$` 的樣式整個失配，於是標記變成 undefined、
+    // claim 被算成 unmapped——畫面靜默少一整類意圖。
+    assert.equal(markerOf("rule-rationale-0.4.0/causal:instead of/result"), "instead of");
+    assert.equal(markerOf("rule-rationale-0.4.0/causal:so that/result"), "so that");
+    assert.equal(markerOf("rule-rationale-0.4.0/causal:since"), "since");
+    assert.equal(markerOf(null), undefined);
   });
 });

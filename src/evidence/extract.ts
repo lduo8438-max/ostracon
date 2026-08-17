@@ -20,8 +20,8 @@ export interface ExtractedSpan {
   rule: string;
 }
 
-export const EXTRACTOR_VERSION = "rule-rationale-0.3.0";
-export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.3.0";
+export const EXTRACTOR_VERSION = "rule-rationale-0.4.0";
+export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.4.0";
 
 export interface ExtractRationaleOptions {
   /** linked 文件是 Markdown；排除程式碼 fence 與引用行，避免引用別人的理由。 */
@@ -97,6 +97,23 @@ const TEMPORAL_SINCE =
  */
 const DEMONSTRATIVE_SO_THAT = /^(?:['’]s\b|\s+(?:is|was|are|were)\b)/i;
 
+/**
+ * 對比標記的**被拒方案在標記左邊**，所以左邊界要拉到句首。
+ *
+ * `instead of` 的整個內容就是那組對比：「本來要用 A，改用 B」。只引右半邊會
+ * 得到 `instead of question while merging the router (#330)`——逐字為真、span
+ * 斷言通過、意思殘缺，與中文標記那條 `理由改變。` 是同一型的缺陷。
+ *
+ * 實測四條全部掉了左側：`fix: use auth`、`refactor: using path`、
+ * `fix: load all CCTV regions globally`、`Fix active fires layer to use
+ * global NASA FIRMS Open Data CSVs`。在 UI 上看 Osiris 覺得沒問題，是因為
+ * entity 的上下文剛好補回了左半——換個沒有上下文的場合就露餡。
+ *
+ * `to avoid`／`to prevent` 這類**不**跟著擴張：它們的內容在標記右邊，往前拉
+ * 只會把不相干的前文收進引文。
+ */
+const CONTRASTIVE_MARKERS = new Set(["instead of", "rather than"]);
+
 /** 行首的清單標記與空白。修剪必須反映在位移上，否則 span 會對不上。 */
 const LEADING_NOISE = /^[\s>*\-+•·]+/;
 const TRAILING_NOISE = /[\s]+$/;
@@ -149,10 +166,12 @@ function markerHits(rawLine: string, leading: number, end: number): MarkerHit[] 
       if (marker === "since " && TEMPORAL_SINCE.test(rest)) continue;
       if (!hasContentAfterMarker(rest)) continue;
       const demonstrative = marker === "so that" && DEMONSTRATIVE_SO_THAT.test(rest);
+      // 兩種情況的理由都在標記**之前**，方向與其他標記相反。
+      const pullBack = demonstrative || CONTRASTIVE_MARKERS.has(marker);
       hits.push({
         marker,
         at,
-        from: demonstrative ? sentenceStart(rawLine, at, leading) : at,
+        from: pullBack ? sentenceStart(rawLine, at, leading) : at,
       });
     }
   }

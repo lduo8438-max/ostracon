@@ -379,7 +379,9 @@ describe("意圖層：聚合訊息不得歸因", () => {
     assert.deepEqual(types.map((x) => x.t), ["tradeoff", "abandoned_reason"]);
     // 一條 body 引文會同時撞到 revision_change 與 excursion 兩個主體，
     // 所以被擋下的是 2 個候選而不是 2 條證據。
-    assert.deepEqual(report.unattributable, { candidates: 2, commits: 1 });
+    assert.deepEqual(report.unattributable,
+      { candidates: 2, quotes: 1, commits: 1 },
+      "一條引文扇出成兩個候選：主體分別是 revision_change 與 excursion");
     db.close();
   });
 
@@ -414,7 +416,7 @@ describe("意圖層：聚合訊息不得歸因", () => {
     const db = squashFixture();
     addSquashEvidence(db, "instead of question while merging the router (#330)");
     const notice = aggregateSuppressionNotice(deriveClaims(db, 1));
-    assert.match(notice ?? "", /2 個候選/);
+    assert.match(notice ?? "", /1 條引文（2 個候選）/);
     assert.match(notice ?? "", /1 顆聚合 commit/);
     assert.match(notice ?? "", /證據本身仍保留/);
     db.close();
@@ -424,7 +426,7 @@ describe("意圖層：聚合訊息不得歸因", () => {
     const db = fixture();
     addEvidence(db, "to avoid the CI flake.", "to avoid");
     const report = deriveClaims(db, 1);
-    assert.deepEqual(report.unattributable, { candidates: 0, commits: 0 });
+    assert.deepEqual(report.unattributable, { candidates: 0, quotes: 0, commits: 0 });
     assert.equal(aggregateSuppressionNotice(report), undefined);
     db.close();
   });

@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { attributable } from "../claim/aggregate.ts";
+import {
+  unattributableEvidence,
+  type UnattributableSummary,
+} from "../claim/derive.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
 /**
@@ -132,43 +135,12 @@ export interface RepoSummary {
   /**
    * 存在但無法歸因的證據。**沒有這個數字，使用者會把空白讀成「沒有人寫理由」**，
    * 而真相是有人寫了、只是 squash 把「哪句話對應哪次改動」銷毀了。
+   *
+   * 由 `unattributableEvidence` 提供，與 `deriveClaims` 走同一份候選——畫面
+   * 自己數的話會漏掉 `change_level <> 'none'` 那道前置過濾，把相關性抑制造成
+   * 的空白也算到 squash 頭上。
    */
-  aggregate: { commits: number; quotes: number };
-}
-
-/**
- * 聚合訊息裡無法歸因的引文。判定與 `deriveClaims` 走**同一個** `attributable`，
- * 兩邊各寫一份的話標頭遲早會與畫面各說各話。
- */
-function aggregateEvidence(
-  db: DatabaseSync,
-  repoId: number,
-): { commits: number; quotes: number } {
-  const rows = db.prepare(
-    `SELECT gc.sha AS sha, gc.message AS message, e.char_start AS charStart
-       FROM evidence e
-       JOIN source_doc d ON d.id = e.source_doc_id
-       JOIN git_commit gc ON gc.repo_id = e.repo_id AND gc.sha = d.external_id
-      WHERE e.repo_id = ? AND e.verified = 1 AND d.doc_type = 'commit_message'
-      UNION ALL
-     SELECT gc.sha AS sha, gc.message AS message, NULL AS charStart
-       FROM evidence e
-       JOIN source_doc d ON d.id = e.source_doc_id
-       JOIN reference_link rl ON rl.repo_id = e.repo_id AND rl.from_kind = 'commit'
-                             AND d.provenance_root = rl.to_kind || ':' || rl.to_key
-       JOIN git_commit gc ON gc.repo_id = e.repo_id AND gc.sha = rl.from_key
-      WHERE e.repo_id = ? AND e.verified = 1 AND e.tier = 'linked'`,
-  ).all(repoId, repoId) as unknown as Array<
-    { sha: string; message: string; charStart: number | null }
-  >;
-  const commits = new Set<string>();
-  let quotes = 0;
-  for (const row of rows) {
-    if (attributable(row.message, row.charStart ?? undefined)) continue;
-    quotes++;
-    commits.add(row.sha);
-  }
-  return { commits: commits.size, quotes };
+  aggregate: UnattributableSummary;
 }
 
 export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
@@ -196,5 +168,5 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
     | { rootPath: string; changes: number; changesWithIntent: number }
     | undefined;
   if (row === undefined) throw new Error(`資料庫裡沒有 repo ${repoId}`);
-  return { repoId, ...row, aggregate: aggregateEvidence(db, repoId) };
+  return { repoId, ...row, aggregate: unattributableEvidence(db, repoId) };
 }

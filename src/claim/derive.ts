@@ -62,7 +62,7 @@ const CLAIM_TYPE_BY_MARKER: Record<string, Exclude<RuleClaimType, "abandoned_rea
  * 版本一變，舊規則產生的 claim 必須作廢重建，否則這個模組的任何修正在用過的
  * 資料庫上都是靜默無效的——證據層與結構層都各踩過一次同型的坑。
  */
-export const CLAIM_DERIVATION_VERSION = "rule-claim-0.3.0+aggregate-guard";
+export const CLAIM_DERIVATION_VERSION = "rule-claim-0.3.1+shared-suppression-count";
 export const CLAIM_PASS_NAME = "claim";
 
 /**
@@ -88,10 +88,23 @@ export interface ClaimReport {
   /** 記錄的版本與目前不同——跨版本重建，不只是重算。 */
   rebuilt: boolean;
   /**
-   * 因為來自聚合訊息而無法歸因到單一改動的候選。**證據沒有被刪**，
+   * 因為來自聚合訊息而無法歸因到單一改動的部分。**證據沒有被刪**，
    * 壞掉的只是歸屬；抑制也不得靜默，所以要報出來。
    */
-  unattributable: { candidates: number; commits: number };
+  unattributable: UnattributableSummary;
+}
+
+/**
+ * 被聚合守門擋下的量。三個數字單位不同，**不可互換**：
+ * 一條引文會扇出成多個候選（同一顆 commit 的每個相關改動、每段迂迴各一個）。
+ */
+export interface UnattributableSummary {
+  /** 候選＝證據 × 主體的配對數。CLI 報這個，因為它對應「少寫了幾條 claim」。 */
+  candidates: number;
+  /** 相異引文數。畫面報這個，因為使用者看到的單位是「有幾句話」。 */
+  quotes: number;
+  /** 這些引文出自幾顆聚合 commit。 */
+  commits: number;
 }
 
 interface Candidate {
@@ -238,6 +251,48 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
 }
 
 /**
+ * 四道查詢的聯集，就是「證據 × 主體」的全部候選。
+ *
+ * **抽成一個函式是為了讓分岔不可能發生。** 先前畫面另寫了一份自己的 SQL 去數
+ * 無法歸因的引文，少了 `change_level <> 'none'` 這道前置過濾，於是 CLI 說 5 顆
+ * 聚合 commit、標頭說 6 顆——第 6 顆的空白其實是相關性抑制造成的，跟 squash
+ * 無關。同一個事實有兩份實作，遲早各說各話。
+ */
+function collectCandidates(db: DatabaseSync, repoId: number): Candidate[] {
+  return [
+    ...collect(db, STATED_SQL, repoId),
+    ...collect(db, LINKED_SQL, repoId),
+    ...collect(db, STATED_EXCURSION_SQL, repoId),
+    ...collect(db, LINKED_EXCURSION_SQL, repoId),
+  ];
+}
+
+function summariseUnattributable(candidates: Candidate[]): UnattributableSummary {
+  const commits = new Set<string>();
+  const quotes = new Set<number>();
+  let count = 0;
+  for (const c of candidates) {
+    if (attributable(c.commitMessage, c.charStart)) continue;
+    count++;
+    quotes.add(c.evidenceId);
+    commits.add(c.commitSha);
+  }
+  return { candidates: count, quotes: quotes.size, commits: commits.size };
+}
+
+/**
+ * 給呈現層用：這個資料庫裡有多少引文因為聚合而進不了意圖層。
+ *
+ * 與 `deriveClaims` 走同一份候選，所以兩邊的數字必然一致。畫面不能自己數。
+ */
+export function unattributableEvidence(
+  db: DatabaseSync,
+  repoId: number,
+): UnattributableSummary {
+  return summariseUnattributable(collectCandidates(db, repoId));
+}
+
+/**
  * 作廢規則式 claim。**只碰 `model IS NULL` 的列。**
  *
  * `model` 非 NULL 的是模型產生的，那一層有自己的版本與成本，不該被規則層的
@@ -269,12 +324,7 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
   const rebuilt = recordedVersion(db, repoId) !== CLAIM_DERIVATION_VERSION;
   const discarded = discardRuleClaims(db, repoId);
 
-  const candidates = [
-    ...collect(db, STATED_SQL, repoId),
-    ...collect(db, LINKED_SQL, repoId),
-    ...collect(db, STATED_EXCURSION_SQL, repoId),
-    ...collect(db, LINKED_EXCURSION_SQL, repoId),
-  ];
+  const candidates = collectCandidates(db, repoId);
 
   const insertClaim = db.prepare(
     `INSERT INTO claim
@@ -290,16 +340,10 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
 
   let written = 0;
   let unmapped = 0;
-  let suppressed = 0;
-  const aggregateCommits = new Set<string>();
   for (const c of candidates) {
     // 聚合訊息的歸屬先擋，再談型別：這條候選被丟掉的理由是「無法歸因」，
     // 不是「標記不認得」，兩個數字混在一起就看不出畫面為什麼是空的。
-    if (!attributable(c.commitMessage, c.charStart)) {
-      suppressed++;
-      aggregateCommits.add(c.commitSha);
-      continue;
-    }
+    if (!attributable(c.commitMessage, c.charStart)) continue;
     const mappedType = c.marker === undefined
       ? undefined
       : CLAIM_TYPE_BY_MARKER[c.marker];
@@ -340,7 +384,7 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
     unmapped,
     discarded,
     rebuilt,
-    unattributable: { candidates: suppressed, commits: aggregateCommits.size },
+    unattributable: summariseUnattributable(candidates),
   };
 }
 
@@ -351,10 +395,11 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
 export function aggregateSuppressionNotice(
   report: ClaimReport,
 ): string | undefined {
-  const { candidates, commits } = report.unattributable;
+  const { candidates, quotes, commits } = report.unattributable;
   if (candidates === 0) return undefined;
-  return `注意：${candidates} 個候選來自 ${commits} 顆聚合 commit（squash 合併了`
-    + `多個 PR），因無法歸因到單一改動而未升格成意圖。證據本身仍保留。`;
+  return `注意：${quotes} 條引文（${candidates} 個候選）來自 ${commits} 顆聚合 `
+    + `commit（squash 合併了多個 PR），因無法歸因到單一改動而未升格成意圖。`
+    + `證據本身仍保留。`;
 }
 
 export interface PresentableClaim {

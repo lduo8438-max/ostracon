@@ -128,7 +128,8 @@ describe("三欄 UI 的資料層", () => {
     // 沒有這個數字，使用者會把大片空白讀成「這個團隊不寫理由」，
     // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
     const db = open(fixtureDb());
-    assert.deepEqual(repoSummary(db, 1).aggregate, { commits: 0, quotes: 0 });
+    assert.deepEqual(repoSummary(db, 1).aggregate,
+      { candidates: 0, quotes: 0, commits: 0 });
 
     const squash = [
       "chore: next-merge (#494)",
@@ -156,7 +157,20 @@ describe("三欄 UI 的資料層", () => {
        VALUES (1, 3, ?, ?, ?, ?, 'stated', 1)`,
     ).run(at, at + quote.length, quote, sha256(squash));
 
-    assert.deepEqual(repoSummary(db, 1).aggregate, { commits: 1, quotes: 1 });
+    // **光有引文還不夠。** 這顆 commit 得真的改到了什麼，這條引文才會是
+    // 「本來會變成意圖、被聚合守門擋下」的那種。少了這一步就會把相關性抑制
+    // 造成的空白也算到 squash 頭上——CLI 與標頭因此各說 5 顆與 6 顆。
+    assert.deepEqual(repoSummary(db, 1).aggregate,
+      { candidates: 0, quotes: 0, commits: 0 },
+      "沒有相關改動的引文不算在聚合抑制裡");
+
+    db.exec(
+      `INSERT INTO revision_change
+         (id, prev_revision, commit_id, entity_id, change_level)
+       VALUES (3, 2, 3, 1, 'raw')`,
+    );
+    assert.deepEqual(repoSummary(db, 1).aggregate,
+      { candidates: 1, quotes: 1, commits: 1 });
     db.close();
   });
 

@@ -209,7 +209,8 @@ async function boot() {
   if (summary.aggregate.quotes > 0) {
     $("aggregate").textContent =
       \`另有 \${summary.aggregate.quotes} 條引文來自 \${summary.aggregate.commits} 顆聚合 commit\`
-      + \`（squash 合併了多個 PR）。證據仍在，但無法歸因到單一改動，因此意圖欄留白。\`;
+      + \`（squash 合併了多個 PR），會影響 \${summary.aggregate.candidates} 次改動。\`
+      + \`證據仍在，但無法歸因到單一改動，因此意圖欄留白。\`;
     $("aggregate").hidden = false;
   }
 

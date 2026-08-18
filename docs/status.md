@@ -141,6 +141,22 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### 抑制數字只留一份實作（2026-08-17）
+
+聚合守門上線後，CLI 報「5 顆聚合 commit」而 UI 標頭報「6 顆」。兩邊各寫了一份
+SQL：畫面那份少了 `change_level <> 'none'` 這道前置過濾，於是把 `410899aeed`
+也算進來——那顆有 5 次改動、**其中相關 0 次**，它的空白本來就是相關性抑制造成的，
+跟 squash 無關。
+
+修法不是把過濾補上，是**把畫面那份 SQL 整個刪掉**。候選蒐集抽成
+`collectCandidates`，`deriveClaims` 與新的 `unattributableEvidence` 共用同一份，
+兩個數字因此不可能再分岔。同時把摘要拆成三個單位不同、不可互換的數字：
+`candidates`（證據 × 主體，對應「少寫了幾條 claim」）、`quotes`（相異引文，
+畫面的單位）、`commits`。
+
+實測 create-t3-app：CLI 與 UI 現在都是 **253 候選 ／ 9 條引文 ／ 5 顆 commit**
+（修正前畫面是 10 條 ／ 6 顆）。
+
 ### 對比標記的引文補回被拒方案（抽取器 0.4.0，2026-08-17）
 
 `instead of`／`rather than` 的**被拒方案在標記左邊**，而 span 從標記處開始，

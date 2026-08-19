@@ -140,6 +140,15 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
   overflow-wrap: anywhere;
 }
 .claim .prov { color: var(--muted); font-size: 10px; margin-top: 3px; }
+/* 整批理由降一階：**唯一的暖色只留給專屬引文**，否則色彩本身就在誇大。 */
+.claim.batch q {
+  background: var(--surface); border-left-color: var(--rule-strong);
+  color: var(--muted);
+}
+.claim .tag {
+  margin-left: 8px; padding: 1px 5px; border: 1px solid var(--rule-strong);
+  border-radius: 2px; letter-spacing: 0; text-transform: none; font-size: 10px;
+}
 
 .hint { padding: 14px; color: var(--muted); }
 .hint b { color: var(--ink); }
@@ -200,10 +209,15 @@ async function boot() {
   const summary = await (await fetch("./api/summary")).json();
   $("repo").textContent = summary.rootPath;
   const pct = summary.changes === 0
-    ? 0 : (summary.changesWithIntent / summary.changes) * 100;
-  // 稀疏度講在最上面。這個工具的價值不在於把空格填滿。
+    ? 0 : (summary.changesWithEntityIntent / summary.changes) * 100;
+  // 稀疏度講在最上面，而且**專屬理由與整批理由分開數**。合起來會誇大一個
+  // 數量級：實測 vuejs/core 是 34 對 508。
   $("density").innerHTML =
-    \`<b>\${summary.changesWithIntent}</b> / \${summary.changes} 次改動說得出為什麼（\${pct.toFixed(1)}%）\`;
+    \`<b>\${summary.changesWithEntityIntent}</b> / \${summary.changes} 次改動有專屬理由\`
+    + \`（\${pct.toFixed(1)}%）\`
+    + (summary.changesWithBatchIntent > 0
+      ? \`　另有 \${summary.changesWithBatchIntent} 次只有整批理由\`
+      : "");
   // **抑制不能靜默。** 沒有這一行，使用者會把大片空白讀成「這個團隊不寫理由」，
   // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
   if (summary.aggregate.quotes > 0) {
@@ -231,7 +245,11 @@ function renderEntities(query) {
       <div class="symbol">\${text(e.symbol)}</div>
       <div class="path">\${text(e.path)}</div>
       <div class="meta"><span>\${e.revisions} 次改動</span><span>\${
-        e.withIntent > 0 ? e.withIntent + " 次有理由" : "沒有理由可查"
+        e.withEntityIntent > 0
+          ? e.withEntityIntent + " 次有專屬理由"
+          : e.withBatchIntent > 0
+            ? e.withBatchIntent + " 次只有整批理由"
+            : "沒有理由可查"
       }</span></div>
     </button>\`).join("");
 }
@@ -241,8 +259,14 @@ async function select(entityId) {
   renderEntities($("filter").value);
   const rows = await (await fetch("./api/evolution?entity=" + entityId)).json();
   $("evolution-count").textContent = rows.length + " 次";
-  const withIntent = rows.filter((r) => r.intent.length > 0).length;
-  $("intent-count").textContent = withIntent + " / " + rows.length;
+  const entityLevel = rows.filter(
+    (r) => r.intent.some((c) => c.scope === "entity"),
+  ).length;
+  const batchOnly = rows.filter(
+    (r) => r.intent.length > 0 && r.intent.every((c) => c.scope === "batch"),
+  ).length;
+  $("intent-count").textContent = entityLevel + " / " + rows.length
+    + (batchOnly > 0 ? "（另 " + batchOnly + " 整批）" : "");
 
   $("evolution").innerHTML = rows.map((r) => \`
     <div class="rev" data-level="\${text(r.changeLevel)}">
@@ -262,13 +286,19 @@ async function select(entityId) {
   $("intent").innerHTML = rows.map((r) => r.intent.length === 0
     ? '<div class="slot empty"></div>'
     : \`<div class="slot">\${r.intent.map((c) => \`
-        <div class="claim">
-          <div class="type"><b>\${TYPE[c.claimType] ?? text(c.claimType)}</b></div>
+        <div class="claim\${c.scope === "batch" ? " batch" : ""}">
+          <div class="type"><b>\${TYPE[c.claimType] ?? text(c.claimType)}</b>\${
+            c.scope === "batch"
+              ? '<span class="tag">整批 · 同時歸給 ' + c.affectedEntities + " 次改動</span>"
+              : ""
+          }</div>
           <q>\${text(c.text)}</q>
           <div class="prov">\${
-            c.tier === "stated"
-              ? "作者在這次 commit 的訊息裡寫的"
-              : "來自被參照的討論串，關聯可信度 " + c.confidence
+            c.scope === "batch"
+              ? "這句話是在講這次 commit 的整批改動，不是專講這個宣告"
+              : c.tier === "stated"
+                ? "作者在這次 commit 的訊息裡寫的"
+                : "來自被參照的討論串，關聯可信度 " + c.confidence
           }</div>
         </div>\`).join("")}</div>\`).join("");
 

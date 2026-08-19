@@ -3,6 +3,7 @@ import {
   unattributableEvidence,
   type UnattributableSummary,
 } from "../claim/derive.ts";
+import { affectedEntityCounts, scopeOf, type ClaimScope } from "../claim/scope.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
@@ -20,8 +21,15 @@ export interface EntityRow {
   path: string;
   symbol: string;
   revisions: number;
-  /** 這個 entity 有幾次改動說得出為什麼。稀疏是語料的性質，要能被看見。 */
-  withIntent: number;
+  /**
+   * 有幾次改動有**專屬於這個宣告**的理由（引文只歸給它一個）。
+   *
+   * 與 `withBatchIntent` 分開數，因為合起來會誇大：實測 vuejs/core 的 722 條
+   * 一般 claim 裡有 684 條來自扇出 >1 的引文，最大一條同時歸給 72 個宣告。
+   */
+  withEntityIntent: number;
+  /** 有幾次改動只有整批共用的理由。 */
+  withBatchIntent: number;
 }
 
 /**
@@ -49,11 +57,27 @@ export function listEntities(
                                 AND rc.commit_id = x.remove_commit
                                 AND rc.change_level = 'death'
         WHERE cl.repo_id = ?
+     ),
+     -- 一次改動的尺度取它擁有的**最強**證據：只要有一條專屬理由就算 entity 級。
+     scoped AS (
+       SELECT cc.revision_change_id AS revision_change_id,
+              MIN(CASE WHEN affected.n <= 1 THEN 0 ELSE 1 END) AS batch_only
+         FROM claim_change cc
+         JOIN revision_change rc2 ON rc2.id = cc.revision_change_id
+         JOIN (SELECT rc3.commit_id AS commit_id, COUNT(*) AS n
+                 FROM revision_change rc3
+                WHERE rc3.change_level <> 'none'
+                GROUP BY rc3.commit_id) affected
+              ON affected.commit_id = rc2.commit_id
+        GROUP BY cc.revision_change_id
      )
      SELECT e.id AS entityId, e.stable_key AS stableKey,
             last.path AS path, last.symbol AS symbol,
             COUNT(DISTINCT rc.id) AS revisions,
-            COUNT(DISTINCT CASE WHEN cc.claim_id IS NOT NULL THEN rc.id END) AS withIntent
+            COUNT(DISTINCT CASE WHEN sc.batch_only = 0 THEN rc.id END)
+              AS withEntityIntent,
+            COUNT(DISTINCT CASE WHEN sc.batch_only = 1 THEN rc.id END)
+              AS withBatchIntent
        FROM entity e
        JOIN revision_change rc ON rc.entity_id = e.id
        JOIN (SELECT r.entity_id AS entity_id, r.path AS path,
@@ -64,7 +88,7 @@ export function listEntities(
                FROM revision r JOIN slot s ON s.id = r.slot_id
               WHERE r.repo_id = ?) last
             ON last.entity_id = e.id AND last.rn = 1
-       LEFT JOIN claim_change cc ON cc.revision_change_id = rc.id
+       LEFT JOIN scoped sc ON sc.revision_change_id = rc.id
       WHERE e.repo_id = ?
       GROUP BY e.id
       ORDER BY revisions DESC, last.path, last.symbol
@@ -79,6 +103,10 @@ export interface IntentRow {
   confidence: number;
   /** 非 NULL 代表這不是單次改動的理由，而是整段迂迴的放棄理由。 */
   excursionId: number | null;
+  /** `batch` 代表這句話同時被歸給該 commit 的多次改動，不是這個宣告專屬的。 */
+  scope: ClaimScope;
+  /** 這句話在該 commit 裡總共被歸給幾次改動。 */
+  affectedEntities: number;
 }
 
 export interface EvolutionRow extends Omit<TimelineRow, "rationale"> {
@@ -109,13 +137,24 @@ export function evolutionOf(
        JOIN git_commit gc ON gc.id = COALESCE(rc.commit_id, x.remove_commit)
       WHERE cl.repo_id = ? AND COALESCE(rc.entity_id, x.entity_id) = ?
       ORDER BY gc.topo_order, cl.claim_type, cl.id`,
-  ).all(repoId, entityId) as unknown as Array<IntentRow & { sha: string }>;
+  ).all(repoId, entityId) as unknown as Array<
+    Omit<IntentRow, "scope" | "affectedEntities"> & { sha: string }
+  >;
 
+  // 尺度用共用的那支算，不在這裡另寫一份 SQL。
+  const affected = affectedEntityCounts(db, repoId);
   const byCommit = new Map<string, IntentRow[]>();
   // 硬換行收成空白：與 `ostracon why` 用同一支 `unwrapQuote`，兩個介面才不會
   // 對同一條引文長出兩種樣子。儲存層仍然是逐字的。
   for (const { sha, ...raw } of claims) {
-    const intent = { ...raw, text: unwrapQuote(raw.text) };
+    // 放棄理由已由綁定守門保證只歸給一個 entity，不必再看扇出。
+    const reach = raw.excursionId === null ? affected.get(sha) ?? 1 : 1;
+    const intent: IntentRow = {
+      ...raw,
+      text: unwrapQuote(raw.text),
+      scope: scopeOf(reach),
+      affectedEntities: reach,
+    };
     const bucket = byCommit.get(sha) ?? [];
     // 同一次改動可能被多份文件說中同一件事。逐字重複的沒有新資訊，
     // 但**不同的說法都要留**——證據衝突要並列，不可擇一（不變量 10）。
@@ -135,8 +174,13 @@ export function evolutionOf(
 export interface RepoSummary {
   repoId: number;
   rootPath: string;
-  /** 有 claim 的改動數 ／ 全部改動數。**稀疏本身就是要說的事。** */
-  changesWithIntent: number;
+  /**
+   * 有**專屬**理由的改動數。**稀疏本身就是要說的事**，而把整批理由算進來
+   * 會讓這個數字誇大一個數量級——實測 vuejs/core 是 34 對 508。
+   */
+  changesWithEntityIntent: number;
+  /** 只有整批共用理由的改動數。 */
+  changesWithBatchIntent: number;
   changes: number;
   /**
    * 存在但無法歸因的證據。**沒有這個數字，使用者會把空白讀成「沒有人寫理由」**，
@@ -164,14 +208,32 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
                                 AND rc.commit_id = x.remove_commit
                                 AND rc.change_level = 'death'
         WHERE cl.repo_id = ?
+     ),
+     scoped AS (
+       SELECT cc.revision_change_id AS revision_change_id,
+              MIN(CASE WHEN affected.n <= 1 THEN 0 ELSE 1 END) AS batch_only
+         FROM claim_change cc
+         JOIN revision_change rc2 ON rc2.id = cc.revision_change_id
+         JOIN (SELECT rc3.commit_id AS commit_id, COUNT(*) AS n
+                 FROM revision_change rc3
+                WHERE rc3.change_level <> 'none'
+                GROUP BY rc3.commit_id) affected
+              ON affected.commit_id = rc2.commit_id
+        GROUP BY cc.revision_change_id
      )
      SELECT r.root_path AS rootPath,
             (SELECT COUNT(*) FROM revision_change rc
                JOIN entity e ON e.id = rc.entity_id WHERE e.repo_id = r.id) AS changes,
-            (SELECT COUNT(*) FROM claim_change) AS changesWithIntent
+            (SELECT COUNT(*) FROM scoped WHERE batch_only = 0) AS changesWithEntityIntent,
+            (SELECT COUNT(*) FROM scoped WHERE batch_only = 1) AS changesWithBatchIntent
        FROM repo r WHERE r.id = ?`,
   ).get(repoId, repoId, repoId) as
-    | { rootPath: string; changes: number; changesWithIntent: number }
+    | {
+      rootPath: string;
+      changes: number;
+      changesWithEntityIntent: number;
+      changesWithBatchIntent: number;
+    }
     | undefined;
   if (row === undefined) throw new Error(`資料庫裡沒有 repo ${repoId}`);
   return { repoId, ...row, aggregate: unattributableEvidence(db, repoId) };

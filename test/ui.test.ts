@@ -112,7 +112,8 @@ describe("三欄 UI 的資料層", () => {
     assert.ok(entity);
     assert.equal(entity.symbol, "cappedFetch");
     assert.equal(entity.revisions, 2);
-    assert.equal(entity.withIntent, 1);
+    assert.equal(entity.withEntityIntent, 1);
+    assert.equal(entity.withBatchIntent, 0);
     db.close();
   });
 
@@ -120,7 +121,8 @@ describe("三欄 UI 的資料層", () => {
     const db = open(fixtureDb());
     const summary = repoSummary(db, 1);
     assert.equal(summary.changes, 2);
-    assert.equal(summary.changesWithIntent, 1);
+    assert.equal(summary.changesWithEntityIntent, 1);
+    assert.equal(summary.changesWithBatchIntent, 0);
     db.close();
   });
 
@@ -198,8 +200,8 @@ describe("三欄 UI 的資料層", () => {
       [["constraint"], ["abandoned_reason"]],
       "放棄理由屬於 excursion 的 remove_commit，不是 introduce_commit",
     );
-    assert.equal(listEntities(db, 1)[0]!.withIntent, 2);
-    assert.equal(repoSummary(db, 1).changesWithIntent, 2);
+    assert.equal(listEntities(db, 1)[0]!.withEntityIntent, 2);
+    assert.equal(repoSummary(db, 1).changesWithEntityIntent, 2);
     db.close();
   });
 
@@ -276,5 +278,121 @@ describe("三欄 UI 的伺服器", () => {
     assert.doesNotMatch(PAGE, /\.offsetHeight/);
     assert.match(PAGE, /evolutionPane\.addEventListener\("scroll"/);
     assert.match(PAGE, /intentPane\.addEventListener\("scroll"/);
+  });
+});
+
+describe("整批理由要標示而不是收回", () => {
+  /**
+   * 一顆 commit 同時改到 `n` 個宣告，訊息裡只有一句理由。
+   *
+   * 實測形狀：vuejs/core 的 722 條一般 claim 只來自 123 條引文，最大一條同時
+   * 歸給 72 個宣告；Osiris 被當成健康基準的 74 條其實只是 3 條引文，其中一條
+   * 掛在 70 個宣告上。
+   */
+  function batchDb(n: number): string {
+    const body = "refactor: split the module\n\nMoved them to avoid the cycle.";
+    const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-batch-")), "i.db");
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+    const slots: string[] = [];
+    const entities: string[] = [];
+    const revs: string[] = [];
+    const changes: string[] = [];
+    for (let i = 1; i <= n; i++) {
+      slots.push(`(${i}, 1, 1, 'sym${i}', 'function')`);
+      entities.push(`(${i}, 1, 'k${i}', 1)`);
+      revs.push(
+        `(${i}, 1, 1, ${i}, ${i}, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
+          'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`,
+      );
+      changes.push(`(${i}, ${i}, 1, ${i}, 'shape')`);
+    }
+    db.exec(
+      `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
+       INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
+       INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order)
+       VALUES (1, 1, 'aaaaaaaaaaaa', '2026-01-01', '2026-01-01', ${lit(body)}, 0);
+       INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+         VALUES ${slots.join(",")};
+       INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+         VALUES ${entities.join(",")};
+       INSERT INTO revision
+         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
+          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
+          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
+          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+       VALUES ${revs.join(",")};
+       INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
+         VALUES ${changes.join(",")};
+       INSERT INTO source_doc
+         (id, repo_id, doc_type, provenance_root, external_id, author, created_at,
+          body, body_sha256)
+       VALUES (1, 1, 'commit_message', 'commit:aaaaaaaaaaaa', 'aaaaaaaaaaaa', 'x',
+               '2026-01-01', ${lit(body)}, '${sha256(body)}');`,
+    );
+    const quote = "to avoid the cycle.";
+    const at = body.indexOf(quote);
+    const ev = db.prepare(
+      `INSERT INTO evidence
+         (repo_id, source_doc_id, char_start, char_end, quoted_text, doc_body_sha,
+          tier, verified)
+       VALUES (1, 1, ?, ?, ?, ?, 'stated', 1)`,
+    ).run(at, at + quote.length, quote, sha256(body));
+    db.prepare(
+      `INSERT INTO evidence_candidate
+         (repo_id, source_doc_id, proposed_char_start, proposed_char_end,
+          proposed_quoted_text, expected_doc_body_sha, proposed_tier, generator_kind,
+          generator_version, status, promoted_evidence_id, created_at)
+       VALUES (1, 1, ?, ?, ?, ?, 'stated', 'rule',
+               'rule-rationale-0.5.0/causal:to avoid', 'promoted', ?, '2026-01-01')`,
+    ).run(at, at + quote.length, quote, sha256(body), Number(ev.lastInsertRowid));
+    deriveClaims(db, 1);
+    db.close();
+    return dbPath;
+  }
+
+  it("只改到一個宣告時，理由是那個宣告專屬的", () => {
+    const db = open(batchDb(1));
+    const [intent] = evolutionOf(db, 1, 1)[0]!.intent;
+    assert.equal(intent!.scope, "entity");
+    assert.equal(intent!.affectedEntities, 1);
+    db.close();
+  });
+
+  it("**同時改到多個宣告時標為整批，而且不收回**", () => {
+    // 收回的代價量過：以「扇出必須為 1」當門檻，Osiris 的意圖層會整個歸零。
+    // 該收回的是宣稱的**強度**，不是這條資訊本身。
+    const db = open(batchDb(5));
+    const [intent] = evolutionOf(db, 1, 1)[0]!.intent;
+    assert.ok(intent, "理由不得消失");
+    assert.equal(intent.scope, "batch");
+    assert.equal(intent.affectedEntities, 5);
+    assert.equal(intent.text, "to avoid the cycle.", "引文逐字不變");
+    db.close();
+  });
+
+  it("**稀疏度標頭把專屬與整批分開數**", () => {
+    // 合起來會誇大一個數量級：實測 vuejs/core 是 34 對 508。
+    const db = open(batchDb(5));
+    const summary = repoSummary(db, 1);
+    assert.equal(summary.changes, 5);
+    assert.equal(summary.changesWithEntityIntent, 0, "沒有一次是專屬的");
+    assert.equal(summary.changesWithBatchIntent, 5);
+    db.close();
+  });
+
+  it("結構欄也分開數", () => {
+    const db = open(batchDb(5));
+    const rows = listEntities(db, 1);
+    assert.equal(rows.length, 5);
+    assert.ok(rows.every((r) => r.withEntityIntent === 0 && r.withBatchIntent === 1));
+    db.close();
+  });
+
+  it("整批的引文不給暖色——顏色本身也不能誇大", () => {
+    assert.match(PAGE, /\.claim\.batch q \{/);
+    assert.match(PAGE, /同時歸給/);
   });
 });

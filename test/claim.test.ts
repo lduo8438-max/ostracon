@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import {
   aggregateSuppressionNotice,
   CLAIM_DERIVATION_VERSION,
+  unboundExcursionNotice,
   deriveClaims,
   markerOf,
   presentableClaimsFor,
@@ -429,5 +430,111 @@ describe("意圖層：聚合訊息不得歸因", () => {
     assert.deepEqual(report.unattributable, { candidates: 0, quotes: 0, commits: 0 });
     assert.equal(aggregateSuppressionNotice(report), undefined);
     db.close();
+  });
+});
+
+describe("意圖層：綁不到單一 entity 的放棄理由要留白", () => {
+  /**
+   * 一顆 commit 移除 `n` 個 entity，其中第一個是迂迴，並在訊息裡放一條理由。
+   *
+   * 這是實測形狀的縮影：vuejs/core 的 104 條 `abandoned_reason` 只來自 18 條
+   * 引文，最嚴重的一條被掛到 36 個 entity。
+   */
+  function removalFixture(n: number): DatabaseSync {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+    const slots: string[] = [];
+    const entities: string[] = [];
+    const revs: string[] = [];
+    const changes: string[] = [];
+    for (let i = 1; i <= n; i++) {
+      slots.push(`(${i}, 1, 1, 'sym${i}', 'function')`);
+      entities.push(`(${i}, 1, 'k${i}', 1)`);
+      revs.push(
+        `(${i}, 1, 1, ${i}, ${i}, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
+          'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`,
+      );
+      changes.push(`(${i}, ${i}, 2, ${i}, 'death')`);
+    }
+    db.exec(
+      `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
+       INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
+       INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order) VALUES
+         (1, 1, 'aaa', '2026-01-01', '2026-01-01', 'feat: born', 0),
+         (2, 1, 'bbb', '2026-01-02', '2026-01-02', ${lit(BODY)}, 1);
+       INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+         VALUES ${slots.join(",")};
+       INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+         VALUES ${entities.join(",")};
+       INSERT INTO revision
+         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
+          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
+          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
+          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+       VALUES ${revs.join(",")};
+       INSERT INTO revision_change
+         (id, prev_revision, commit_id, entity_id, change_level)
+         VALUES ${changes.join(",")};
+       INSERT INTO excursion
+         (id, repo_id, entity_id, introduce_commit, remove_commit, duration_days,
+          strength, method)
+         VALUES (1, 1, 1, 1, 2, 1, 'A', 'inverse_diff');
+       INSERT INTO source_doc
+         (id, repo_id, doc_type, provenance_root, external_id, author, created_at,
+          body, body_sha256)
+       VALUES (1, 1, 'commit_message', 'commit:bbb', 'bbb', 'x', '2026-01-02',
+               ${lit(BODY)}, '${sha256(BODY)}');`,
+    );
+    addEvidence(db, "to avoid the CI flake.", "to avoid");
+    return db;
+  }
+
+  const abandoned = (db: DatabaseSync) =>
+    (db.prepare("SELECT COUNT(*) AS n FROM claim WHERE claim_type='abandoned_reason'")
+      .get() as { n: number }).n;
+
+  it("commit 只移除一樣東西時，引文指得到它", () => {
+    const db = removalFixture(1);
+    const report = deriveClaims(db, 1);
+    assert.equal(abandoned(db), 1);
+    assert.deepEqual(report.unboundExcursion, { candidates: 0, quotes: 0, commits: 0 });
+    db.close();
+  });
+
+  it("**移除了不只一樣東西就留白**", () => {
+    // 那句話指的是哪一個？沒有任何結構資訊回答得了。判準與匹配階梯的雙端
+    // bucket 唯一性同一個原則：候選不只一個就不接受，而不是挑一個。
+    const db = removalFixture(3);
+    const report = deriveClaims(db, 1);
+    assert.equal(abandoned(db), 0);
+    assert.deepEqual(report.unboundExcursion, { candidates: 1, quotes: 1, commits: 1 });
+    db.close();
+  });
+
+  it("**只收回放棄理由，一般改動的意圖與證據都還在**", () => {
+    // 收回的是「這個做法被放棄」那句強宣稱，不是把證據刪掉。
+    const db = removalFixture(3);
+    deriveClaims(db, 1);
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM evidence WHERE verified=1")
+        .get() as { n: number }).n,
+      1,
+      "verified evidence 不得改變",
+    );
+    assert.equal(
+      claimRows(db).filter((r) => r.t === "constraint").length,
+      3,
+      "三次死亡改動各自仍有一般的意圖",
+    );
+    db.close();
+  });
+
+  it("抑制不得靜默", () => {
+    const notice = unboundExcursionNotice(deriveClaims(removalFixture(3), 1));
+    assert.match(notice ?? "", /1 條引文（1 個候選）/);
+    assert.match(notice ?? "", /1 顆一次移除多樣東西的 commit/);
+    assert.match(notice ?? "", /證據與一般改動的意圖都仍保留/);
   });
 });

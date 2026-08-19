@@ -62,7 +62,7 @@ const CLAIM_TYPE_BY_MARKER: Record<string, Exclude<RuleClaimType, "abandoned_rea
  * 版本一變，舊規則產生的 claim 必須作廢重建，否則這個模組的任何修正在用過的
  * 資料庫上都是靜默無效的——證據層與結構層都各踩過一次同型的坑。
  */
-export const CLAIM_DERIVATION_VERSION = "rule-claim-0.3.1+shared-suppression-count";
+export const CLAIM_DERIVATION_VERSION = "rule-claim-0.4.0+excursion-entity-binding";
 export const CLAIM_PASS_NAME = "claim";
 
 /**
@@ -92,6 +92,11 @@ export interface ClaimReport {
    * 壞掉的只是歸屬；抑制也不得靜默，所以要報出來。
    */
   unattributable: UnattributableSummary;
+  /**
+   * 移除 commit 動了不只一樣東西，因而無法支持 entity 級放棄宣稱的候選。
+   * 證據仍在，一般的改動 claim 也仍在；被收回的只是「這個做法被放棄」那句話。
+   */
+  unboundExcursion: UnattributableSummary;
 }
 
 /**
@@ -122,6 +127,13 @@ interface Candidate {
    * 引文在 commit 訊息裡的起點；`undefined` 代表證據不在訊息裡（`linked`）。
    */
   charStart: number | undefined;
+  /**
+   * 這顆 commit 總共移除了幾個 entity。只有迂迴主體的候選有值。
+   *
+   * **不是「幾段迂迴」而是「幾次死亡」**：commit 移除了 35 個東西、其中 3 個
+   * 剛好被判為迂迴時，引文一樣指不到其中任何一個。
+   */
+  commitDeaths: number | undefined;
 }
 
 /**
@@ -135,7 +147,8 @@ const STATED_SQL = `
   SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, 1.0 AS confidence,
-         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart
+         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart,
+         NULL AS commitDeaths
     FROM evidence e
     JOIN source_doc d ON d.id = e.source_doc_id
     JOIN git_commit gc ON gc.repo_id = e.repo_id AND gc.sha = d.external_id
@@ -158,7 +171,8 @@ const LINKED_SQL = `
   SELECT rc.id AS revisionChangeId, NULL AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, rl.confidence AS confidence,
-         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart
+         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart,
+         NULL AS commitDeaths
     FROM evidence e
     JOIN source_doc d ON d.id = e.source_doc_id
     JOIN reference_link rl ON rl.repo_id = e.repo_id
@@ -186,7 +200,9 @@ const STATED_EXCURSION_SQL = `
   SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, 1.0 AS confidence,
-         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart
+         d.body AS commitMessage, gc.sha AS commitSha, e.char_start AS charStart,
+         (SELECT COUNT(*) FROM revision_change dth
+           WHERE dth.commit_id = gc.id AND dth.change_level = 'death') AS commitDeaths
     FROM excursion x
     JOIN git_commit gc ON gc.id = x.remove_commit
     JOIN revision_change rc ON rc.commit_id = gc.id
@@ -206,7 +222,9 @@ const LINKED_EXCURSION_SQL = `
   SELECT NULL AS revisionChangeId, x.id AS excursionId, e.id AS evidenceId,
          e.quoted_text AS text, e.tier AS tier,
          cand.generator_version AS gen, rl.confidence AS confidence,
-         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart
+         gc.message AS commitMessage, gc.sha AS commitSha, NULL AS charStart,
+         (SELECT COUNT(*) FROM revision_change dth
+           WHERE dth.commit_id = gc.id AND dth.change_level = 'death') AS commitDeaths
     FROM excursion x
     JOIN git_commit gc ON gc.id = x.remove_commit
     JOIN revision_change rc ON rc.commit_id = gc.id
@@ -236,6 +254,7 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
     commitMessage: string;
     commitSha: string;
     charStart: number | null;
+    commitDeaths: number | null;
   }>).map((row) => ({
     revisionChangeId: row.revisionChangeId,
     excursionId: row.excursionId,
@@ -247,7 +266,33 @@ function collect(db: DatabaseSync, sql: string, repoId: number): Candidate[] {
     commitMessage: row.commitMessage,
     commitSha: row.commitSha,
     charStart: row.charStart ?? undefined,
+    commitDeaths: row.commitDeaths ?? undefined,
   }));
+}
+
+/**
+ * 這條引文能不能**支持到單一 entity 的**放棄宣稱。
+ *
+ * `abandoned_reason` 說的是「這個做法為什麼被放棄」，主體是一段迂迴、也就是
+ * 一個 entity。但證據掛在 commit 上：一顆移除了 36 個宣告的 commit，它訊息裡
+ * 那一句話指的是哪一個？**沒有任何結構資訊回答得了。**
+ *
+ * 實測 vuejs/core：104 條 `abandoned_reason` 只來自 18 條引文，其中 7 條被掛到
+ * 多個 entity，最嚴重的一條掛到 36 個。`so that SourceLocation.source is no
+ * longer needed` 掛在 35 個舊 parser 宣告上——那句話也許能解釋整批重構，但
+ * **不足以逐一支持每個 entity 級的宣稱**。
+ *
+ * 所以判準是唯一性：**該 commit 只移除了一樣東西**，引文才指得到它。這與匹配
+ * 階梯的雙端 bucket 唯一性是同一個原則——候選不只一個就不接受，而不是挑一個。
+ *
+ * 刻意**不**採用「引文裡有沒有提到該 entity 的名字」。量過：vuejs/core 只救回
+ * 7 條，而其中 `plugin` 配到的是引文裡的外部套件連結、`retry`／`resolve` 同時
+ * 撞到四個 suspense 方法。通用識別字與英文常用詞碰撞，**誤報比漏報嚴重**。
+ * 真正的語意配對是另一件工程，不是這道守門該偷渡的東西。
+ */
+function boundToEntity(candidate: Candidate): boolean {
+  if (candidate.excursionId === null) return true;
+  return candidate.commitDeaths === 1;
 }
 
 /**
@@ -267,18 +312,25 @@ function collectCandidates(db: DatabaseSync, repoId: number): Candidate[] {
   ];
 }
 
-function summariseUnattributable(candidates: Candidate[]): UnattributableSummary {
+function summarise(
+  candidates: Candidate[],
+  rejected: (c: Candidate) => boolean,
+): UnattributableSummary {
   const commits = new Set<string>();
   const quotes = new Set<number>();
   let count = 0;
   for (const c of candidates) {
-    if (attributable(c.commitMessage, c.charStart)) continue;
+    if (!rejected(c)) continue;
     count++;
     quotes.add(c.evidenceId);
     commits.add(c.commitSha);
   }
   return { candidates: count, quotes: quotes.size, commits: commits.size };
 }
+
+const isAggregated = (c: Candidate) => !attributable(c.commitMessage, c.charStart);
+/** 聚合守門先擋，所以這裡只算「過得了聚合、但綁不到 entity」的。 */
+const isUnbound = (c: Candidate) => !isAggregated(c) && !boundToEntity(c);
 
 /**
  * 給呈現層用：這個資料庫裡有多少引文因為聚合而進不了意圖層。
@@ -289,7 +341,7 @@ export function unattributableEvidence(
   db: DatabaseSync,
   repoId: number,
 ): UnattributableSummary {
-  return summariseUnattributable(collectCandidates(db, repoId));
+  return summarise(collectCandidates(db, repoId), isAggregated);
 }
 
 /**
@@ -344,6 +396,8 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
     // 聚合訊息的歸屬先擋，再談型別：這條候選被丟掉的理由是「無法歸因」，
     // 不是「標記不認得」，兩個數字混在一起就看不出畫面為什麼是空的。
     if (!attributable(c.commitMessage, c.charStart)) continue;
+    // 綁不到單一 entity 的迂迴不產出宣稱。**留白，不是猜一個。**
+    if (!boundToEntity(c)) continue;
     const mappedType = c.marker === undefined
       ? undefined
       : CLAIM_TYPE_BY_MARKER[c.marker];
@@ -384,7 +438,8 @@ export function deriveClaims(db: DatabaseSync, repoId: number): ClaimReport {
     unmapped,
     discarded,
     rebuilt,
-    unattributable: summariseUnattributable(candidates),
+    unattributable: summarise(candidates, isAggregated),
+    unboundExcursion: summarise(candidates, isUnbound),
   };
 }
 
@@ -400,6 +455,20 @@ export function aggregateSuppressionNotice(
   return `注意：${quotes} 條引文（${candidates} 個候選）來自 ${commits} 顆聚合 `
     + `commit（squash 合併了多個 PR），因無法歸因到單一改動而未升格成意圖。`
     + `證據本身仍保留。`;
+}
+
+/**
+ * 同理：綁不到單一 entity 的放棄理由被收回時要說出來，否則畫面上少掉的那一
+ * 整類意圖會被讀成「這個 repo 沒有被推翻的做法」。
+ */
+export function unboundExcursionNotice(
+  report: ClaimReport,
+): string | undefined {
+  const { candidates, quotes, commits } = report.unboundExcursion;
+  if (candidates === 0) return undefined;
+  return `注意：${quotes} 條引文（${candidates} 個候選）出自 ${commits} 顆一次移除`
+    + `多樣東西的 commit，無法逐一支持 entity 級的放棄理由，因此未升格。`
+    + `證據與一般改動的意圖都仍保留。`;
 }
 
 export interface PresentableClaim {

@@ -141,6 +141,40 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### 放棄理由的 entity 綁定守門（2026-08-19）
+
+選材那一輪的結論下錯了。「每個 entity 剛好拿到一條理由」**只排除了多理由的笛卡兒積，
+沒有證明理由與 entity 相關**——vuejs/core 的 104 條 `abandoned_reason` 其實只來自
+**18 條引文**，7 條被掛到多個 entity，最嚴重的一條掛到 36 個。
+
+| 語料 | 修正前 | 修正後 | 被收回 |
+|---|---|---|---|
+| vuejs/core | 104 | **10** | 8 條引文 ／ 94 候選 ／ 8 顆 commit |
+| remix | 400 | **9** | 37 條引文 ／ 378 候選 ／ 22 顆 commit |
+| Osiris | 0 | 0 | — |
+| create-t3-app | 0 | 0 | — |
+
+判準與被否決的替代方案見 `architecture.md`。存活的 10 條抽查後有 7 條的引文與被移除的
+宣告直接對得上（`isBuiltInTag -> use makeMap instead of Set`、`trigger deps directly
+instead of storing in an array`、`set dom stub type to never instead of {}`），
+其餘 3 條引文較簡短但 commit 只移除了那一樣東西，綁定仍可辯護。
+
+**W4 的正面 demo 因此建立在 10 條而不是 104 條上。**
+
+### 一般 claim 的扇出還沒處理（2026-08-19 量測）
+
+同一個問題在一般 claim（`why`／`constraint`／`tradeoff`）上更大，**尚未修**：
+
+| 語料 | 一般 claim | 背後的引文 | 來自扇出 >1 的引文 | 最大扇出 |
+|---|---|---|---|---|
+| vuejs/core | 722 | 123 | 684（95%） | 72 |
+| Osiris | 74 | **3** | 74（100%） | 70 |
+
+**Osiris 長期被當成健康基準的「74 條 claim」，其實只是 3 條引文**，其中一條掛在
+70 個 entity 上。這與放棄理由是同一型的過度歸因，只是宣稱較弱（「這次改動發生時
+作者說了 X」而不是「這個做法因為 X 被放棄」），而且已有 `change_level <> 'none'`
+這道較粗的相關性過濾。要不要用同一條唯一性判準收緊，是一個獨立的決定。
+
 ### W4 選材量測：`abandoned_reason` 第一次在真實資料上開火（2026-08-17）
 
 意圖層與迂迴偵測接起來之後，**兩套黃金語料都產不出一條 `abandoned_reason`**——

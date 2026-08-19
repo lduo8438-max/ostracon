@@ -19,9 +19,10 @@
   做可直接玩的線上 demo 與 GIF。這比再加索引功能更早暴露題目級問題。
   **選材是互補展示，不是挑數字好看的**：Osiris 展示 subject-line 語料上的意圖層；
   create-t3-app 展示跨重構追蹤與迂迴偵測，以及**面對 squash 歷史時誠實留白**；
-  第三個語料**已用量測選定為 vuejs/core**：7,156 commit、零聚合 commit、
-  104 條 `abandoned_reason` 且每個 entity 剛好拿到一條理由（remix 有 55% 的
-  entity 拿到兩條以上，至少一條是錯的，因此被否決）。細節見 `status.md`。
+  第三個語料**已用量測選定為 vuejs/core**：7,156 commit、零聚合 commit。
+  `abandoned_reason` 在加上 entity 綁定守門後是 **10 條**（原先的 104 條只來自
+  18 條引文，其中一條掛到 36 個 entity，不足以支持 entity 級宣稱）。
+  **demo 建立在這 10 條上，不是 104 條。** 細節見 `status.md`。
   **不為了 demo 保住那 253 條無法歸因的宣稱。**
 - **W5 剩餘原功能**：攪動熱點視圖、成本控制、加 Python 驗證架構。
   issue／PR 連結解析已提前完成，不再重排一次。

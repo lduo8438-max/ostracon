@@ -2,7 +2,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { aggregateSuppressionNotice, deriveClaims } from "../claim/derive.ts";
+import {
+  aggregateSuppressionNotice,
+  deriveClaims,
+  unboundExcursionNotice,
+} from "../claim/derive.ts";
 import {
   extractFromCommitMessages,
   extractFromLinkedDocuments,
@@ -50,8 +54,12 @@ export function main(args: string[]): void {
     // 三欄 UI 卻永遠只會看到空白，端到端實際上沒有跑通。
     const claims = deriveClaims(db, repoId);
     console.log("claim:", JSON.stringify(claims));
-    const suppressed = aggregateSuppressionNotice(claims);
-    if (suppressed !== undefined) console.log(suppressed);
+    for (const notice of [
+      aggregateSuppressionNotice(claims),
+      unboundExcursionNotice(claims),
+    ]) {
+      if (notice !== undefined) console.log(notice);
+    }
   } finally {
     db.close();
   }

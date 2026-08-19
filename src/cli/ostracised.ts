@@ -4,7 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
-import { aggregateSuppressionNotice, deriveClaims } from "../claim/derive.ts";
+import {
+  aggregateSuppressionNotice,
+  deriveClaims,
+  unboundExcursionNotice,
+} from "../claim/derive.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
@@ -184,9 +188,8 @@ export async function ostracised(
         ? [repoConsolidationNotice(gitReport.consolidation)]
         : []),
       ...(pass.mode === "rebuilt" ? [REBUILD_NOTICE] : []),
-      ...(aggregateSuppressionNotice(claims) !== undefined
-        ? [aggregateSuppressionNotice(claims)!]
-        : []),
+      ...[aggregateSuppressionNotice(claims), unboundExcursionNotice(claims)]
+        .filter((notice): notice is string => notice !== undefined),
     ];
     return notes.length > 0 ? `${notes.join("\n")}\n\n${list}` : list;
   } finally {

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { markerOf } from "../src/claim/derive.ts";
+import { unwrapQuote } from "../src/evidence/span.ts";
 import {
   EXTRACTOR_VERSION,
   MARKDOWN_EXTRACTOR_VERSION,
@@ -344,5 +345,93 @@ describe("對比標記要引到被拒方案", () => {
     assert.equal(markerOf("rule-rationale-0.4.0/causal:so that/result"), "so that");
     assert.equal(markerOf("rule-rationale-0.4.0/causal:since"), "since");
     assert.equal(markerOf(null), undefined);
+  });
+});
+
+describe("引文跨越硬換行", () => {
+  const quotes = (body: string) => extractRationale(body).map((s) => s.quotedText);
+  const verifiable = (body: string) =>
+    extractRationale(body).every((s) => body.slice(s.charStart, s.charEnd) === s.quotedText);
+
+  it("**句子被換行切斷時要接下去**", () => {
+    // commit body 幾乎都硬換行在 72 字元。實測 vuejs/core 24.2%、remix 21.3%
+    // 的引文被切在換行處；兩套黃金語料都是 0%，因為理由全在單行主旨上。
+    const body = [
+      "perf: use makeMap",
+      "",
+      "because the Symbol does not fit well",
+      "into V8's hidden class model.",
+    ].join("\n");
+    assert.deepEqual(quotes(body), [
+      "because the Symbol does not fit well\ninto V8's hidden class model.",
+    ]);
+    assert.equal(verifiable(body), true, "span 仍須逐字可驗證");
+  });
+
+  it("句子結束就停，不吃下一句", () => {
+    const body = "fix: cap it\n\nCapped to avoid the flake.\nUnrelated follow-up note.";
+    assert.deepEqual(quotes(body), ["to avoid the flake."]);
+  });
+
+  it("空行、清單條目、trailer 都是邊界", () => {
+    assert.deepEqual(
+      quotes("x\n\nDropped it because it was slow\n\nSomething else entirely"),
+      ["because it was slow"],
+      "空行是段落結束",
+    );
+    assert.deepEqual(
+      quotes("x\n\nDropped it because it was slow\n* next bullet"),
+      ["because it was slow"],
+      "清單條目是新的一條",
+    );
+    assert.deepEqual(
+      quotes("x\n\nDropped it because it was slow\nCo-authored-by: someone"),
+      ["because it was slow"],
+      "trailer 是中繼資料，不是句子的下半",
+    );
+  });
+
+  it("CRLF 的 body 一樣接得起來", () => {
+    const body = "fix: x\r\n\r\nbecause the cache was stale\r\nand the retry made it worse.";
+    assert.deepEqual(quotes(body), [
+      "because the cache was stale\r\nand the retry made it worse.",
+    ]);
+    assert.equal(verifiable(body), true);
+  });
+
+  it("**收進來的行不再各自產生 span**", () => {
+    // 否則同一段文字會被巢狀引用兩次。代價實測過：vuejs/core 吞掉 1 個原本
+    // 獨立的標記、remix 吞掉 3 個，而它們本來就在同一個句子裡。
+    const body = [
+      "refactor: props",
+      "",
+      "so that later we only need to iterate",
+      "through this array instead of the entire props object.",
+    ].join("\n");
+    assert.equal(quotes(body).length, 1);
+    assert.match(quotes(body)[0]!, /^so that later[\s\S]*props object\.$/);
+  });
+
+  it("markdown 的圍欄與引用行擋得住續行", () => {
+    const body = [
+      "Dropped it because it was slow",
+      "```",
+      "const slow = true;",
+      "```",
+    ].join("\n");
+    assert.deepEqual(
+      extractRationale(body, { format: "markdown" }).map((s) => s.quotedText),
+      ["because it was slow"],
+    );
+  });
+
+  it("**硬換行只在呈現層收掉，儲存層仍是逐字的**", () => {
+    // 收在儲存層就等於引文不再是原文的子字串，span 斷言直接失效。
+    assert.equal(
+      unwrapQuote("because the Symbol does not fit well\ninto V8's hidden class model."),
+      "because the Symbol does not fit well into V8's hidden class model.",
+    );
+    assert.equal(unwrapQuote("a\r\nb"), "a b");
+    assert.equal(unwrapQuote("no wrap here"), "no wrap here");
   });
 });

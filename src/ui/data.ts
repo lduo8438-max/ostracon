@@ -3,6 +3,7 @@ import {
   unattributableEvidence,
   type UnattributableSummary,
 } from "../claim/derive.ts";
+import { unwrapQuote } from "../evidence/span.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
 /**
@@ -111,7 +112,10 @@ export function evolutionOf(
   ).all(repoId, entityId) as unknown as Array<IntentRow & { sha: string }>;
 
   const byCommit = new Map<string, IntentRow[]>();
-  for (const { sha, ...intent } of claims) {
+  // 硬換行收成空白：與 `ostracon why` 用同一支 `unwrapQuote`，兩個介面才不會
+  // 對同一條引文長出兩種樣子。儲存層仍然是逐字的。
+  for (const { sha, ...raw } of claims) {
+    const intent = { ...raw, text: unwrapQuote(raw.text) };
     const bucket = byCommit.get(sha) ?? [];
     // 同一次改動可能被多份文件說中同一件事。逐字重複的沒有新資訊，
     // 但**不同的說法都要留**——證據衝突要並列，不可擇一（不變量 10）。
@@ -121,7 +125,9 @@ export function evolutionOf(
 
   return timelineOf(db, entityId).map(({ rationale, ...row }) => ({
     ...row,
-    quotes: rationale === null ? [] : rationale.split(RATIONALE_SEPARATOR),
+    quotes: rationale === null
+      ? []
+      : rationale.split(RATIONALE_SEPARATOR).map(unwrapQuote),
     intent: byCommit.get(row.sha) ?? [],
   }));
 }

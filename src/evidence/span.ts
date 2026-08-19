@@ -151,3 +151,17 @@ export function verifySpan(body: string, bodySha: string, span: ProposedSpan): S
     docBodySha: bodySha,
   };
 }
+
+/**
+ * 呈現用：把引文裡的硬換行收成一個空白。
+ *
+ * commit body 換行在 72 字元是排版，不是內容。跨行的引文在儲存層必須逐字
+ * （否則 `verifySpan` 不成立），但印成一行時那些換行會把版面撐斷，
+ * 在 CLI 上尤其明顯。
+ *
+ * **只有一份實作，CLI 與畫面共用。** 各寫一份的話同一條引文會在兩個地方
+ * 長得不一樣，而這個專案已經因為「兩份實作分岔」踩過好幾次。
+ */
+export function unwrapQuote(text: string): string {
+  return text.replace(/[ \t]*\r?\n[ \t]*/g, " ");
+}

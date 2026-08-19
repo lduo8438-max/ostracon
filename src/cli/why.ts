@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
+import { unwrapQuote } from "../evidence/span.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { repoConsolidationNotice } from "../git/persist.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
@@ -460,7 +461,8 @@ export function renderTimeline(
     // 已驗證的逐字引用。前綴用「理由」而不是把它混進 subject，
     // 是為了讓「作者說的」與「我們整理的」在視覺上就分得開。
     for (const quote of row.rationale ? row.rationale.split(RATIONALE_SEPARATOR) : []) {
-      out.push(`            理由「${quote}」`);
+      // 跨行的引文在儲存層是逐字的；印成一行時硬換行要收掉，否則版面撐斷。
+      out.push(`            理由「${unwrapQuote(quote)}」`);
     }
     for (const linked of row.linked) {
       const source = linked.kind === "pr"
@@ -470,7 +472,7 @@ export function renderTimeline(
         ? `；另有 ${linked.additionalDocuments} 則同串留言`
         : "";
       out.push(
-        `            關聯「${linked.quote}」`
+        `            關聯「${unwrapQuote(linked.quote)}」`
           + `（${source}；${linked.method} ${linked.confidence.toFixed(1)}${additional}）`,
       );
     }

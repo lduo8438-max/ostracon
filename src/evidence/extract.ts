@@ -20,8 +20,8 @@ export interface ExtractedSpan {
   rule: string;
 }
 
-export const EXTRACTOR_VERSION = "rule-rationale-0.4.0";
-export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.4.0";
+export const EXTRACTOR_VERSION = "rule-rationale-0.5.0";
+export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.5.0";
 
 export interface ExtractRationaleOptions {
   /** linked 文件是 Markdown；排除程式碼 fence 與引用行，避免引用別人的理由。 */
@@ -119,6 +119,47 @@ const LEADING_NOISE = /^[\s>*\-+•·]+/;
 const TRAILING_NOISE = /[\s]+$/;
 
 /**
+ * 句子結束。收尾的引號與括號要算進來，`(see #737).` 才不會被當成沒結束。
+ */
+const SENTENCE_END = /[.!?。！？][")'’」』\]]?$/;
+
+/** 清單條目。下一行是新的一條，不是上一句的續行。 */
+const LIST_ITEM_LINE = /^[ \t]*(?:[*+-]|\d+[.)])[ \t]+/;
+
+/** `Co-authored-by:`／`Fixes:` 這類 trailer。它們是中繼資料，不是句子的下半。 */
+const TRAILER_LINE = /^[A-Za-z][A-Za-z-]*:[ \t]/;
+
+/** Markdown 的圍欄與引用行。續行不得跨進別人的程式碼或別人的話。 */
+const FENCE_OR_QUOTE_LINE = /^\s{0,3}(?:`{3,}|~{3,}|>)/;
+
+/** 去掉行尾空白之後的內容長度。span 的右邊界一律用這個。 */
+function contentEnd(line: string): number {
+  return line.length - (TRAILING_NOISE.exec(line)?.[0].length ?? 0);
+}
+
+/**
+ * 這一行的句子有沒有被硬換行切斷，而下一行是它的續行。
+ *
+ * **commit body 幾乎都硬換行在 72 字元**，而引文的右邊界原本取到行尾，於是
+ * 句子被切在換行處：`because the Symbol does not fit well` ／下一行
+ * `into V8's hidden class model.`——逐字為真、讀起來不成句。實測 vuejs/core
+ * 24.2%、remix 21.3% 的引文是這樣壞掉的，而兩套黃金語料都是 0%，因為它們的
+ * 理由全在單行主旨上。又一次「同一個功能，兩種輸入，只驗了一種」。
+ *
+ * 停在哪裡全是結構判準：句末標點、空行（段落結束）、清單條目（新的一條）、
+ * trailer、Markdown 圍欄或引用行。**沒有行數上限**——上限是門檻，而段落邊界
+ * 已經把它框住了；實測最長也只續了 5 到 6 行。
+ */
+function continuesOnNextLine(current: string, next: string | undefined): boolean {
+  if (next === undefined) return false;
+  if (SENTENCE_END.test(current.slice(0, contentEnd(current)))) return false;
+  if (next.slice(0, contentEnd(next)).trim() === "") return false;
+  return !LIST_ITEM_LINE.test(next)
+    && !TRAILER_LINE.test(next)
+    && !FENCE_OR_QUOTE_LINE.test(next);
+}
+
+/**
  * 標記之後是否還有實質內容。
  *
  * `the reason`、`otherwise.` 這種「標記自己就是整句」的引文毫無資訊量，
@@ -187,9 +228,14 @@ function markerHits(rawLine: string, leading: number, end: number): MarkerHit[] 
  * 印出的 subject 一字不差地重複——那不是引用理由，是把標題抄一遍。
  * 從標記開始才真的只留下「為什麼」的那一段。
  *
- * 右邊界取到行尾。切在標點會更緊，但逗號在中英文的用法差異太大，
- * 硬切容易把理由本身截斷。**收緊右邊界正是模型可能勝過規則的地方**——
- * 那是日後比較兩者時該看的具體差異，不是現在該猜的。
+ * 右邊界取到**句末**，跨越硬換行。原本只取到行尾，而 commit body 幾乎都
+ * 換行在 72 字元，於是五分之一的引文被切在換行處（見 `continuesOnNextLine`）。
+ * 切在逗號會更緊，但逗號在中英文的用法差異太大，硬切容易把理由本身截斷。
+ * **收緊右邊界正是模型可能勝過規則的地方**——那是日後比較兩者時該看的具體
+ * 差異，不是現在該猜的。
+ *
+ * 跨行的引文因此含有換行字元。**儲存層一律逐字**（不然 span 斷言就不成立）；
+ * 把硬換行收成空白是呈現層的事，由 `unwrapQuote` 統一處理。
  *
  * 修剪量直接反映在 `charStart` / `charEnd` 上，所以產出的 span 一定能通過
  * `verifySpan`。這不是巧合，是這個模組的責任：抽取器不得產出自己的驗證器
@@ -200,12 +246,20 @@ export function extractRationale(
   options: ExtractRationaleOptions = {},
 ): ExtractedSpan[] {
   const out: ExtractedSpan[] = [];
+  const lines = body.split("\n");
+  // 先算好每一行的起點：續行需要往後看，逐行累加的 offset 做不到。
+  const lineStarts: number[] = [];
   let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1; // +1 是被 split 吃掉的換行
+  }
+
   let fence: { marker: "`" | "~"; length: number } | undefined;
 
-  for (const rawLine of body.split("\n")) {
-    const lineStart = offset;
-    offset += rawLine.length + 1; // +1 是被 split 吃掉的換行
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i]!;
+    const lineStart = lineStarts[i]!;
 
     if (options.format === "markdown") {
       const opening = /^\s{0,3}(`{3,}|~{3,})/.exec(rawLine)?.[1];
@@ -226,16 +280,25 @@ export function extractRationale(
     }
 
     const leading = LEADING_NOISE.exec(rawLine)?.[0].length ?? 0;
-    const trailing = TRAILING_NOISE.exec(rawLine)?.[0].length ?? 0;
-    const lineEnd = rawLine.length - trailing;
+    const lineEnd = contentEnd(rawLine);
 
     // 取最早通過詞義檢查的標記：一行有多個時，理由通常從第一個開始。
     const hit = markerHits(rawLine, leading, lineEnd)[0];
     if (hit === undefined) continue;
 
     const start = lineStart + Math.max(hit.from, leading);
-    const end = lineStart + lineEnd;
+    let end = lineStart + lineEnd;
     if (end <= start) continue;
+
+    // 句子被硬換行切斷時往下接。收進來的行**不再各自產生 span**，否則同一段
+    // 文字會被巢狀引用兩次。代價實測過：vuejs/core 吞掉 1 個原本獨立的標記、
+    // remix 吞掉 3 個，而那些標記本來就在同一個句子裡（`so that … instead of …`）。
+    let last = i;
+    while (continuesOnNextLine(lines[last]!, lines[last + 1])) {
+      last++;
+      end = lineStarts[last]! + contentEnd(lines[last]!);
+    }
+    i = last;
 
     out.push({
       charStart: start,

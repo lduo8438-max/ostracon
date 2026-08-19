@@ -716,6 +716,26 @@ excursion 升成 B 級——B 級要求文字明確提到該做法，現有 span
 那次改動「有意圖」。`v_presentable_claim` 的門仍然不變：只有 verified 支持證據的
 stated／linked 能進正式畫面，inferred 仍永遠不進。
 
+### 引文跨越硬換行（抽取器 0.5.0）
+
+引文的右邊界原本取到行尾，而 commit body 幾乎都硬換行在 72 字元。後果是
+`because the Symbol does not fit well` ／下一行 `into V8's hidden class model.`
+——逐字為真、讀起來不成句。實測 vuejs/core 24.2%、remix 21.3% 的引文是這樣壞掉的，
+而兩套黃金測試集都是 0%：**它們的理由全在單行主旨上。**
+
+右邊界改為取到**句末**，跨越硬換行。停止判準全是結構的：句末標點、空行（段落
+結束）、清單條目（新的一條）、trailer（`Co-authored-by:` 這類）、Markdown 圍欄
+或引用行。**沒有行數上限**——上限是門檻，而段落邊界已經把它框住；實測最長只續
+了 5 到 6 行。
+
+被收進引文的行**不再各自產生 span**，否則同一段文字會被巢狀引用兩次。代價量過：
+vuejs/core 吞掉 1 個原本獨立的標記、remix 吞掉 3 個，而它們本來就在同一個句子裡
+（`so that later we only need to iterate through this array instead of the entire
+props object.`）。
+
+跨行的引文因此**含有換行字元**。儲存層一律逐字，否則 span 斷言直接失效；把硬換行
+收成空白是呈現層的事，由 `unwrapQuote` 統一處理，CLI 與畫面共用同一支。
+
 ### 對比標記的引文要含被拒方案
 
 `instead of`／`rather than` 的內容是**一組對比**：「本來要用 A，改用 B」。

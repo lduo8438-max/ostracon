@@ -20,7 +20,16 @@ export interface EntityRow {
   stableKey: string;
   path: string;
   symbol: string;
+  /**
+   * 真正改到這個宣告的次數（`change_level <> 'none'`）。
+   *
+   * **不含 `none`**：那是「這個檔案動了，但這個宣告沒動」。把它算成改動會讓
+   * 數字誇大一個數量級——實測 vuejs/core 的 revision_change 有 88.5% 是 `none`，
+   * `ExtractPropTypes` 的 168 列裡有 156 列是。
+   */
   revisions: number;
+  /** 這個宣告沒動、但所屬檔案動了的次數。時間軸仍會列出來，只是不算改動。 */
+  untouched: number;
   /**
    * 有幾次改動有**專屬於這個宣告**的理由（引文只歸給它一個）。
    *
@@ -73,7 +82,10 @@ export function listEntities(
      )
      SELECT e.id AS entityId, e.stable_key AS stableKey,
             last.path AS path, last.symbol AS symbol,
-            COUNT(DISTINCT rc.id) AS revisions,
+            COUNT(DISTINCT CASE WHEN rc.change_level <> 'none' THEN rc.id END)
+              AS revisions,
+            COUNT(DISTINCT CASE WHEN rc.change_level = 'none' THEN rc.id END)
+              AS untouched,
             COUNT(DISTINCT CASE WHEN sc.batch_only = 0 THEN rc.id END)
               AS withEntityIntent,
             COUNT(DISTINCT CASE WHEN sc.batch_only = 1 THEN rc.id END)
@@ -181,7 +193,14 @@ export interface RepoSummary {
   changesWithEntityIntent: number;
   /** 只有整批共用理由的改動數。 */
   changesWithBatchIntent: number;
+  /**
+   * 真正的改動數。**分子與分母必須數同一種東西**——claim 的相關性判準是
+   * `change_level <> 'none'`，分母把 `none` 也算進來的話，那個比例是在比較
+   * 兩個不同的母體。實測 vuejs/core 有 88.5% 的列是 `none`，分母因此虛胖九倍。
+   */
   changes: number;
+  /** 「檔案動了但這個宣告沒動」的列數。時間軸看得到，但不是改動。 */
+  untouched: number;
   /**
    * 存在但無法歸因的證據。**沒有這個數字，使用者會把空白讀成「沒有人寫理由」**，
    * 而真相是有人寫了、只是 squash 把「哪句話對應哪次改動」銷毀了。
@@ -223,7 +242,11 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
      )
      SELECT r.root_path AS rootPath,
             (SELECT COUNT(*) FROM revision_change rc
-               JOIN entity e ON e.id = rc.entity_id WHERE e.repo_id = r.id) AS changes,
+               JOIN entity e ON e.id = rc.entity_id
+              WHERE e.repo_id = r.id AND rc.change_level <> 'none') AS changes,
+            (SELECT COUNT(*) FROM revision_change rc
+               JOIN entity e ON e.id = rc.entity_id
+              WHERE e.repo_id = r.id AND rc.change_level = 'none') AS untouched,
             (SELECT COUNT(*) FROM scoped WHERE batch_only = 0) AS changesWithEntityIntent,
             (SELECT COUNT(*) FROM scoped WHERE batch_only = 1) AS changesWithBatchIntent
        FROM repo r WHERE r.id = ?`,
@@ -231,6 +254,7 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
     | {
       rootPath: string;
       changes: number;
+      untouched: number;
       changesWithEntityIntent: number;
       changesWithBatchIntent: number;
     }

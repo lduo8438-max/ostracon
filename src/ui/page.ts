@@ -217,6 +217,9 @@ async function boot() {
     + \`（\${pct.toFixed(1)}%）\`
     + (summary.changesWithBatchIntent > 0
       ? \`　另有 \${summary.changesWithBatchIntent} 次只有整批理由\`
+      : "")
+    + (summary.untouched > 0
+      ? \`　時間軸另列出 \${summary.untouched} 次「檔案動了但這裡沒動」\`
       : "");
   // **抑制不能靜默。** 沒有這一行，使用者會把大片空白讀成「這個團隊不寫理由」，
   // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
@@ -244,7 +247,9 @@ function renderEntities(query) {
             aria-current="\${e.entityId === current}">
       <div class="symbol">\${text(e.symbol)}</div>
       <div class="path">\${text(e.path)}</div>
-      <div class="meta"><span>\${e.revisions} 次改動</span><span>\${
+      <div class="meta"><span>\${e.revisions} 次改動\${
+        e.untouched > 0 ? " · " + e.untouched + " 次未動" : ""
+      }</span><span>\${
         e.withEntityIntent > 0
           ? e.withEntityIntent + " 次有專屬理由"
           : e.withBatchIntent > 0
@@ -258,7 +263,10 @@ async function select(entityId) {
   current = entityId;
   renderEntities($("filter").value);
   const rows = await (await fetch("./api/evolution?entity=" + entityId)).json();
-  $("evolution-count").textContent = rows.length + " 次";
+  // 「幾次」要與結構欄用同一個定義，否則同一個宣告在兩欄顯示兩個數字。
+  const changed = rows.filter((r) => r.changeLevel !== "none").length;
+  $("evolution-count").textContent = changed + " 次改動"
+    + (rows.length > changed ? "　共 " + rows.length + " 列" : "");
   const entityLevel = rows.filter(
     (r) => r.intent.some((c) => c.scope === "entity"),
   ).length;

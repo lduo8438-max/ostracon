@@ -112,6 +112,7 @@ describe("三欄 UI 的資料層", () => {
     assert.ok(entity);
     assert.equal(entity.symbol, "cappedFetch");
     assert.equal(entity.revisions, 2);
+    assert.equal(entity.untouched, 0);
     assert.equal(entity.withEntityIntent, 1);
     assert.equal(entity.withBatchIntent, 0);
     db.close();
@@ -121,6 +122,7 @@ describe("三欄 UI 的資料層", () => {
     const db = open(fixtureDb());
     const summary = repoSummary(db, 1);
     assert.equal(summary.changes, 2);
+    assert.equal(summary.untouched, 0);
     assert.equal(summary.changesWithEntityIntent, 1);
     assert.equal(summary.changesWithBatchIntent, 0);
     db.close();
@@ -388,6 +390,31 @@ describe("整批理由要標示而不是收回", () => {
     const rows = listEntities(db, 1);
     assert.equal(rows.length, 5);
     assert.ok(rows.every((r) => r.withEntityIntent === 0 && r.withBatchIntent === 1));
+    db.close();
+  });
+
+  it("**分子與分母必須數同一種東西**", () => {
+    // claim 的相關性判準是 `change_level <> 'none'`。分母把 `none` 也算進來的話，
+    // 那個比例是在比較兩個不同的母體——實測 vuejs/core 有 88.5% 的列是 `none`，
+    // 分母因此虛胖九倍。
+    const dbPath = batchDb(3);
+    const db = open(dbPath);
+    db.exec(
+      `INSERT INTO git_commit
+         (id, repo_id, sha, authored_at, committed_at, message, topo_order)
+       VALUES (2, 1, 'bbbbbbbbbbbb', '2026-01-02', '2026-01-02', 'chore: touch', 1);
+       INSERT INTO revision_change
+         (id, prev_revision, commit_id, entity_id, change_level)
+       VALUES (91, 1, 2, 1, 'none'), (92, 2, 2, 2, 'none')`,
+    );
+    const summary = repoSummary(db, 1);
+    assert.equal(summary.changes, 3, "只數真的改到的");
+    assert.equal(summary.untouched, 2, "「檔案動了但這裡沒動」單獨數，不混進分母");
+
+    const first = listEntities(db, 1).find((e) => e.symbol === "sym1");
+    assert.ok(first);
+    assert.equal(first.revisions, 1);
+    assert.equal(first.untouched, 1);
     db.close();
   });
 

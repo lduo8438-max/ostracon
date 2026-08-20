@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { deriveClaims } from "../src/claim/derive.ts";
 import { evolutionOf, listEntities, repoSummary } from "../src/ui/data.ts";
-import { startUiServer } from "../src/ui/server.ts";
+import {
+  ENTITIES_PATH,
+  SUMMARY_PATH,
+  evolutionPath,
+  startUiServer,
+} from "../src/ui/server.ts";
+import { exportStaticSite } from "../src/ui/export.ts";
 import { PAGE } from "../src/ui/page.ts";
 import { sha256 } from "../src/evidence/span.ts";
 
@@ -231,11 +237,11 @@ describe("三欄 UI 的伺服器", () => {
       assert.equal(page.headers.get("content-type"), "text/html; charset=utf-8");
       assert.match(await page.text(), /Ostracon/);
 
-      const entities = await (await fetch(`${url}api/entities`)).json() as
+      const entities = await (await fetch(`${url}api/entities.json`)).json() as
         Array<{ entityId: number }>;
       assert.equal(entities.length, 1);
       const rows = await (await fetch(
-        `${url}api/evolution?entity=${entities[0]!.entityId}`,
+        `${url}api/evolution/${entities[0]!.entityId}.json`,
       )).json() as Array<{ intent: unknown[] }>;
       assert.deepEqual(rows.map((r) => r.intent.length), [1, 0]);
     } finally {
@@ -248,8 +254,11 @@ describe("三欄 UI 的伺服器", () => {
     // 讓畫面說謊。
     const { url, server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });
     try {
-      assert.equal((await fetch(`${url}api/evolution?entity=abc`)).status, 400);
-      assert.equal((await fetch(`${url}api/evolution`)).status, 400);
+      // 壞 id 與「沒這條路由」必須分開：把壞參數當成 404 會讓使用者
+      // 去找一個其實存在的端點。
+      assert.equal((await fetch(`${url}api/evolution/abc.json`)).status, 400);
+      assert.equal((await fetch(`${url}api/evolution/-1.json`)).status, 400);
+      assert.equal((await fetch(`${url}api/evolution`)).status, 404);
       assert.equal((await fetch(`${url}nope`)).status, 404);
     } finally {
       server.close();
@@ -421,5 +430,89 @@ describe("整批理由要標示而不是收回", () => {
   it("整批的引文不給暖色——顏色本身也不能誇大", () => {
     assert.match(PAGE, /\.claim\.batch q \{/);
     assert.match(PAGE, /同時歸給/);
+  });
+});
+
+describe("靜態匯出", () => {
+  const outDir = () => mkdtempSync(path.join(tmpdir(), "ostracon-export-"));
+
+  it("**匯出的路徑與伺服器的完全相同**", () => {
+    // 這是「頁面只有一份實作」的物理保證：兩邊的 URL 一樣，頁面裡就不會
+    // 長出「靜態版 / 伺服器版」的分支。
+    const db = open(fixtureDb());
+    const out = outDir();
+    const report = exportStaticSite(db, out, { label: "demo repo" });
+    assert.equal(report.entities, 1);
+    for (const relative of [
+      SUMMARY_PATH, ENTITIES_PATH, evolutionPath(1), "/index.html",
+    ]) {
+      assert.ok(
+        existsSync(path.join(out, relative.replace(/^\//, ""))),
+        `${relative} 應該被寫出來`,
+      );
+    }
+    db.close();
+  });
+
+  it("**有意圖的宣告一定會被匯出，不受改動量排序影響**", () => {
+    // 實測 vuejs/core 取前 400 筆時門檻是 11 次改動，而訊噪比最好的
+    // `generateCodeFrame`（10 次改動、一條具體約束）剛好被擠掉。
+    // demo 的內容不能被一個與內容無關的排序決定。
+    const db = open(fixtureDb());
+    const out = outDir();
+    // limit 1 之下，只靠改動量排序仍會取到那一筆；把它降到 0 才看得出差別，
+    // 所以改用「只要有意圖就一定在」這個性質來釘。
+    const report = exportStaticSite(db, out, { label: "x", limit: 0 });
+    assert.equal(report.entities, 1, "有意圖的那一筆不得因為 limit 被丟掉");
+    assert.ok(existsSync(path.join(out, evolutionPath(1).replace(/^\//, ""))));
+    db.close();
+  });
+
+  it("**`--label` 取代本機路徑**", () => {
+    // 不換的話 demo 會把匯出者的檔案系統路徑公開出去。這不是美觀問題。
+    const db = open(fixtureDb());
+    const out = outDir();
+    exportStaticSite(db, out, { label: "vuejs/core" });
+    const summary = JSON.parse(
+      readFileSync(path.join(out, SUMMARY_PATH.replace(/^\//, "")), "utf8"),
+    ) as { rootPath: string };
+    assert.equal(summary.rootPath, "vuejs/core");
+    // 真正該驗的是「來源路徑沒有外洩」——fixture 的 root_path 是 `/r`。
+    assert.equal(
+      JSON.stringify(summary).includes(repoSummary(db, 1).rootPath),
+      false,
+      "匯出的 JSON 裡不得殘留資料庫記的本機路徑",
+    );
+    db.close();
+  });
+
+  it("匯出的內容與伺服器回的一字不差", async () => {
+    // 兩條路徑各算一次的話，線上 demo 與本機看到的會是兩份資料。
+    const dbPath = fixtureDb();
+    const out = outDir();
+    const db = open(dbPath);
+    exportStaticSite(db, out, { label: "x" });
+    db.close();
+
+    const { url, server } = await startUiServer({ dbPath, port: 0 });
+    try {
+      const live = await (await fetch(`${url}api/evolution/1.json`)).text();
+      const stat = readFileSync(
+        path.join(out, evolutionPath(1).replace(/^\//, "")), "utf8",
+      );
+      assert.equal(stat, live);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("匯出的頁面沒有任何外部資源，也沒有殘留的查詢字串端點", () => {
+    const db = open(fixtureDb());
+    const out = outDir();
+    exportStaticSite(db, out, { label: "x" });
+    const html = readFileSync(path.join(out, "index.html"), "utf8");
+    assert.equal(/(?:src|href)="(?:https?:)?\/\//.test(html), false);
+    assert.doesNotMatch(html, /api\/evolution\?/, "查詢字串沒辦法變成靜態檔");
+    db.close();
   });
 });

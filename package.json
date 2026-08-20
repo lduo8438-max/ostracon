@@ -25,7 +25,8 @@
     "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",
     "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
     "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts",
-    "prepublishOnly": "pnpm run build && pnpm test"
+    "prepublishOnly": "pnpm run build && pnpm test",
+    "ui:export": "node --experimental-strip-types src/cli/export-site.ts"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

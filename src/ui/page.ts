@@ -206,7 +206,7 @@ let entities = [];
 let current = null;
 
 async function boot() {
-  const summary = await (await fetch("./api/summary")).json();
+  const summary = await (await fetch("./api/summary.json")).json();
   $("repo").textContent = summary.rootPath;
   const pct = summary.changes === 0
     ? 0 : (summary.changesWithEntityIntent / summary.changes) * 100;
@@ -231,7 +231,7 @@ async function boot() {
     $("aggregate").hidden = false;
   }
 
-  entities = await (await fetch("./api/entities")).json();
+  entities = await (await fetch("./api/entities.json")).json();
   $("entity-count").textContent = entities.length + " 個";
   renderEntities("");
 }
@@ -262,7 +262,7 @@ function renderEntities(query) {
 async function select(entityId) {
   current = entityId;
   renderEntities($("filter").value);
-  const rows = await (await fetch("./api/evolution?entity=" + entityId)).json();
+  const rows = await (await fetch("./api/evolution/" + entityId + ".json")).json();
   // 「幾次」要與結構欄用同一個定義，否則同一個宣告在兩欄顯示兩個數字。
   const changed = rows.filter((r) => r.changeLevel !== "none").length;
   $("evolution-count").textContent = changed + " 次改動"

@@ -47,10 +47,23 @@ export interface EntityRow {
  * 依「改動次數」排序而不是字母序——使用者打開這個工具是想看演化，
  * 動得最多的東西最可能是他要找的。
  */
+export interface ListEntitiesOptions {
+  /**
+   * 只列出**有意圖可看**的宣告。
+   *
+   * 預設的「依改動次數排序取前 N 筆」對瀏覽是對的，對匯出卻會反過來挑到雜訊
+   * 最多的那一端：實測 vuejs/core 匯出前 400 筆時，門檻是 11 次改動，而
+   * `generateCodeFrame`（10 次改動、1 條具體的約束理由、訊噪比最好）**剛好被
+   * 擠掉**。demo 的內容不能被一個與內容無關的排序決定。
+   */
+  onlyWithIntent?: boolean;
+}
+
 export function listEntities(
   db: DatabaseSync,
   repoId: number,
   limit = 400,
+  options: ListEntitiesOptions = {},
 ): EntityRow[] {
   return db.prepare(
     `WITH claim_change AS (
@@ -103,6 +116,9 @@ export function listEntities(
        LEFT JOIN scoped sc ON sc.revision_change_id = rc.id
       WHERE e.repo_id = ?
       GROUP BY e.id
+      ${options.onlyWithIntent === true
+        ? "HAVING withEntityIntent > 0 OR withBatchIntent > 0"
+        : ""}
       ORDER BY revisions DESC, last.path, last.symbol
       LIMIT ?`,
   ).all(repoId, repoId, repoId, repoId, limit) as unknown as EntityRow[];

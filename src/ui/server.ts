@@ -25,6 +25,32 @@ export interface UiOptions {
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as const;
 
+/**
+ * 端點以**路徑**定位，而且帶 `.json` 副檔名。
+ *
+ * 這是為了讓靜態匯出與這台伺服器**共用同一個頁面**。查詢字串
+ * （原本的 `?entity=7`）沒有辦法變成靜態檔，一旦保留就得替頁面寫第二套取數
+ * 邏輯——而「同一個東西兩份實作」在這個專案已經出過好幾次事。改成路徑之後，
+ * `ostracon export` 直接把檔案寫在同名位置，頁面一個字都不用改。
+ */
+export const SUMMARY_PATH = "/api/summary.json";
+export const ENTITIES_PATH = "/api/entities.json";
+export const evolutionPath = (entityId: number) => `/api/evolution/${entityId}.json`;
+
+/**
+ * 從路徑取回 entity id。
+ *
+ * `undefined` = 不是這條路由；`null` = 是這條路由但 id 不合法。**兩者不可合併**：
+ * 前者要回 404，後者要回 400，而把壞參數當成「沒這個路徑」會讓使用者去找一個
+ * 根本存在的端點。
+ */
+function entityIdFromPath(pathname: string): number | null | undefined {
+  const match = /^\/api\/evolution\/(.*)\.json$/.exec(pathname);
+  if (match === null) return undefined;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 export function createUiServer(options: UiOptions): Server {
   const repoId = options.repoId ?? 1;
   return createServer((request, response) => {
@@ -38,25 +64,25 @@ export function createUiServer(options: UiOptions): Server {
         response.end(PAGE);
         return;
       }
-      if (url.pathname === "/api/summary") {
+      if (url.pathname === SUMMARY_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(repoSummary(db, repoId)));
         return;
       }
-      if (url.pathname === "/api/entities") {
+      if (url.pathname === ENTITIES_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(listEntities(db, repoId)));
         return;
       }
-      if (url.pathname === "/api/evolution") {
-        const entity = Number(url.searchParams.get("entity"));
-        if (!Number.isSafeInteger(entity) || entity <= 0) {
+      const id = entityIdFromPath(url.pathname);
+      if (id !== undefined) {
+        if (id === null) {
           response.writeHead(400, JSON_HEADERS);
           response.end(JSON.stringify({ error: "entity 必須是正整數" }));
           return;
         }
         response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(evolutionOf(db, repoId, entity)));
+        response.end(JSON.stringify(evolutionOf(db, repoId, id)));
         return;
       }
       response.writeHead(404, JSON_HEADERS);

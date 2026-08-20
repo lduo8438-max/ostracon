@@ -25,6 +25,10 @@ const USAGE = `ostracon — 從 git history 重建程式碼的決策演化史
   ostracon ui [--db <file>] [--port <n>] [--repo-id <n>]
         三欄畫面：結構 → 演化 → 意圖。只讀不建索引，只綁 127.0.0.1。
 
+  ostracon export --db <file> --out <dir> --label <名稱> [--limit <n>]
+        匯出成純靜態站台（線上 demo 用）。--label 是必填：不給的話畫面會
+        顯示匯出者的本機路徑。
+
   ostracon evidence extract --db <file> [--repo-id <n>]
         從 commit message 抽取理由並驗證 span。零網路、零 LLM。
 
@@ -46,6 +50,9 @@ async function dispatch(argv: string[]): Promise<void> {
 
     case "ui":
       return (await import("./ui.ts")).main(rest);
+
+    case "export":
+      return (await import("./export-site.ts")).main(rest);
 
     case "evidence": {
       const [sub, ...args] = rest;

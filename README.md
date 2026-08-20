@@ -9,6 +9,25 @@
 判準：抽掉 LLM 之後仍剩下 AST 解析、四層雜湊、匹配演算法、圖遍歷、增量索引引擎。
 任何讓這個答案變弱的功能都不做。
 
+## 線上 demo
+
+**<https://lduo8438-max.github.io/ostracon-demo/>** —— 不用安裝，三個真實 repo：
+
+| 語料 | 有專屬理由的改動 | 展示什麼 |
+|---|---|---|
+| [vuejs/core](https://lduo8438-max.github.io/ostracon-demo/vuejs-core/) | 37 / 24,779 | 意圖層。非 squash 歷史，理由指得到單一宣告 |
+| [create-t3-app](https://lduo8438-max.github.io/ostracon-demo/create-t3-app/) | 4 / 1,594 | **誠實留白**。squash 銷毀了歸屬，253 個候選不升格 |
+| [osiris](https://lduo8438-max.github.io/ostracon-demo/osiris/) | **0** / 796 | 小型專案：一次都沒有替單一宣告寫過理由 |
+
+**畫面上的每個字都是零 LLM 產生的。** 意圖欄的空白是真實的觀測值——理由是稀有的，
+三個語料說得出專屬理由的改動都不到 0.3%。
+
+自己匯出一份：
+
+```bash
+ostracon export --db <index.db> --out <dir> --label <語料名稱>
+```
+
 ---
 
 ## 環境需求

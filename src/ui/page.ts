@@ -95,6 +95,11 @@ h2 {
 }
 section:last-child h2 { background: var(--ground); }
 h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 400; }
+/* 這條 float 是為「純文字標題 + 一個計數 span」寫的（演化欄、意圖欄都是那個形狀）。
+   左欄的標題本身也是 span——它要隨 tab 換字——所以會被一起浮動：標題跑到右邊，
+   而且 h2 裡沒有任何 in-flow 內容，高度塌陷成只剩 padding，底線就從計數文字的
+   中間穿過去。錄影放大之後才看得出來。 */
+h2 #list-title { float: none; }
 
 #filter {
   width: 100%; border: 0; border-bottom: 1px solid var(--rule);
@@ -111,6 +116,9 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
 .entity[aria-current="true"] { background: var(--ink); color: var(--surface); }
 .entity[aria-current="true"] .path,
 .entity[aria-current="true"] .meta { color: #b9c1c8; }
+/* 選中列的底色就是 --ink，而 .days 的字色也是 --ink——深色印在深色上，
+   天數整個消失。反白時要跟著翻。 */
+.entity[aria-current="true"] .days { color: var(--surface); }
 .entity .symbol { font-weight: 700; }
 .entity .path, .entity .meta { color: var(--muted); font-size: 11px; }
 .tabs { display: flex; border-bottom: 1px solid var(--rule); }

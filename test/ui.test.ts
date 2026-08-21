@@ -699,3 +699,18 @@ describe("清單的名稱要符合資料", () => {
     assert.doesNotMatch(PAGE, /現存的宣告/);
   });
 });
+
+describe("反白與標題的可讀性", () => {
+  it("**選中列的天數不得與底色同色**", () => {
+    // `.entity[aria-current="true"]` 的底色是 --ink，而 `.days` 的字色也是
+    // --ink——深色印在深色上，天數整個消失。錄影放大之後才看得出來。
+    assert.match(PAGE, /\.entity\[aria-current="true"\] \.days \{ color: var\(--surface\); \}/);
+  });
+
+  it("**左欄標題不得被 h2 的 float 規則捲走**", () => {
+    // `h2 span { float: right }` 是為「純文字標題 + 一個計數 span」寫的。
+    // 左欄的標題本身是 span（要隨 tab 換字），被一起浮動之後標題跑到右邊，
+    // h2 也因為沒有 in-flow 內容而高度塌陷，底線從計數文字中間穿過。
+    assert.match(PAGE, /h2 #list-title \{ float: none; \}/);
+  });
+});

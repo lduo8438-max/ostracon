@@ -141,6 +141,45 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### `death_commit_id` 停在第一次死亡（2026-08-20，已修）
+
+`entity.death_commit_id` 是**衍生欄位**，真相在 `revision_change` 的 `death` 列。
+但兩個 pass 都在寫死亡時就地更新，而且帶著 `AND death_commit_id IS NULL`——那條件
+本意是防覆寫，實際效果是**宣告死而復生時死亡點永遠停在第一次**。
+
+vuejs/core 的 `Vue` 死在 topo 108，卻一路活到 topo 356，中間還從
+`packages/vue/src/index.ts` 搬到 `packages/vue-compat/src/index.ts`。更極端的：
+`getNow` 死亡記在 topo 225，最後一個 revision 在 **7100**。
+
+| 語料 | 有死亡紀錄 | 死亡點早於最後 revision | 受影響的 A 級迂迴 |
+|---|---|---|---|
+| vuejs/core | 1,632 | **176（10.8%）** | 44 |
+| remix | 12,387 | 243（2.0%） | 69 |
+| create-t3-app | 189 | **0** | 0 |
+| Osiris | 129 | 1 | 0 |
+
+**兩套黃金語料又是 0。**「同一個功能，兩種輸入，只驗了一種」第十發。
+
+修法是把兩處就地更新**整個刪掉**，改成 pass 結尾的 `reconcileEntityDeaths`
+依 `revision_change` 重算：最後一次 `death` 必須晚於最後一個 revision，這個
+entity 才算死了。一份實作、走訪順序與續跑都不影響結果，而且**順手修好舊資料庫**，
+不必為了這個修正逼所有人重建索引。另外在 `detectExcursions` 加一道守門：誕生與
+消亡同一顆 commit 的不是迂迴——那在語意上永遠不成立。
+
+修正後（fresh DB 重建）：
+
+| 指標 | 修正前 | 修正後 |
+|---|---|---|
+| vuejs/core 異常死亡點 | 176 | **0** |
+| vuejs/core `introduce == remove` | 39 | **0** |
+| vuejs/core A 級迂迴 | 757 | **710** |
+| vuejs/core `duration_days = 0` | 51 | 12 |
+| Osiris／create-t3-app A 級 | 94 ／ 102 | 94 ／ 102（不變） |
+
+controlled fixture 補上「移除 → 一字不差加回 → 再移除」的形狀（`index_until`
+移到 `f359ecde`），golden 新增 `ctrl-revived-second-removal`。**它釘住的是第二段
+生命週期自己成立**，不是繼承第一次的死亡點。
+
 ### 稀疏度的分母原本混進了「沒動」（2026-08-19）
 
 拆成兩個數字之後才看出來：**分子與分母在數不同的東西**。claim 的相關性判準是

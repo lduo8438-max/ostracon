@@ -19,6 +19,7 @@ import {
   writeChange,
   writeDiscontinuity,
   writeMatch,
+  reconcileEntityDeaths,
 } from "./structural.ts";
 import { recordDeclarationScope } from "./repo-pass.ts";
 
@@ -325,9 +326,7 @@ export async function indexLineage(
           changeLevel: "death",
           sigChanged: false,
         });
-        db.prepare(
-          "UPDATE entity SET death_commit_id = ? WHERE id = ? AND death_commit_id IS NULL",
-        ).run(commitId(db, repoId, touch.sha), resolved);
+        // 死亡點由 `reconcileEntityDeaths` 在 pass 結尾依 revision_change 重算。
       }
     });
 
@@ -348,6 +347,9 @@ export async function indexLineage(
   if (revisionCount(db, repoId) > before) {
     recordDeclarationScope(db, repoId, indexerVersion, "lineage", null);
   }
+
+  // 死亡點是衍生欄位，整批依 revision_change 重算——走訪順序與續跑都不影響結果。
+  reconcileEntityDeaths(db, repoId);
 
   return report;
 }

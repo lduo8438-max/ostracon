@@ -16,6 +16,11 @@
       "status": "pass"
     },
     {
+      "id": "ctrl-revived-second-removal",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
       "id": "evd-zh-colon-marker",
       "difficulty": "hard",
       "status": "pass"

@@ -1033,3 +1033,42 @@ export function matchPools(
 }
 
 export { changeLevel };
+
+/**
+ * 依 `revision_change` 重算每個 entity 的 `death_commit_id`。
+ *
+ * **`entity.death_commit_id` 是衍生欄位，不是獨立事實。** 真相在
+ * `revision_change` 的 `death` 列上。原本兩個 pass 各自在寫死亡時就地更新，
+ * 而且帶著 `AND death_commit_id IS NULL`——那條件本來是防覆寫，實際效果卻是
+ * **宣告死而復生時死亡點永遠停在第一次**。
+ *
+ * 實測 vuejs/core：1,632 個有死亡紀錄的 entity 裡有 **176 個（10.8%）的死亡點
+ * 早於它自己最後一個 revision**；`Vue` 死在 topo 108，卻一路活到 topo 356，
+ * 中間還從 `packages/vue/src/index.ts` 搬到 `packages/vue-compat/src/index.ts`。
+ * 後果是 **44 條 A 級迂迴是假的**——那些程式碼後來還活著，而且 `duration_days`
+ * 被算成 0 天。remix 同型 69 條。**兩套黃金語料都是 0，所以它活到現在。**
+ *
+ * 判準：**最後一次 `death` 必須晚於最後一個 revision**，這個 entity 才算死了。
+ * 死亡那顆 commit 不會有 revision（`writeChange` 的 death 只掛 `prevRevision`），
+ * 所以「晚於」是嚴格的。復活過的一律回到 NULL。
+ *
+ * 放在 pass 結尾整批算，而不是逐次改動時更新：一來走訪順序與續跑都不影響結果，
+ * 二來它會**順手修好舊資料庫**，不必為了這個修正逼所有人重建索引。
+ */
+export function reconcileEntityDeaths(db: DatabaseSync, repoId: number): number {
+  const changed = db.prepare(
+    `UPDATE entity SET death_commit_id = (
+       SELECT d.commit_id
+         FROM revision_change d
+         JOIN git_commit dg ON dg.id = d.commit_id
+        WHERE d.entity_id = entity.id AND d.change_level = 'death'
+          AND dg.topo_order > COALESCE(
+                (SELECT MAX(g.topo_order) FROM revision r
+                   JOIN git_commit g ON g.id = r.commit_id
+                  WHERE r.entity_id = entity.id), -1)
+        ORDER BY dg.topo_order DESC
+        LIMIT 1)
+     WHERE repo_id = ?`,
+  ).run(repoId);
+  return Number(changed.changes);
+}

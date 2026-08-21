@@ -2,6 +2,7 @@ import "./adapter.integration.test.ts";
 import "./aggregate.test.ts";
 import "./fixture-tools.test.mjs";
 import "./claim.test.ts";
+import "./entity-death.test.ts";
 import "./excursion.test.ts";
 import "./git-index.test.ts";
 import "./golden-evidence.test.ts";

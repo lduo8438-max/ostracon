@@ -59,6 +59,12 @@ export interface ExcursionReport {
   candidates: number;
   /** 內容在死亡當下或之後仍存在於別處——是搬移不是迂迴，直接排除 */
   excludedAsMoved: number;
+  /**
+   * 誕生與消亡在同一顆 commit，因而被擋下的候選。
+   *
+   * 那在語意上永遠不是迂迴：歷史上沒有任何一刻這個做法存在過又被撤掉。
+   */
+  excludedAsSameCommit: number;
   byStrength: Record<ExcursionStrength, number>;
   byMethod: Record<string, number>;
 }
@@ -284,6 +290,7 @@ export function detectExcursions(
     scope: options.scope,
     candidates: 0,
     excludedAsMoved: 0,
+    excludedAsSameCommit: 0,
     byStrength: { A: 0, B: 0, C: 0 },
     byMethod: {},
   };
@@ -345,6 +352,13 @@ export function detectExcursions(
       const birth = commitId.get(repoId, entity.birthSha) as { id: number } | undefined;
       const death = commitId.get(repoId, entity.deathSha) as { id: number } | undefined;
       if (birth === undefined || death === undefined) continue;
+      // 同一顆 commit 既誕生又消亡的不是迂迴——歷史上根本沒有「試過」的區間。
+      // 這在死亡點修好之前是 vue 39 條、remix 50 條的來源；守門留著，因為
+      // 它擋的是一個語意上永遠不成立的狀態，不只是那個 bug 的症狀。
+      if (birth.id === death.id) {
+        report.excludedAsSameCommit++;
+        continue;
+      }
 
       insert.run(
         repoId,

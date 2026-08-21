@@ -209,6 +209,45 @@ const zhConjunction = zhCommit(
   "2026-01-12T00:00:00Z",
 );
 
+// ── 死而復生 ──────────────────────────────────────────────────────────────
+//
+// 宣告被移除、後來又加回來、最後再被移除。`entity.death_commit_id` 是衍生
+// 欄位，原本兩個 pass 在寫死亡時就地更新且帶著 `AND death_commit_id IS NULL`，
+// 於是**死亡點永遠停在第一次**——實測 vuejs/core 有 176 個 entity（10.8%）
+// 的死亡點早於它自己最後一個 revision，連帶產生 44 條假的 A 級迂迴。
+//
+// 兩套既有的黃金語料都沒有這個形狀，所以它活到現在。這裡把它釘住。
+const revived = (message, date, body) => {
+  writeFileSync(path.join(absolute, "src/revived.ts"), body);
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", message], date);
+  return git(["rev-parse", "HEAD"]);
+};
+
+const revivedBorn = revived(
+  "add the retry helper",
+  "2026-01-13T00:00:00Z",
+  `${source("retryOnce")}\n${source("keepAlive")}\n`,
+);
+// 第一次移除：只留下同檔的另一個宣告，檔案本身不消失。
+const revivedGone = revived(
+  "drop the retry helper",
+  "2026-01-14T00:00:00Z",
+  `${source("keepAlive")}\n`,
+);
+// 復活：一字不差地加回來。死亡點必須跟著回到 NULL。
+const revivedBack = revived(
+  "bring the retry helper back",
+  "2026-01-15T00:00:00Z",
+  `${source("retryOnce")}\n${source("keepAlive")}\n`,
+);
+// 第二次移除：這一次才是真正的死亡點。
+const revivedGoneAgain = revived(
+  "drop the retry helper for good",
+  "2026-01-16T00:00:00Z",
+  `${source("keepAlive")}\n`,
+);
+
 console.log(
   JSON.stringify(
     {
@@ -225,6 +264,10 @@ console.log(
       zhMidWord,
       zhColon,
       zhConjunction,
+      revivedBorn,
+      revivedGone,
+      revivedBack,
+      revivedGoneAgain,
     },
     null,
     2,

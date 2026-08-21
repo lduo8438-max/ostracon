@@ -24,6 +24,7 @@ import {
   writeChange,
   writeDiscontinuity,
   writeMatch,
+  reconcileEntityDeaths,
 } from "./structural.ts";
 
 /**
@@ -590,9 +591,7 @@ export async function indexRepoStructure(
           changeLevel: "death",
           sigChanged: false,
         });
-        db.prepare(
-          "UPDATE entity SET death_commit_id = ? WHERE id = ? AND death_commit_id IS NULL",
-        ).run(commit.id, resolved);
+        // 死亡點由 `reconcileEntityDeaths` 在 pass 結尾依 revision_change 重算。
         if (!touchedKeys.has(prevKey)) {
           entityAt.delete(prevKey);
           revisionAt.delete(prevKey);
@@ -611,6 +610,10 @@ export async function indexRepoStructure(
     // 「沒跑過宣告層」的狀態，下一趟又會判成 full。空 repo 才會走到這裡。
     recordDeclarationScope(db, repoId, indexerVersion, "repo", null);
   }
+
+  // 死亡點是衍生欄位，整批依 revision_change 重算——走訪順序與續跑都不影響
+  // 結果，而且順手修好舊資料庫。
+  reconcileEntityDeaths(db, repoId);
 
   report.elapsedMs = Date.now() - t0;
   return report;

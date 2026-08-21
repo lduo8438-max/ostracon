@@ -3,7 +3,7 @@ fixture_version: 1
 repo:
   name: controlled-typescript
   clone_url: "generated:fixtures/build-controlled-repo.mjs"
-  index_until: 464a245ba611511eac15f1e0298b6e18feeb9671
+  index_until: f359ecde08affacaa81a8d543f6e88a7b736b275
   language: typescript
 
 labeled_by: codex
@@ -225,3 +225,22 @@ cases:
     rationale: >
       「這是因為……」接在漢字後面是合法中文。實測「前一字不得是漢字」這條
       泛用規則代價 1 條、收益 0 條，已否決；這條案例守住它不會被重新引入。
+
+  # ── 死而復生 ───────────────────────────────────────────────────────────────
+  #
+  # `entity.death_commit_id` 是衍生欄位。原本兩個 pass 在寫死亡時就地更新且帶著
+  # `AND death_commit_id IS NULL`，於是死亡點永遠停在第一次——實測 vuejs/core
+  # 有 176 個 entity（10.8%）的死亡點早於它自己最後一個 revision，連帶產生
+  # 44 條假的 A 級迂迴。兩套既有的黃金語料都沒有這個形狀。
+  - id: ctrl-revived-second-removal
+    kind: excursion
+    difficulty: hard
+    entity: {path: src/revived.ts, symbol: retryOnce}
+    expect: present
+    introduce_at: 87114bf1dcd244ea61186df645587256674f0724
+    remove_at: f359ecde08affacaa81a8d543f6e88a7b736b275
+    expect_strength_at_least: A
+    rationale: >
+      retryOnce 被移除（127500a8）之後又一字不差地加回來（87114bf1），
+      最後才真正移除（f359ecde）。第二段生命週期必須自己成立，
+      而不是繼承第一次的死亡點——那正是 vuejs/core 上假迂迴的來源。

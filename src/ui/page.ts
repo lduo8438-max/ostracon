@@ -191,11 +191,11 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
   </section>
   <section aria-label="演化">
     <h2>演化 <span id="evolution-count"></span></h2>
-    <div id="evolution"><p class="hint">從左邊挑一個宣告。</p></div>
+    <div id="evolution"></div>
   </section>
   <section aria-label="意圖">
     <h2>意圖 <span id="intent-count"></span></h2>
-    <div id="intent"><p class="hint">意圖只在原文說得出來時才有。<b>空白是真實的觀測值</b>，不是還沒載入。</p></div>
+    <div id="intent"></div>
   </section>
 </main>
 
@@ -216,6 +216,10 @@ const TYPE = {
   tradeoff: "被拒絕的替代方案",
   abandoned_reason: "放棄理由",
 };
+
+const EMPTY_EVOLUTION = '<p class="hint">從左邊挑一個宣告。</p>';
+const EMPTY_INTENT =
+  '<p class="hint">意圖只在原文說得出來時才有。<b>空白是真實的觀測值</b>，不是還沒載入。</p>';
 
 let entities = [];
 let ostracised = { rows: [], hiddenTests: 0 };
@@ -248,6 +252,7 @@ async function boot() {
     $("aggregate").hidden = false;
   }
 
+  clearSelection();
   entities = await (await fetch("./api/entities.json")).json();
   // 被推翻的做法與 landing 的頭條數字**來自同一份 JSON**，畫面不自己數。
   ostracised = await (await fetch("./api/ostracised.json")).json();
@@ -283,8 +288,8 @@ function renderEntities(query) {
       ? ""
       : \`<div class="note-line">\${aside}</div>\`;
     $("entities").innerHTML = note + shown.map((r) => \`
-      <button class="entity gone" data-id="\${r.entityId}"
-              aria-current="\${r.entityId === current}">
+      <button class="entity gone" data-id="\${r.stableKey}"
+              aria-current="\${r.stableKey === current}">
         <div class="symbol">\${text(r.symbol)}</div>
         <div class="path">\${text(r.path)}</div>
         <div class="meta"><span><span class="days">\${r.durationDays.toFixed(0)}</span> 天</span><span>A 確證</span></div>
@@ -293,8 +298,8 @@ function renderEntities(query) {
     return;
   }
   $("entities").innerHTML = shown.map((e) => \`
-    <button class="entity" data-id="\${e.entityId}"
-            aria-current="\${e.entityId === current}">
+    <button class="entity" data-id="\${e.stableKey}"
+            aria-current="\${e.stableKey === current}">
       <div class="symbol">\${text(e.symbol)}</div>
       <div class="path">\${text(e.path)}</div>
       <div class="meta"><span>\${e.revisions} 次改動\${
@@ -309,10 +314,21 @@ function renderEntities(query) {
     </button>\`).join("");
 }
 
-async function select(entityId) {
-  current = entityId;
+/** 回到「還沒挑」的狀態。初始提示與這裡只有一份文字，不會分岔。 */
+function clearSelection() {
+  current = null;
+  $("evolution").innerHTML = EMPTY_EVOLUTION;
+  $("intent").innerHTML = EMPTY_INTENT;
+  $("evolution-count").textContent = "";
+  $("intent-count").textContent = "";
+}
+
+async function select(stableKey) {
+  current = stableKey;
   renderEntities($("filter").value);
-  const rows = await (await fetch("./api/evolution/" + entityId + ".json")).json();
+  // 對外身分一律是 stable_key：rowid 會隨全量重建漂移，而舊網址在重建後
+  // 可能**成功回傳另一個 entity**——那比 404 難發現得多。
+  const rows = await (await fetch("./api/evolution/" + stableKey + ".json")).json();
   // 「幾次」要與結構欄用同一個定義，否則同一個宣告在兩欄顯示兩個數字。
   const changed = rows.filter((r) => r.changeLevel !== "none").length;
   $("evolution-count").textContent = changed + " 次改動"
@@ -393,7 +409,7 @@ function alignRows() {
 
 $("entities").addEventListener("click", (event) => {
   const button = event.target.closest(".entity");
-  if (button) select(Number(button.dataset.id));
+  if (button) select(button.dataset.id);
 });
 $("filter").addEventListener("input", (event) => renderEntities(event.target.value));
 for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
@@ -402,6 +418,9 @@ for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
     $("tab-live").setAttribute("aria-selected", String(which === "live"));
     $("tab-gone").setAttribute("aria-selected", String(which === "gone"));
     $("filter").value = "";
+    // **兩份名單互斥，所以切換時清掉選取。** 留著的話右邊還是上一個宣告的
+    // 時間軸，左邊卻沒有任何 aria-current 列——畫面看起來像右側資料失去來源。
+    clearSelection();
     renderEntities("");
   });
 }

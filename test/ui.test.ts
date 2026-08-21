@@ -26,6 +26,10 @@ import { sha256 } from "../src/evidence/span.ts";
 const lit = (text: string) => `'${text.replaceAll("'", "''")}'`;
 
 const WITH_REASON = "fix: cap the fetch\n\nCapped it to avoid the quota burn.";
+
+/** `stable_key` 是 64 位十六進位；路由會驗格式，fixture 也要用真實形狀。 */
+const K1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1";
+const K2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2";
 const WITHOUT = "chore: reformat";
 
 /**
@@ -52,7 +56,7 @@ function fixtureDb(): string {
      INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
        VALUES (1, 1, 1, 'cappedFetch', 'function');
      INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
-       VALUES (1, 1, 'k1', 1);
+       VALUES (1, 1, '${K1}', 1);
      INSERT INTO revision
        (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
         byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
@@ -244,10 +248,10 @@ describe("三欄 UI 的伺服器", () => {
       assert.match(await page.text(), /Ostracon/);
 
       const entities = await (await fetch(`${url}api/entities.json`)).json() as
-        Array<{ entityId: number }>;
+        Array<{ stableKey: string }>;
       assert.equal(entities.length, 1);
       const rows = await (await fetch(
-        `${url}api/evolution/${entities[0]!.entityId}.json`,
+        `${url}api/evolution/${entities[0]!.stableKey}.json`,
       )).json() as Array<{ intent: unknown[] }>;
       assert.deepEqual(rows.map((r) => r.intent.length), [1, 0]);
     } finally {
@@ -264,6 +268,11 @@ describe("三欄 UI 的伺服器", () => {
       // 去找一個其實存在的端點。
       assert.equal((await fetch(`${url}api/evolution/abc.json`)).status, 400);
       assert.equal((await fetch(`${url}api/evolution/-1.json`)).status, 400);
+      // **格式對但不存在要回 404，不是 400。** 那是「沒有這個東西」，不是參數錯。
+      assert.equal(
+        (await fetch(`${url}api/evolution/${"f".repeat(64)}.json`)).status,
+        404,
+      );
       assert.equal((await fetch(`${url}api/evolution`)).status, 404);
       assert.equal((await fetch(`${url}nope`)).status, 404);
     } finally {
@@ -450,7 +459,7 @@ describe("靜態匯出", () => {
     const report = exportStaticSite(db, out, { label: "demo repo" });
     assert.equal(report.entities, 1);
     for (const relative of [
-      SUMMARY_PATH, ENTITIES_PATH, evolutionPath(1), "/index.html",
+      SUMMARY_PATH, ENTITIES_PATH, evolutionPath(K1), "/index.html",
     ]) {
       assert.ok(
         existsSync(path.join(out, relative.replace(/^\//, ""))),
@@ -470,7 +479,7 @@ describe("靜態匯出", () => {
     // 所以改用「只要有意圖就一定在」這個性質來釘。
     const report = exportStaticSite(db, out, { label: "x", limit: 0 });
     assert.equal(report.entities, 1, "有意圖的那一筆不得因為 limit 被丟掉");
-    assert.ok(existsSync(path.join(out, evolutionPath(1).replace(/^\//, ""))));
+    assert.ok(existsSync(path.join(out, evolutionPath(K1).replace(/^\//, ""))));
     db.close();
   });
 
@@ -502,9 +511,9 @@ describe("靜態匯出", () => {
 
     const { url, server } = await startUiServer({ dbPath, port: 0 });
     try {
-      const live = await (await fetch(`${url}api/evolution/1.json`)).text();
+      const live = await (await fetch(`${url}api/evolution/${K1}.json`)).text();
       const stat = readFileSync(
-        path.join(out, evolutionPath(1).replace(/^\//, "")), "utf8",
+        path.join(out, evolutionPath(K1).replace(/^\//, "")), "utf8",
       );
       assert.equal(stat, live);
     } finally {
@@ -535,7 +544,7 @@ describe("被推翻的做法：清單、數字、時間軸必須一致", () => {
        INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
          VALUES (2, 1, 1, 'App.render', 'function');
        INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
-         VALUES (2, 1, 'k2', 1);
+         VALUES (2, 1, '${K2}', 1);
        INSERT INTO revision
          (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
           byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
@@ -583,16 +592,16 @@ describe("被推翻的做法：清單、數字、時間軸必須一致", () => {
     assert.equal(report.ostracised, view.rows.length);
     for (const row of view.rows) {
       assert.ok(
-        existsSync(path.join(out, evolutionPath(row.entityId).replace(/^\//, ""))),
+        existsSync(path.join(out, evolutionPath(row.stableKey).replace(/^\//, ""))),
         `${row.symbol} 的時間軸應該被匯出`,
       );
     }
     const listed = JSON.parse(
       readFileSync(path.join(out, OSTRACISED_PATH.replace(/^\//, "")), "utf8"),
-    ) as { rows: Array<{ entityId: number }>; hiddenTests: number };
+    ) as { rows: Array<{ stableKey: string }>; hiddenTests: number };
     assert.deepEqual(
-      listed.rows.map((r) => r.entityId),
-      view.rows.map((r) => r.entityId),
+      listed.rows.map((r) => r.stableKey),
+      view.rows.map((r) => r.stableKey),
     );
     assert.equal(listed.hiddenTests, view.hiddenTests);
   });
@@ -619,5 +628,46 @@ describe("被推翻的做法：清單、數字、時間軸必須一致", () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe("對外身分是 stable_key，不是 rowid", () => {
+  it("**rowid 漂移最壞的後果不是 404，是回傳另一個 entity**", () => {
+    // 全量重建索引會讓 rowid 改變。用 rowid 當網址的話，舊連結在重建後
+    // 可能安靜地指到別的宣告——那比 404 難發現得多（不變量 1）。
+    assert.equal(evolutionPath(K1), `/api/evolution/${K1}.json`);
+    assert.doesNotMatch(evolutionPath(K1), /\/1\.json$/);
+  });
+
+  it("匯出的檔名就是 stable_key", () => {
+    const db = open(fixtureDb());
+    const out = mkdtempSync(path.join(tmpdir(), "ostracon-key-"));
+    exportStaticSite(db, out, { label: "x" });
+    assert.ok(existsSync(path.join(out, "api", "evolution", `${K1}.json`)));
+    db.close();
+  });
+
+  it("**格式不合法回 400，格式合法但不存在回 404**", async () => {
+    // 兩者混為一談會讓使用者去找一個其實存在的端點，或反過來以為參數寫錯。
+    const { url, server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });
+    try {
+      assert.equal((await fetch(`${url}api/evolution/1.json`)).status, 400);
+      assert.equal((await fetch(`${url}api/evolution/..%2F..%2Fetc.json`)).status, 400);
+      assert.equal(
+        (await fetch(`${url}api/evolution/${"0".repeat(64)}.json`)).status, 404,
+      );
+      assert.equal((await fetch(`${url}api/evolution/${K1}.json`)).status, 200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("**切換名單要清掉選取**", () => {
+    // 留著的話右邊還是上一個宣告的時間軸，左邊卻沒有任何 aria-current 列——
+    // 畫面看起來像右側資料失去來源。
+    assert.match(PAGE, /clearSelection\(\);\s*\n\s*renderEntities\(""\);/);
+    assert.match(PAGE, /function clearSelection\(\)/);
+    // 初始提示只有一份文字，HTML 與 clearSelection 共用同一個常數。
+    assert.equal((PAGE.match(/從左邊挑一個宣告。/g) ?? []).length, 1);
   });
 });

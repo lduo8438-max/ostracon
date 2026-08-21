@@ -857,6 +857,25 @@ commit 正確地沒有被判進來。
 語料一條清單條目都認不出來、靜默回報零。create-t3-app 的 body 正是 CRLF。
 **這是「同一個功能，兩種輸入，只驗了一種」的又一發**，這次是 LF 與 CRLF。
 
+### 對外身分是 `stable_key`，不是 rowid
+
+畫面的時間軸端點原本是 `/api/evolution/<rowid>.json`，匯出的檔名也是 rowid。
+那是**不變量 1 的直接違反**：全量重建索引會讓 rowid 改變。
+
+**最壞的後果不是 404。** 舊網址在重建後可能安靜地回傳**另一個 entity** ——
+一個看起來完全正常、內容卻對不上的頁面。404 至少會被發現。
+
+改成 `/api/evolution/<stable_key>.json`（64 位十六進位），匯出的檔名同理。
+`OstracisedRow` 與 `EntityRow` 對外都只帶 `stableKey`，**rowid 不再出現在
+任何公開型別上**——rowid 只在程序內部經 `entityIdForStableKey` 解析，而且
+查詢綁 repo（同一把鍵在別的 repo 是別的東西）。
+
+路由把兩種失敗分開：**格式不合法回 400，格式合法但這個 repo 沒有回 404**。
+混為一談會讓使用者去找一個其實存在的端點，或反過來以為自己參數寫錯。
+
+現在還沒有 entity 層級的深連結（點選不改網址）。但公開 JSON 已經在用這組身分，
+而日後要加 hash 或查詢字串深連結時，**第一天就必須是 `stable_key`**。
+
 ### 被推翻的做法有網頁入口，數字與清單同源
 
 `ostracised` 原本只有 CLI，而 demo 的 landing 卻在標頭寫著它的數量——訪客點進去

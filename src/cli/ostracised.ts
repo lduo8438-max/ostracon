@@ -33,10 +33,10 @@ import {
 
 export interface OstracisedRow {
   /**
-   * 讓畫面接得回時間軸。**CLI 不印它**——對外座標是 `path:symbol`，
-   * rowid 只在同一份索引內有意義。
+   * 對外身分。**不得用 rowid**——全量重建索引會讓 rowid 漂移，而漂移最壞的
+   * 後果不是 404，是舊網址在重建後**成功回傳另一個 entity**（不變量 1）。
    */
-  entityId: number;
+  stableKey: string;
   strength: ExcursionStrength;
   method: ExcursionMethod;
   durationDays: number;
@@ -69,7 +69,7 @@ export function listOstracised(
   filter?: { strength?: ExcursionStrength },
 ): OstracisedRow[] {
   return db.prepare(
-    `SELECT x.entity_id AS entityId, x.strength AS strength, x.method AS method,
+    `SELECT e.stable_key AS stableKey, x.strength AS strength, x.method AS method,
             x.duration_days AS durationDays,
             last.path AS path, last.symbol AS symbol,
             bc.authored_at AS bornAt,
@@ -78,6 +78,7 @@ export function listOstracised(
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
                  ELSE dc.message END AS diedSubject
        FROM excursion x
+       JOIN entity e ON e.id = x.entity_id
        JOIN git_commit bc ON bc.id = x.introduce_commit
        JOIN git_commit dc ON dc.id = x.remove_commit
        JOIN (SELECT r.entity_id AS entity_id, r.path AS path,

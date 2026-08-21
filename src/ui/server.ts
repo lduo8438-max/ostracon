@@ -1,6 +1,12 @@
 import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { evolutionOf, listEntities, ostracisedFor, repoSummary } from "./data.ts";
+import {
+  entityIdForStableKey,
+  evolutionOf,
+  listEntities,
+  ostracisedFor,
+  repoSummary,
+} from "./data.ts";
 import { PAGE } from "./page.ts";
 
 /**
@@ -36,20 +42,23 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as co
 export const SUMMARY_PATH = "/api/summary.json";
 export const ENTITIES_PATH = "/api/entities.json";
 export const OSTRACISED_PATH = "/api/ostracised.json";
-export const evolutionPath = (entityId: number) => `/api/evolution/${entityId}.json`;
+export const evolutionPath = (stableKey: string) =>
+  `/api/evolution/${stableKey}.json`;
+
+/** `stable_key` 是 64 位十六進位。放進路徑之前一定要驗——它會變成檔名。 */
+export const STABLE_KEY = /^[0-9a-f]{64}$/;
 
 /**
- * 從路徑取回 entity id。
+ * 從路徑取回 `stable_key`。
  *
- * `undefined` = 不是這條路由；`null` = 是這條路由但 id 不合法。**兩者不可合併**：
+ * `undefined` = 不是這條路由；`null` = 是這條路由但鍵不合法。**兩者不可合併**：
  * 前者要回 404，後者要回 400，而把壞參數當成「沒這個路徑」會讓使用者去找一個
  * 根本存在的端點。
  */
-function entityIdFromPath(pathname: string): number | null | undefined {
+function stableKeyFromPath(pathname: string): string | null | undefined {
   const match = /^\/api\/evolution\/(.*)\.json$/.exec(pathname);
   if (match === null) return undefined;
-  const id = Number(match[1]);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
+  return STABLE_KEY.test(match[1]!) ? match[1]! : null;
 }
 
 export function createUiServer(options: UiOptions): Server {
@@ -80,11 +89,18 @@ export function createUiServer(options: UiOptions): Server {
         response.end(JSON.stringify(ostracisedFor(db, repoId)));
         return;
       }
-      const id = entityIdFromPath(url.pathname);
-      if (id !== undefined) {
-        if (id === null) {
+      const key = stableKeyFromPath(url.pathname);
+      if (key !== undefined) {
+        if (key === null) {
           response.writeHead(400, JSON_HEADERS);
-          response.end(JSON.stringify({ error: "entity 必須是正整數" }));
+          response.end(JSON.stringify({ error: "entity 必須是 64 位十六進位的 stable_key" }));
+          return;
+        }
+        const id = entityIdForStableKey(db, repoId, key);
+        if (id === undefined) {
+          // 格式對但這個 repo 沒有——那是「沒有這個東西」，不是參數錯。
+          response.writeHead(404, JSON_HEADERS);
+          response.end(JSON.stringify({ error: "這個 repo 沒有這個 stable_key" }));
           return;
         }
         response.writeHead(200, JSON_HEADERS);

@@ -59,7 +59,7 @@ const HELPER = `export function experimentalCache(key: string): string {
 }`;
 
 const listRow = (over: Partial<OstracisedRow> = {}): OstracisedRow => ({
-  entityId: 1,
+  stableKey: "k1",
   strength: "A",
   method: "inverse_diff",
   durationDays: 100,
@@ -254,7 +254,7 @@ describe("已消失的構造：定址與清單", () => {
 
 describe("名單的排序與測試檔", () => {
   const row = (over: Partial<OstracisedRow> = {}): OstracisedRow => ({
-    entityId: 1,
+    stableKey: "k1",
     strength: "A",
     method: "inverse_diff",
     durationDays: 5,

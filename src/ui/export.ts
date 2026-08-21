@@ -1,7 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { evolutionOf, listEntities, ostracisedFor, repoSummary } from "./data.ts";
+import {
+  entityIdForStableKey,
+  evolutionOf,
+  listEntities,
+  ostracisedFor,
+  repoSummary,
+} from "./data.ts";
 import { PAGE } from "./page.ts";
 import {
   ENTITIES_PATH,
@@ -77,8 +83,8 @@ export function exportStaticSite(
     onlyWithIntent: true,
   });
   const byChurn = listEntities(db, repoId, options.limit);
-  const seen = new Set(withIntent.map((e) => e.entityId));
-  const entities = [...withIntent, ...byChurn.filter((e) => !seen.has(e.entityId))]
+  const seen = new Set(withIntent.map((e) => e.stableKey));
+  const entities = [...withIntent, ...byChurn.filter((e) => !seen.has(e.stableKey))]
     .sort((a, b) => b.revisions - a.revisions
       || a.path.localeCompare(b.path)
       || a.symbol.localeCompare(b.symbol));
@@ -90,12 +96,16 @@ export function exportStaticSite(
   write(ENTITIES_PATH, JSON.stringify(entities));
 
   // 兩份名單的 entity 聯集才是「訪客點得到的一切」。
-  const needed = new Set<number>([
-    ...entities.map((e) => e.entityId),
-    ...ostracised.rows.map((r) => r.entityId),
+  // **檔名用 `stable_key`**：rowid 會隨全量重建漂移，而漂移最壞的後果不是 404，
+  // 是舊網址在重建後成功回傳另一個 entity。
+  const needed = new Set<string>([
+    ...entities.map((e) => e.stableKey),
+    ...ostracised.rows.map((r) => r.stableKey),
   ]);
-  for (const entityId of needed) {
-    write(evolutionPath(entityId), JSON.stringify(evolutionOf(db, repoId, entityId)));
+  for (const key of needed) {
+    const entityId = entityIdForStableKey(db, repoId, key);
+    if (entityId === undefined) continue;
+    write(evolutionPath(key), JSON.stringify(evolutionOf(db, repoId, entityId)));
   }
   write("/index.html", PAGE);
 

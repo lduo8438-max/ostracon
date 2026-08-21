@@ -129,6 +129,22 @@ export function listEntities(
   ).all(repoId, repoId, repoId, repoId, limit) as unknown as EntityRow[];
 }
 
+/**
+ * `stable_key` → rowid。**只在程序內部用**：rowid 是儲存細節，
+ * 對外一律用 `stable_key`（不變量 1）。查詢綁 repo——同一把鍵在別的 repo
+ * 是別的東西。
+ */
+export function entityIdForStableKey(
+  db: DatabaseSync,
+  repoId: number,
+  stableKey: string,
+): number | undefined {
+  const row = db.prepare(
+    "SELECT id FROM entity WHERE repo_id = ? AND stable_key = ?",
+  ).get(repoId, stableKey) as { id: number } | undefined;
+  return row?.id;
+}
+
 export interface IntentRow {
   claimType: string;
   text: string;

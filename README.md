@@ -19,8 +19,12 @@
 | [create-t3-app](https://lduo8438-max.github.io/ostracon-demo/create-t3-app/) | 4 / 1,594 | **誠實留白**。squash 銷毀了歸屬，253 個候選不升格 |
 | [osiris](https://lduo8438-max.github.io/ostracon-demo/osiris/) | **0** / 796 | 小型專案：一次都沒有替單一宣告寫過理由 |
 
+左欄有兩份名單：**全部宣告**（含已消亡的，逐列標示）與**被推翻的做法**
+（A 級確證，vuejs/core 有 537 條）。點任何一條都會在右邊展開它的時間軸與意圖。
+
 **畫面上的每個字都是零 LLM 產生的。** 意圖欄的空白是真實的觀測值——理由是稀有的，
-三個語料說得出專屬理由的改動都不到 0.3%。
+三個語料說得出專屬理由的改動都不到 0.3%。整批共用的理由會標成「整批」並降一階
+呈現：**唯一的暖色只留給專屬引文**，否則色彩本身就在誇大。
 
 自己匯出一份：
 
@@ -94,8 +98,8 @@ pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo
 # 加 --full 索引整個 repo，跨檔案的搬移與抽取才看得見（慢很多）
 pnpm why:cli -- 'src/lib/ssrf-guard.ts:isRateLimited' --repo /path/to/repo --full
 
-# 列出試過又被推翻的做法
-pnpm ostracised -- --repo /path/to/repo [--strength A]
+# 列出試過又被推翻的做法（由短命到長命；測試檔的宣告預設排除）
+pnpm ostracised -- --repo /path/to/repo [--strength A] [--include-tests]
 
 # 取回已參照的 GitHub PR / issue 文件（無 token 時安全略過）
 GITHUB_TOKEN=... pnpm evidence:linked -- --db /path/to/index.db

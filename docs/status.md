@@ -82,10 +82,16 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/http/fixtures.ts` | HTTP fixture 錄製／replay、敏感 header 濾除 | 測試與 golden 只用 replay |
 | `src/evidence/linked.ts` | PR/issue body、comments、reviews → `source_doc`；修正 `to_kind`；linked 水位線 | 不知道 live/replay 的差別 |
 | `src/cli/linked-evidence.ts` | 注入 live／record／replay fetcher | `pnpm evidence:linked`；無 token 時安全略過 |
-| `src/claim/derive.ts` | verified evidence → 分型 claim（含 excursion 主體的 `abandoned_reason`） | 零 LLM；規則版本 `rule-claim-0.2.0+excursion-subject` |
-| `src/ui/data.ts` | 組裝結構／時間軸／意圖，將 excursion claim 對回 remove commit | 一律讀 `v_presentable_claim` |
-| `src/ui/page.ts` | 三欄 HTML／CSS／JS | 列高逐列量測、演化／意圖雙向同步捲動 |
-| `src/ui/server.ts` | 唯讀本機 HTTP server | 只綁 `127.0.0.1`，零外部資源 |
+| `src/claim/derive.ts` | verified evidence → 分型 claim（含 excursion 主體的 `abandoned_reason`） | 零 LLM；規則版本 `rule-claim-0.4.0+excursion-entity-binding` |
+| `src/claim/aggregate.ts` | 聚合訊息偵測（squash merge 把 N 個 PR 壓成一顆） | 判準是結構不是數量；CRLF 一併處理 |
+| `src/claim/scope.ts` | 一條理由的尺度：專講這個宣告，還是整批改動共用 | **CLI 與畫面共用**，不各算一次 |
+| `src/ui/data.ts` | 組裝結構／時間軸／意圖／被推翻的做法 | 一律讀 `v_presentable_claim`；`ostracisedFor` 走 CLI 的同一支查詢 |
+| `src/ui/page.ts` | 三欄 HTML／CSS／JS | 列高逐列量測、雙向同步捲動；**整份是一個樣板字串，註解裡的反引號會截斷它** |
+| `src/ui/server.ts` | 唯讀本機 HTTP server | 只綁 `127.0.0.1`，零外部資源；端點是路徑式 `.json` |
+| `src/ui/export.ts` | 把索引匯出成純靜態站台（線上 demo） | `--label` 必填，否則會公開匯出者的本機路徑 |
+| `src/cli/main.ts` | 子指令分派 | 各支直接執行時走的是同一個 `main(args)` |
+| `src/cli/ui.ts` ／ `src/cli/export-site.ts` | `ostracon ui` ／ `ostracon export` | — |
+| `src/golden/corpus.ts` | 依 fixture 的 `clone_url` / `index_until` 取回語料 | `readdirSync` 掃整個 `fixtures/`，新 fixture 自動被認得 |
 | `src/golden/materialize.ts` | 從 fixture + 真實 repo 建立 golden DB 座標、revision 與 match | fixture 專用；寫入層已改用 `src/index/structural.ts` |
 | `src/golden/evaluate.ts` | 查詢 golden DB，將單一案例判為 pass/fail/missing | 會讀 SQLite，不是純函式 |
 | `src/golden/report.ts` | **純函式**：分層彙總、Markdown、逐案例迴歸偵測 | 比率排除 ambiguous 案例，**迴歸閘門不排除** |

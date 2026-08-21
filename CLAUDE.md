@@ -153,7 +153,12 @@ pnpm why:cli -- '<path>:<symbol>' --repo <repo-path> --db <db> [--until <sha>] [
 #   路徑在 --until 已被刪除也查得到（fallback 到曾經擁有它的血緣）
 
 # 列出被推翻的做法。一律跑全 repo pass——搬移守門在單一血緣下是瞎的
+# 由短命到長命排序；測試檔的宣告預設排除（標頭會報數量），--include-tests 看得回來
 pnpm ostracised -- --repo <repo-path> --db <db> [--until <sha>] [--strength A|C]
+                   [--include-tests]
+
+# 把索引匯出成純靜態站台（線上 demo）。--label 必填，否則會公開本機路徑
+pnpm ui:export -- --db <db> --out <dir> --label <語料名稱> [--limit <n>]
 
 # 證據層：收 commit message、規則式抽取、驗證後升格（零網路、零 LLM）
 pnpm evidence:extract -- --db <db>

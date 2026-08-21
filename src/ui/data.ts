@@ -4,6 +4,11 @@ import {
   type UnattributableSummary,
 } from "../claim/derive.ts";
 import { affectedEntityCounts, scopeOf, type ClaimScope } from "../claim/scope.ts";
+import {
+  isTestDeclaration,
+  listOstracised,
+  type OstracisedRow,
+} from "../cli/ostracised.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
@@ -199,6 +204,39 @@ export function evolutionOf(
   }));
 }
 
+/**
+ * 被推翻的做法，畫面版。
+ *
+ * **與 `ostracon ostracised` 走同一個 `listOstracised` 與同一個
+ * `isTestDeclaration`。** 各寫一份的話，landing 上的數字與點進去看到的清單
+ * 會是兩個母體——這個專案這一季已經因為「兩份實作分岔」出過三次事
+ * （CLI 說 5 顆聚合 commit／畫面說 6 顆、分子分母數不同的東西、
+ * 標頭寫 710 而 CLI 顯示 537）。
+ */
+export interface OstracisedView {
+  /**
+   * 實際列出的：**A 級確證，且不在測試檔裡**。這才是「被推翻的做法」的產品語意。
+   *
+   * C 級刻意不進這份清單，也不進頭條數字——它是「僅生命週期符合、未經證實」，
+   * 放進頭條就是把疑似當成確證呈現。
+   */
+  rows: OstracisedRow[];
+  /** 被排除的測試檔宣告數。排除不得靜默。 */
+  hiddenTests: number;
+  /** C 級疑似的數量。報出來，但不混進頭條。 */
+  suspected: number;
+}
+
+export function ostracisedFor(db: DatabaseSync, repoId: number): OstracisedView {
+  const all = listOstracised(db, repoId);
+  const confirmed = all.filter((row) => row.strength === "A");
+  return {
+    rows: confirmed.filter((row) => !isTestDeclaration(row)),
+    hiddenTests: confirmed.filter(isTestDeclaration).length,
+    suspected: all.length - confirmed.length,
+  };
+}
+
 export interface RepoSummary {
   repoId: number;
   rootPath: string;
@@ -226,6 +264,11 @@ export interface RepoSummary {
    * 的空白也算到 squash 頭上。
    */
   aggregate: UnattributableSummary;
+  /**
+   * 被推翻的做法的計數。**由 `ostracisedFor` 產生，不是另外數一次**——
+   * landing 的頭條數字與清單必須是同一個母體。
+   */
+  ostracised: { shown: number; hiddenTests: number; suspected: number };
 }
 
 export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
@@ -276,5 +319,15 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
     }
     | undefined;
   if (row === undefined) throw new Error(`資料庫裡沒有 repo ${repoId}`);
-  return { repoId, ...row, aggregate: unattributableEvidence(db, repoId) };
+  const ostracised = ostracisedFor(db, repoId);
+  return {
+    repoId,
+    ...row,
+    aggregate: unattributableEvidence(db, repoId),
+    ostracised: {
+      shown: ostracised.rows.length,
+      hiddenTests: ostracised.hiddenTests,
+      suspected: ostracised.suspected,
+    },
+  };
 }

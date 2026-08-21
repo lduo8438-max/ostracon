@@ -1,9 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { evolutionOf, listEntities, repoSummary } from "./data.ts";
+import { evolutionOf, listEntities, ostracisedFor, repoSummary } from "./data.ts";
 import { PAGE } from "./page.ts";
-import { ENTITIES_PATH, SUMMARY_PATH, evolutionPath } from "./server.ts";
+import {
+  ENTITIES_PATH,
+  OSTRACISED_PATH,
+  SUMMARY_PATH,
+  evolutionPath,
+} from "./server.ts";
 
 /**
  * 把一個索引匯出成**純靜態檔**，不需要 node、不需要 SQLite。
@@ -35,6 +40,8 @@ export interface ExportOptions {
 
 export interface ExportReport {
   entities: number;
+  /** 被推翻的做法（已排除測試骨架）。**與 CLI 同一個查詢與同一個 predicate。** */
+  ostracised: number;
   files: number;
   bytes: number;
 }
@@ -75,13 +82,29 @@ export function exportStaticSite(
     .sort((a, b) => b.revisions - a.revisions
       || a.path.localeCompare(b.path)
       || a.symbol.localeCompare(b.symbol));
+
+  // 被推翻的做法整份收，**而且它們的時間軸一定要一起匯出**。清單看得到、
+  // 點進去沒有資料，就是把一個落差換成另一個落差。
+  const ostracised = ostracisedFor(db, repoId);
+  write(OSTRACISED_PATH, JSON.stringify(ostracised));
   write(ENTITIES_PATH, JSON.stringify(entities));
-  for (const entity of entities) {
-    write(evolutionPath(entity.entityId), JSON.stringify(evolutionOf(db, repoId, entity.entityId)));
+
+  // 兩份名單的 entity 聯集才是「訪客點得到的一切」。
+  const needed = new Set<number>([
+    ...entities.map((e) => e.entityId),
+    ...ostracised.rows.map((r) => r.entityId),
+  ]);
+  for (const entityId of needed) {
+    write(evolutionPath(entityId), JSON.stringify(evolutionOf(db, repoId, entityId)));
   }
   write("/index.html", PAGE);
 
-  return { entities: entities.length, files, bytes };
+  return {
+    entities: needed.size,
+    ostracised: ostracised.rows.length,
+    files,
+    bytes,
+  };
 }
 
 /**

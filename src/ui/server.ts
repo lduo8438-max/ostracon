@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { evolutionOf, listEntities, repoSummary } from "./data.ts";
+import { evolutionOf, listEntities, ostracisedFor, repoSummary } from "./data.ts";
 import { PAGE } from "./page.ts";
 
 /**
@@ -35,6 +35,7 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as co
  */
 export const SUMMARY_PATH = "/api/summary.json";
 export const ENTITIES_PATH = "/api/entities.json";
+export const OSTRACISED_PATH = "/api/ostracised.json";
 export const evolutionPath = (entityId: number) => `/api/evolution/${entityId}.json`;
 
 /**
@@ -72,6 +73,11 @@ export function createUiServer(options: UiOptions): Server {
       if (url.pathname === ENTITIES_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(listEntities(db, repoId)));
+        return;
+      }
+      if (url.pathname === OSTRACISED_PATH) {
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify(ostracisedFor(db, repoId)));
         return;
       }
       const id = entityIdFromPath(url.pathname);

@@ -32,6 +32,11 @@ import {
  */
 
 export interface OstracisedRow {
+  /**
+   * 讓畫面接得回時間軸。**CLI 不印它**——對外座標是 `path:symbol`，
+   * rowid 只在同一份索引內有意義。
+   */
+  entityId: number;
   strength: ExcursionStrength;
   method: ExcursionMethod;
   durationDays: number;
@@ -64,7 +69,7 @@ export function listOstracised(
   filter?: { strength?: ExcursionStrength },
 ): OstracisedRow[] {
   return db.prepare(
-    `SELECT x.strength AS strength, x.method AS method,
+    `SELECT x.entity_id AS entityId, x.strength AS strength, x.method AS method,
             x.duration_days AS durationDays,
             last.path AS path, last.symbol AS symbol,
             bc.authored_at AS bornAt,

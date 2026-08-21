@@ -102,6 +102,17 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
 .entity[aria-current="true"] .meta { color: #b9c1c8; }
 .entity .symbol { font-weight: 700; }
 .entity .path, .entity .meta { color: var(--muted); font-size: 11px; }
+.tabs { display: flex; border-bottom: 1px solid var(--rule); }
+.tab {
+  flex: 1; border: 0; background: none; cursor: pointer; font: inherit;
+  padding: 7px 10px; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+/* 已消亡：左邊界與時間軸的 death 同一個粗細，兩邊講的是同一件事。 */
+.entity.gone { border-left: 4px solid var(--ink); padding-left: 10px; }
+.entity .days { font-weight: 700; color: var(--ink); }
+.note-line { padding: 8px 14px; color: var(--muted); border-bottom: 1px solid var(--rule); }
 .entity .meta { display: flex; gap: 10px; margin-top: 2px; }
 
 /* 改動的層級由左邊界的粗細表達——那是四層雜湊階梯的裁決，不是裝飾。 */
@@ -170,7 +181,11 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
 
 <main>
   <section aria-label="結構">
-    <h2>結構 <span id="entity-count"></span></h2>
+    <h2><span id="list-title">結構</span> <span id="entity-count"></span></h2>
+    <div class="tabs" role="tablist">
+      <button id="tab-live" class="tab" role="tab" aria-selected="true">現存的宣告</button>
+      <button id="tab-gone" class="tab" role="tab" aria-selected="false">被推翻的做法</button>
+    </div>
     <input id="filter" type="search" placeholder="篩選路徑或符號" autocomplete="off">
     <div id="entities"></div>
   </section>
@@ -203,6 +218,8 @@ const TYPE = {
 };
 
 let entities = [];
+let ostracised = { rows: [], hiddenTests: 0 };
+let tab = "live";
 let current = null;
 
 async function boot() {
@@ -232,16 +249,49 @@ async function boot() {
   }
 
   entities = await (await fetch("./api/entities.json")).json();
-  $("entity-count").textContent = entities.length + " 個";
+  // 被推翻的做法與 landing 的頭條數字**來自同一份 JSON**，畫面不自己數。
+  ostracised = await (await fetch("./api/ostracised.json")).json();
   renderEntities("");
+}
+
+/** 目前這一頁在看哪一份名單。兩份名單的列都連到同一個時間軸端點。 */
+function currentList() {
+  return tab === "gone" ? ostracised.rows : entities;
 }
 
 function renderEntities(query) {
   const q = query.trim().toLowerCase();
+  const all = currentList();
   const shown = q === ""
-    ? entities
-    : entities.filter((e) =>
-        (e.path + ":" + e.symbol).toLowerCase().includes(q));
+    ? all
+    : all.filter((e) => (e.path + ":" + e.symbol).toLowerCase().includes(q));
+  $("list-title").textContent = tab === "gone" ? "被推翻的做法" : "結構";
+  $("entity-count").textContent = all.length + " 個";
+  if (tab === "gone") {
+    // **排除不得靜默**，而且這行的數字與 CLI 是同一個 predicate 算出來的。
+    // **排除不得靜默**，而且這兩個數字與 CLI 是同一個 predicate 算出來的。
+    // C 級是「僅生命週期符合、未經證實」，不進清單也不進頭條。
+    const aside = [
+      ostracised.hiddenTests > 0
+        ? \`另有 \${ostracised.hiddenTests} 條在測試檔裡（測試骨架，不是被推翻的做法）\`
+        : "",
+      ostracised.suspected > 0
+        ? \`另有 \${ostracised.suspected} 條 C 級疑似，未經證實，不列入\`
+        : "",
+    ].filter(Boolean).join("；");
+    const note = aside === ""
+      ? ""
+      : \`<div class="note-line">\${aside}</div>\`;
+    $("entities").innerHTML = note + shown.map((r) => \`
+      <button class="entity gone" data-id="\${r.entityId}"
+              aria-current="\${r.entityId === current}">
+        <div class="symbol">\${text(r.symbol)}</div>
+        <div class="path">\${text(r.path)}</div>
+        <div class="meta"><span><span class="days">\${r.durationDays.toFixed(0)}</span> 天</span><span>A 確證</span></div>
+        <div class="path">\${text(r.diedSubject)}</div>
+      </button>\`).join("");
+    return;
+  }
   $("entities").innerHTML = shown.map((e) => \`
     <button class="entity" data-id="\${e.entityId}"
             aria-current="\${e.entityId === current}">
@@ -346,6 +396,15 @@ $("entities").addEventListener("click", (event) => {
   if (button) select(Number(button.dataset.id));
 });
 $("filter").addEventListener("input", (event) => renderEntities(event.target.value));
+for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
+  $(id).addEventListener("click", () => {
+    tab = which;
+    $("tab-live").setAttribute("aria-selected", String(which === "live"));
+    $("tab-gone").setAttribute("aria-selected", String(which === "gone"));
+    $("filter").value = "";
+    renderEntities("");
+  });
+}
 // 兩欄各自捲動會讓對齊在視覺上斷掉，所以**雙向**同步。只有一個方向的話，
 // 滑鼠停在意圖欄捲動時仍會立刻拆開；Chrome 實測第一版正是這個 bug。
 const evolutionPane = $("evolution").parentElement;

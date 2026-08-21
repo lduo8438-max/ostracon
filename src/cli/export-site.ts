@@ -38,7 +38,8 @@ export function main(args: string[]): void {
       ...(limit === undefined ? {} : { limit }),
     });
     console.log(
-      `匯出 ${report.entities} 個宣告、${report.files} 個檔案、`
+      `匯出 ${report.entities} 個宣告（含 ${report.ostracised} 個被推翻的做法）、`
+      + `${report.files} 個檔案、`
       + `${(report.bytes / 1024 / 1024).toFixed(1)} MB → ${outDir}`,
     );
     console.log(SERVE_HINT);

@@ -5,9 +5,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { deriveClaims } from "../src/claim/derive.ts";
-import { evolutionOf, listEntities, repoSummary } from "../src/ui/data.ts";
+import {
+  evolutionOf,
+  listEntities,
+  ostracisedFor,
+  repoSummary,
+} from "../src/ui/data.ts";
 import {
   ENTITIES_PATH,
+  OSTRACISED_PATH,
   SUMMARY_PATH,
   evolutionPath,
   startUiServer,
@@ -514,5 +520,104 @@ describe("靜態匯出", () => {
     assert.equal(/(?:src|href)="(?:https?:)?\/\//.test(html), false);
     assert.doesNotMatch(html, /api\/evolution\?/, "查詢字串沒辦法變成靜態檔");
     db.close();
+  });
+});
+
+describe("被推翻的做法：清單、數字、時間軸必須一致", () => {
+  /** 一個已消亡且被判為迂迴的宣告，外加一個測試檔裡的。 */
+  function goneDb(): string {
+    const dbPath = fixtureDb();
+    const db = open(dbPath);
+    db.exec(
+      `UPDATE revision_change
+          SET change_level = 'death', prev_revision = 2, next_revision = NULL
+        WHERE id = 2;
+       INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+         VALUES (2, 1, 1, 'App.render', 'function');
+       INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+         VALUES (2, 1, 'k2', 1);
+       INSERT INTO revision
+         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
+          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
+          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
+          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+       VALUES (3, 1, 1, 2, 2, 1, 'src/__tests__/a.spec.ts', 'b', 0, 1, 1, 2,
+               'r','t','a','as','sh','p', 30, 10, 'exact', x'00');
+       INSERT INTO revision_change
+         (id, prev_revision, commit_id, entity_id, change_level)
+         VALUES (3, 3, 2, 2, 'death');
+       INSERT INTO excursion
+         (id, repo_id, entity_id, introduce_commit, remove_commit, duration_days,
+          strength, method) VALUES
+         (1, 1, 1, 1, 2, 1, 'A', 'inverse_diff'),
+         (2, 1, 2, 1, 2, 1, 'A', 'inverse_diff');`,
+    );
+    db.close();
+    return dbPath;
+  }
+
+  it("**標頭數字與清單來自同一個查詢與同一個 predicate**", () => {
+    // landing 寫 710、CLI 顯示 537 那次，就是兩邊各數一次的結果。
+    const db = open(goneDb());
+    const view = ostracisedFor(db, 1);
+    const summary = repoSummary(db, 1);
+    assert.equal(summary.ostracised.shown, view.rows.length);
+    assert.equal(summary.ostracised.hiddenTests, view.hiddenTests);
+    assert.equal(view.rows.length, 1, "測試檔的那條不在清單裡");
+    assert.equal(view.hiddenTests, 1);
+    assert.equal(view.suspected, 0);
+    assert.equal(view.rows[0]!.symbol, "cappedFetch");
+    db.close();
+  });
+
+  it("**清單上的每一條都匯出得到時間軸**", async () => {
+    // 清單看得到、點進去沒有資料，就是把一個落差換成另一個落差。
+    const dbPath = goneDb();
+    const out = mkdtempSync(path.join(tmpdir(), "ostracon-gone-"));
+    const db = open(dbPath);
+    // limit 0：靠改動量排序一筆都不收，只剩被推翻的做法與有意圖的那一筆。
+    const report = exportStaticSite(db, out, { label: "x", limit: 0 });
+    const view = ostracisedFor(db, 1);
+    db.close();
+
+    assert.equal(report.ostracised, view.rows.length);
+    for (const row of view.rows) {
+      assert.ok(
+        existsSync(path.join(out, evolutionPath(row.entityId).replace(/^\//, ""))),
+        `${row.symbol} 的時間軸應該被匯出`,
+      );
+    }
+    const listed = JSON.parse(
+      readFileSync(path.join(out, OSTRACISED_PATH.replace(/^\//, "")), "utf8"),
+    ) as { rows: Array<{ entityId: number }>; hiddenTests: number };
+    assert.deepEqual(
+      listed.rows.map((r) => r.entityId),
+      view.rows.map((r) => r.entityId),
+    );
+    assert.equal(listed.hiddenTests, view.hiddenTests);
+  });
+
+  it("**C 級疑似不進清單也不進頭條**", () => {
+    // C 是「僅生命週期符合、未經證實」，放進頭條就是把疑似當成確證呈現。
+    const dbPath = goneDb();
+    const db = open(dbPath);
+    db.exec("UPDATE excursion SET strength = 'C' WHERE id = 1");
+    const view = ostracisedFor(db, 1);
+    assert.equal(view.rows.length, 0);
+    assert.equal(view.suspected, 1);
+    assert.equal(repoSummary(db, 1).ostracised.suspected, 1);
+    db.close();
+  });
+
+  it("端點回得出被推翻的做法", async () => {
+    const { url, server } = await startUiServer({ dbPath: goneDb(), port: 0 });
+    try {
+      const body = await (await fetch(`${url}api/ostracised.json`)).json() as
+        { rows: unknown[]; hiddenTests: number };
+      assert.equal(body.rows.length, 1);
+      assert.equal(body.hiddenTests, 1);
+    } finally {
+      server.close();
+    }
   });
 });

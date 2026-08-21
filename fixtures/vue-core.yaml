@@ -1,0 +1,92 @@
+fixture_version: 1
+
+repo:
+  name: vue-core
+  clone_url: https://github.com/vuejs/core.git
+  index_until: 6f69478102889e0fb3c92e762d6e132438ff6823
+  language: typescript
+
+labeled_by: lcy
+labeled_at: 2026-08-21
+
+# 這份 fixture 存在的理由只有一個：**Osiris 與 create-t3-app 驗不到的東西**。
+#
+# 那兩套語料在好幾個指標上剛好都落在同一側，於是一整類缺陷可以活很久：
+#
+#   - 兩套的理由**全在單行主旨上**，所以「引文被硬換行切斷」在它們身上是 0%，
+#     而 vuejs/core 是 24.2%、remix 是 21.3%。
+#   - 兩套幾乎沒有「宣告死而復生」的形狀，所以 `death_commit_id` 停在第一次
+#     死亡的缺陷在它們身上是 0 與 1 筆，而 vuejs/core 是 176 筆（10.8%）、
+#     連帶產生 44 條假的 A 級迂迴。
+#   - 兩套沒有跨 package 的搬移。
+#
+# **`index_until` 刻意釘在 topo 900 而不是 HEAD。** 要釘的現象都發生在早期
+# （跨 package 搬移在 topo 159、最早的硬換行引文在 856），而全 repo 7,156 顆
+# 要跑五分鐘——CI 閘門的價值來自它會不會擋下退步，不是來自它索引了多少歷史。
+
+cases:
+  # ── 引文跨越硬換行 ────────────────────────────────────────────────────────
+  #
+  # commit body 硬換行在 72 字元，而引文的右邊界原本取到行尾，於是句子被切在
+  # 換行處：`because the Symbol does not fit well` 就沒了下半句，讀起來不成句。
+  # 這條是抽取器 0.5.0 的直接迴歸守門，**兩套既有語料都驗不到**。
+  - id: vue-quote-spans-hard-wrap
+    kind: evidence
+    difficulty: hard
+    label_confidence: certain
+    at_commit: cdee65aa1b3f0187949a0c186ee6ee78bf0df5c3
+    expect_spans:
+      - source: {type: commit_message}
+        contains: "because the Symbol does not fit well\ninto V8's hidden class model."
+        tier: stated
+    rationale: >
+      body 在「well」之後硬換行。只取到行尾的話引文會停在 well，
+      而那句話的內容全在下一行。停止判準是句末標點，不是行尾。
+
+  # ── 對比標記要含被拒方案 ──────────────────────────────────────────────────
+  #
+  # `instead of` 的被拒方案在標記左邊。只引右半邊會得到
+  # `instead of injecting via createRenderer`——逐字為真、意思殘缺。
+  - id: vue-contrastive-keeps-rejected-side
+    kind: evidence
+    difficulty: hard
+    label_confidence: certain
+    at_commit: de76daf073f5bbad0f06be74c02cb8473ea99bdc
+    expect_spans:
+      - source: {type: commit_message}
+        contains: "refactor: depend on scheduler directly in core instead of injecting via createRenderer"
+        tier: stated
+    rationale: >
+      tradeoff 的內容就是那組對比。左邊界要拉到句首，
+      引文才說得出「本來要用什麼、改用了什麼」。
+
+  # ── 跨 package 搬移 ───────────────────────────────────────────────────────
+  #
+  # `Vue` 整個從 packages/vue 搬到 packages/vue-compat。entity 必須跟著程式碼
+  # 走到新檔案——那正是 entity 血緣與 slot 的差別，而且只有全 repo pass 看得到。
+  # 這條同時守著死亡點：entity 若在半途被誤判死亡，這條血緣就會斷。
+  - id: vue-compat-package-move
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      2.x 相容層被拆成獨立 package，`class Vue` 逐字搬過去。
+      路徑換了、內容沒換，是同一個實體的延續。
+    chain:
+      - anchor:
+          commit: 7d091b5e91f486450b9cbce007c6631275826c3d
+          path: packages/vue/src/index.ts
+          symbol: Vue
+          occurrence: 0
+          snippet_head: "class Vue {"
+      - anchor:
+          commit: f57ca5e18900975966652ea67910d1fff0569dca
+          path: packages/vue-compat/src/index.ts
+          symbol: Vue
+          occurrence: 0
+          snippet_head: "class Vue {"
+        transition:
+          type: move
+          # 內容一字未改，只換了檔案。名稱與內容都相同，所以雜湊層就該接得起來；
+          # 掉到相似度層才接到的話，代表跨檔案的候選池出了問題。
+          expect_tier_at_most: L3c

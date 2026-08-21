@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "id": "vue-compat-package-move",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "vue-contrastive-keeps-rejected-side",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "vue-quote-spans-hard-wrap",
+      "difficulty": "hard",
+      "status": "pass"
+    }
+  ]
+}

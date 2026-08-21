@@ -76,6 +76,23 @@ jobs:
             --baseline fixtures/baselines/create-t3-app.json \
             --report "$RUNNER_TEMP/golden-t3.json"
 
+      # Osiris 與 create-t3-app 在好幾個指標上剛好落在同一側，於是一整類缺陷可以
+      # 活很久：兩套的理由全在單行主旨上（硬換行截斷 0%，而 vuejs/core 是 24.2%）、
+      # 兩套幾乎沒有「宣告死而復生」的形狀（`death_commit_id` 停在第一次死亡的
+      # 缺陷在它們身上是 0 與 1 筆，vuejs/core 是 176 筆）。這一步就是補那一側。
+      #
+      # `index_until` 釘在 topo 900 而不是 HEAD：要釘的現象都在早期，而且這份
+      # fixture 沒有 excursion 案例，所以 golden:index 不跑全 repo pass——實測
+      # 0.7 秒。閘門的價值來自它擋不擋得下退步，不是來自索引了多少歷史。
+      - name: 黃金測試集 — vuejs/core（另一側的語料）
+        run: |
+          pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/vue-core" \
+            --fixture fixtures/vue-core.yaml --db "$RUNNER_TEMP/vue.db"
+          pnpm golden -- --fixture fixtures/vue-core.yaml \
+            --db "$RUNNER_TEMP/vue.db" \
+            --baseline fixtures/baselines/vue-core.json \
+            --report "$RUNNER_TEMP/golden-vue.json"
+
       - name: 黃金測試集 — 受控 fixture
         run: |
           pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/controlled-typescript" \

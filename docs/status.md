@@ -141,6 +141,29 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### vuejs/core 進入黃金測試集（2026-08-21）
+
+Osiris 與 create-t3-app 在好幾個指標上**剛好落在同一側**，於是一整類缺陷可以活很久：
+
+| 指標 | Osiris | create-t3-app | vuejs/core |
+|---|---|---|---|
+| 引文被硬換行切斷 | 0% | 0% | **24.2%** |
+| 死亡點早於最後 revision | 1 | 0 | **176（10.8%）** |
+| 跨 package 搬移 | 無 | 無 | 有 |
+
+三條案例，全部只釘那一側：`vue-quote-spans-hard-wrap`（跨硬換行的引文）、
+`vue-contrastive-keeps-rejected-side`（對比標記含被拒方案）、
+`vue-compat-package-move`（`class Vue` 從 `packages/vue` 搬到 `packages/vue-compat`，
+`expect_tier_at_most: L3c`）。
+
+**`index_until` 釘在 topo 900 而不是 HEAD。** 要釘的現象都在早期（搬移在 topo 159、
+最早的硬換行引文在 856），而且這份 fixture 沒有 excursion 案例，所以 `golden:index`
+不跑全 repo pass——**實測 0.7 秒**。閘門的價值來自它擋不擋得下退步，不是來自
+索引了多少歷史。
+
+**閘門實測會咬**：把 `continuesOnNextLine` 改成永遠回 false（等於退回抽取器
+0.4.0），`golden` 立刻 `exit=1`，而且正好只有 `vue-quote-spans-hard-wrap` 變 fail。
+
 ### `death_commit_id` 停在第一次死亡（2026-08-20，已修）
 
 `entity.death_commit_id` 是**衍生欄位**，真相在 `revision_change` 的 `death` 列。

@@ -141,6 +141,32 @@ W3 的第一項——fresh DB 全流程重跑——在 create-t3-app 上立刻�
 只驗了一種」的第七、第八發**——第七發是 subject-line commit 驗過而 squash 沒驗，
 第八發是偵測器本身 LF 驗過而 CRLF 沒驗（`.` 不匹配 `\r`，靜默回報零命中）。
 
+### `ostracised` 的排序與測試檔（2026-08-21）
+
+**排序由長到短改成由短到長。** 原本第一眼看到的是活了 **2,676 天**才被重構掉的
+函式——`architecture.md` 自己寫著「三週是試錯，三年是技術演進」，而舊排序保證
+使用者先看到技術演進那一端，也就是這支指令**最沒有資訊量**的部分。
+
+改成由短到長之後，三套語料的開頭都是真的實驗：
+
+| 語料 | 名單開頭 |
+|---|---|
+| vuejs/core | `Dep.ts:hasBit` / `setBit` / `clearBit`——當天引入、當天以「refactor: reduce bundle size」移除的位元旗標追蹤 |
+| Osiris | `fetch511SFCameras` / `fetchNYCCameras`——城市專用的 camera fetcher，後來換成全球資料源 |
+| create-t3-app | `prettierInstaller` / `Installers` |
+
+排序方向不是門檻：長命的仍在名單裡，只是不再佔據第一個畫面。
+
+**測試檔的宣告預設排除。** vuejs/core 的 A 級 710 條裡有 **173 條（24%）**在
+`__tests__/*.spec.ts`（`App.render`、`testRender.makeApp` 這類）；Osiris 與
+create-t3-app 都是 0 條，所以這件事只有在有大型測試套件的語料上才看得見。
+判準是路徑，抽樣驗過 40 條全部命中真正的測試檔，而 `latest.ts`／`contest.ts`
+這類產品程式碼不會被誤殺。
+
+**排除不靜默**：標頭印出「另有 173 條在測試檔裡」，`--include-tests` 看得回來。
+連「全部都是測試檔」的情況也要說明，而不是回報「沒有找到被推翻的做法」。
+vuejs/core 的 A 級名單因此從 710 條變成顯示 537 條。
+
 ### vuejs/core 進入黃金測試集（2026-08-21）
 
 Osiris 與 create-t3-app 在好幾個指標上**剛好落在同一側**，於是一整類缺陷可以活很久：

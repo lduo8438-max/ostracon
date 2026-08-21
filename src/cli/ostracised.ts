@@ -49,6 +49,14 @@ export interface OstracisedRow {
  *
  * `duration_days` 是**屬性不是門檻**（三週是試錯，三年是技術演進），所以它只影響
  * 排序，不影響誰進得了名單。
+ *
+ * **由短到長。** 原本是由長到短，於是第一眼看到的是活了 2,676 天才被重構掉的
+ * 函式——那是技術演進，不是試錯，正好是這支指令**最沒有資訊量**的一端。
+ * 由短到長之後三套語料的開頭都是真的實驗：vuejs/core 是 reactivity 裡試過又
+ * 丟掉的位元旗標追蹤（`hasBit` / `setBit` / `setWasTracked`），Osiris 是三個
+ * 城市專用的 camera fetcher（後來換成全球資料源）。
+ *
+ * 排序方向不是門檻：長命的仍在名單裡，只是不再佔據第一個畫面。
  */
 export function listOstracised(
   db: DatabaseSync,
@@ -76,10 +84,28 @@ export function listOstracised(
             ON last.entity_id = x.entity_id AND last.rn = 1
       WHERE x.repo_id = ? AND x.entity_id IS NOT NULL
         AND (? IS NULL OR x.strength = ?)
-      ORDER BY x.strength, x.duration_days DESC, last.path, last.symbol`,
+      ORDER BY x.strength, x.duration_days ASC, last.path, last.symbol`,
   ).all(repoId, filter?.strength ?? null, filter?.strength ?? null) as unknown as
     OstracisedRow[];
 }
+
+/**
+ * 測試檔的宣告不是「被推翻的做法」，是測試骨架。
+ *
+ * 實測 vuejs/core 的 A 級名單 710 條裡有 **173 條（24%）**是
+ * `__tests__/*.spec.ts` 裡的 `App.render`、`testRender.makeApp` 這類——
+ * 它們確實誕生又消亡，但沒有人「試過這個設計然後推翻它」。Osiris 與
+ * create-t3-app 都是 0 條，所以這件事只有在有大型測試套件的語料上才看得見。
+ *
+ * 判準是路徑，抽樣驗過 40 條全部命中真正的測試檔。**預設排除但不靜默**：
+ * 標頭會報出被排除的數量，`--include-tests` 可以看回來。整段藏起來的話，
+ * 使用者會以為這個 repo 的試錯比實際少。
+ */
+export const TEST_PATH =
+  /(^|\/)(__tests__|__mocks__|tests?|e2e|spec)\/|\.(spec|test|bench)\.[cm]?[jt]sx?$/;
+
+export const isTestDeclaration = (row: OstracisedRow): boolean =>
+  TEST_PATH.test(row.path);
 
 const METHOD_LABEL: Record<ExcursionMethod, string> = {
   git_revert: "revert",
@@ -96,15 +122,29 @@ const METHOD_LABEL: Record<ExcursionMethod, string> = {
  */
 export function renderOstracised(
   rows: OstracisedRow[],
-  filter?: { strength?: ExcursionStrength },
+  filter?: { strength?: ExcursionStrength; includeTests?: boolean },
 ): string {
   const only = filter?.strength;
+  const hidden = filter?.includeTests === true
+    ? []
+    : rows.filter(isTestDeclaration);
+  const shown = filter?.includeTests === true
+    ? rows
+    : rows.filter((row) => !isTestDeclaration(row));
+  const testNote = hidden.length === 0
+    ? []
+    : [`（另有 ${hidden.length} 條在測試檔裡，那是測試骨架不是被推翻的做法；`
+      + `要看的話加 --include-tests）`];
+  rows = shown;
   if (rows.length === 0) {
-    return only === undefined
-      ? "沒有找到被推翻的做法。\n"
-        + "（這通常代表語料本身沒有這種痕跡，不是查詢失敗——"
-        + "單人專案與長期維護的專案在這件事上差很多。）"
-      : `沒有 ${only} 級的紀錄。拿掉 --strength 看完整名單。`;
+    return [
+      only === undefined
+        ? "沒有找到被推翻的做法。\n"
+          + "（這通常代表語料本身沒有這種痕跡，不是查詢失敗——"
+          + "單人專案與長期維護的專案在這件事上差很多。）"
+        : `沒有 ${only} 級的紀錄。拿掉 --strength 看完整名單。`,
+      ...testNote,
+    ].join("\n");
   }
   const out: string[] = [];
   if (only === undefined) {
@@ -117,6 +157,7 @@ export function renderOstracised(
     // 只報這一段的數量，不對沒查的那一段做任何暗示。
     out.push(`${rows.length} 個 ${only} 級的紀錄（已用 --strength 過濾）`);
   }
+  out.push(...testNote);
   // A 與 C 的證據強度差一個等級，混在同一份清單裡而不分段，等於把疑似
   // 當成確證呈現。分段之後 C 那一段可以整段標一次「疑似」。
   out.push("");
@@ -154,7 +195,7 @@ export async function ostracised(
   repo: string,
   dbPath: string,
   until: string,
-  filter?: { strength?: ExcursionStrength },
+  filter?: { strength?: ExcursionStrength; includeTests?: boolean },
 ): Promise<string> {
   if (!existsSync(dbPath)) {
     mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
@@ -201,6 +242,7 @@ export async function main(args: string[]): Promise<void> {
   const repo = valueAfter(args, "--repo") ?? process.cwd();
   const dbPath = valueAfter(args, "--db") ?? ".ostracon/index.db";
   const until = valueAfter(args, "--until") ?? "HEAD";
+  const includeTests = args.includes("--include-tests");
   const raw = valueAfter(args, "--strength");
   if (raw !== undefined && raw !== "A" && raw !== "C") {
     console.error("--strength 只接受 A 或 C（B 級需要文字證據，目前刻意不做）");
@@ -210,6 +252,7 @@ export async function main(args: string[]): Promise<void> {
   console.log(
     await ostracised(repo, dbPath, until, {
       ...(raw === undefined ? {} : { strength: raw }),
+      ...(includeTests ? { includeTests } : {}),
     }),
   );
 }

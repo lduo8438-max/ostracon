@@ -20,7 +20,9 @@ const USAGE = `ostracon — 從 git history 重建程式碼的決策演化史
         路徑在 --until 已被刪除也查得到。
 
   ostracon ostracised [--repo <path>] [--db <file>] [--until <sha>] [--strength A|C]
+                      [--include-tests]
         列出試過又被推翻的做法。一律跑全 repo pass——搬移守門在單一血緣下是瞎的。
+        由短命到長命排序；測試檔的宣告預設排除（標頭會報數量）。
 
   ostracon ui [--db <file>] [--port <n>] [--repo-id <n>]
         三欄畫面：結構 → 演化 → 意圖。只讀不建索引，只綁 127.0.0.1。

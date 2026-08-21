@@ -14,6 +14,7 @@ import {
 import { indexRepoStructure } from "../src/index/repo-pass.ts";
 import { lineageIdAt, lineagesEverAt } from "../src/index/structural.ts";
 import {
+  isTestDeclaration,
   listOstracised,
   renderOstracised,
   type OstracisedRow,
@@ -247,5 +248,65 @@ describe("已消失的構造：定址與清單", () => {
     detectExcursions(db, repoId, { scope: "repo" });
     assert.doesNotThrow(() => assertExcursionScope(db, repoId));
     db.close();
+  });
+});
+
+describe("名單的排序與測試檔", () => {
+  const row = (over: Partial<OstracisedRow> = {}): OstracisedRow => ({
+    strength: "A",
+    method: "inverse_diff",
+    durationDays: 5,
+    path: "src/a.ts",
+    symbol: "alpha",
+    bornAt: "2026-01-01T00:00:00Z",
+    diedAt: "2026-01-06T00:00:00Z",
+    diedSha: "aaaaaaaaaaaa",
+    diedSubject: "drop it",
+    ...over,
+  });
+
+  it("**測試檔的宣告預設不在名單裡**", () => {
+    // 實測 vuejs/core 的 A 級 710 條裡有 173 條（24%）是 __tests__ 的
+    // App.render / testRender.makeApp 這類。它們確實誕生又消亡，
+    // 但沒有人「試過這個設計然後推翻它」。
+    const out = renderOstracised([
+      row({ symbol: "realThing" }),
+      row({ path: "packages/x/__tests__/render.spec.ts", symbol: "App.render" }),
+    ]);
+    assert.match(out, /realThing/);
+    assert.doesNotMatch(out, /App\.render/);
+  });
+
+  it("**排除不得靜默**", () => {
+    // 整段藏起來的話，使用者會以為這個 repo 的試錯比實際少。
+    const out = renderOstracised([
+      row({ symbol: "realThing" }),
+      row({ path: "packages/x/__tests__/render.spec.ts", symbol: "App.render" }),
+    ]);
+    assert.match(out, /另有 1 條在測試檔裡/);
+    assert.match(out, /--include-tests/);
+  });
+
+  it("`--include-tests` 看得回來", () => {
+    const rows = [row({ path: "src/__tests__/a.spec.ts", symbol: "App.render" })];
+    assert.match(renderOstracised(rows, { includeTests: true }), /App\.render/);
+  });
+
+  it("全部都是測試檔時仍要說明，而不是回報「沒有」", () => {
+    const out = renderOstracised([
+      row({ path: "src/__tests__/a.spec.ts", symbol: "App.render" }),
+    ]);
+    assert.match(out, /沒有找到被推翻的做法/);
+    assert.match(out, /另有 1 條在測試檔裡/);
+  });
+
+  it("測試檔的判準只認路徑上的測試位置", () => {
+    assert.equal(isTestDeclaration(row({ path: "packages/a/__tests__/x.spec.ts" })), true);
+    assert.equal(isTestDeclaration(row({ path: "src/x.test.ts" })), true);
+    assert.equal(isTestDeclaration(row({ path: "e2e/flow.ts" })), true);
+    // 產品程式碼不得被誤殺——`latest.ts` 結尾是 test 但不是測試檔。
+    assert.equal(isTestDeclaration(row({ path: "src/latest.ts" })), false);
+    assert.equal(isTestDeclaration(row({ path: "src/protest/x.ts" })), false);
+    assert.equal(isTestDeclaration(row({ path: "src/contest.ts" })), false);
   });
 });

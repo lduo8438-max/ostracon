@@ -183,7 +183,7 @@ h2 span { float: right; letter-spacing: 0; text-transform: none; font-weight: 40
   <section aria-label="結構">
     <h2><span id="list-title">結構</span> <span id="entity-count"></span></h2>
     <div class="tabs" role="tablist">
-      <button id="tab-live" class="tab" role="tab" aria-selected="true">現存的宣告</button>
+      <button id="tab-live" class="tab" role="tab" aria-selected="true">全部宣告</button>
       <button id="tab-gone" class="tab" role="tab" aria-selected="false">被推翻的做法</button>
     </div>
     <input id="filter" type="search" placeholder="篩選路徑或符號" autocomplete="off">
@@ -270,7 +270,7 @@ function renderEntities(query) {
   const shown = q === ""
     ? all
     : all.filter((e) => (e.path + ":" + e.symbol).toLowerCase().includes(q));
-  $("list-title").textContent = tab === "gone" ? "被推翻的做法" : "結構";
+  $("list-title").textContent = tab === "gone" ? "被推翻的做法" : "宣告";
   $("entity-count").textContent = all.length + " 個";
   if (tab === "gone") {
     // **排除不得靜默**，而且這行的數字與 CLI 是同一個 predicate 算出來的。
@@ -298,11 +298,11 @@ function renderEntities(query) {
     return;
   }
   $("entities").innerHTML = shown.map((e) => \`
-    <button class="entity" data-id="\${e.stableKey}"
+    <button class="entity\${e.dead ? " gone" : ""}" data-id="\${e.stableKey}"
             aria-current="\${e.stableKey === current}">
       <div class="symbol">\${text(e.symbol)}</div>
       <div class="path">\${text(e.path)}</div>
-      <div class="meta"><span>\${e.revisions} 次改動\${
+      <div class="meta"><span>\${e.dead ? "已消亡 · " : ""}\${e.revisions} 次改動\${
         e.untouched > 0 ? " · " + e.untouched + " 次未動" : ""
       }</span><span>\${
         e.withEntityIntent > 0
@@ -418,8 +418,9 @@ for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
     $("tab-live").setAttribute("aria-selected", String(which === "live"));
     $("tab-gone").setAttribute("aria-selected", String(which === "gone"));
     $("filter").value = "";
-    // **兩份名單互斥，所以切換時清掉選取。** 留著的話右邊還是上一個宣告的
-    // 時間軸，左邊卻沒有任何 aria-current 列——畫面看起來像右側資料失去來源。
+    // 切換時清掉選取。留著的話右邊還是上一個宣告的時間軸，左邊卻可能沒有
+    // 任何 aria-current 列——畫面看起來像右側資料失去來源。
+    // （兩份名單**不是**互斥的：「被推翻的做法」是「全部宣告」的子集。）
     clearSelection();
     renderEntities("");
   });

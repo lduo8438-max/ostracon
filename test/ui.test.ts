@@ -671,3 +671,31 @@ describe("對外身分是 stable_key，不是 rowid", () => {
     assert.equal((PAGE.match(/從左邊挑一個宣告。/g) ?? []).length, 1);
   });
 });
+
+describe("清單的名稱要符合資料", () => {
+  it("**已消亡的宣告仍在清單裡，並且逐列標示**", () => {
+    // 這份清單不是「現存的宣告」——只留存活者會讓實測 vuejs/core 的 916 筆
+    // 兩個名單都到不了（C 級疑似或在測試檔裡），而它們是 parseChildren、
+    // parseTag 這種實在的歷史。所以不過濾，改成逐列標示。
+    const db = open(fixtureDb());
+    assert.equal(listEntities(db, 1)[0]!.dead, false);
+
+    db.exec("UPDATE entity SET death_commit_id = 2 WHERE id = 1");
+    const after = listEntities(db, 1);
+    assert.equal(after.length, 1, "已消亡的不得從清單消失");
+    assert.equal(after[0]!.dead, true);
+    db.close();
+  });
+
+  it("`dead` 是布林，不是 SQLite 的 0／1", () => {
+    // `0` 是 falsy 但 `"0"` 不是——這種東西流到樣板裡會安靜地永遠為真。
+    const db = open(fixtureDb());
+    assert.strictEqual(listEntities(db, 1)[0]!.dead, false);
+    db.close();
+  });
+
+  it("tab 名稱不宣稱「現存」", () => {
+    assert.match(PAGE, /全部宣告/);
+    assert.doesNotMatch(PAGE, /現存的宣告/);
+  });
+});

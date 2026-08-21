@@ -44,6 +44,16 @@ export interface EntityRow {
   withEntityIntent: number;
   /** 有幾次改動只有整批共用的理由。 */
   withBatchIntent: number;
+  /**
+   * 這個宣告已經不在了。
+   *
+   * **這份清單不是「現存的宣告」**——它收的是所有有歷史可說的宣告，已消亡的
+   * 也在裡面。實測 vuejs/core 4,000 筆裡有 1,453 筆已消亡，其中 916 筆連
+   * 「被推翻的做法」那份名單都不在（C 級疑似、或在測試檔裡）。**只留存活者
+   * 會讓那 916 筆兩個名單都到不了**，而它們是 `parseChildren`、`parseTag`
+   * 這種實在的歷史。所以不過濾，改成逐列標示。
+   */
+  dead: boolean;
 }
 
 /**
@@ -107,7 +117,8 @@ export function listEntities(
             COUNT(DISTINCT CASE WHEN sc.batch_only = 0 THEN rc.id END)
               AS withEntityIntent,
             COUNT(DISTINCT CASE WHEN sc.batch_only = 1 THEN rc.id END)
-              AS withBatchIntent
+              AS withBatchIntent,
+            (e.death_commit_id IS NOT NULL) AS dead
        FROM entity e
        JOIN revision_change rc ON rc.entity_id = e.id
        JOIN (SELECT r.entity_id AS entity_id, r.path AS path,
@@ -126,7 +137,12 @@ export function listEntities(
         : ""}
       ORDER BY revisions DESC, last.path, last.symbol
       LIMIT ?`,
-  ).all(repoId, repoId, repoId, repoId, limit) as unknown as EntityRow[];
+  ).all(repoId, repoId, repoId, repoId, limit).map((row) => ({
+    ...(row as unknown as EntityRow),
+    // SQLite 沒有布林；不轉的話畫面會拿到 0 / 1，而 `0` 是 falsy 但
+    // `"0"` 不是——這種東西一旦流到樣板裡就會安靜地永遠為真。
+    dead: Number((row as { dead: number }).dead) === 1,
+  }));
 }
 
 /**

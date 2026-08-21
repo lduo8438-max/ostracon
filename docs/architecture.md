@@ -785,6 +785,12 @@ commit 尺度上那是真的**，錯的只是把它印得像是專講這一個�
 `> 1` 就標為 `batch`。畫面把整批理由降一階呈現（**唯一的暖色只留給專屬引文**，
 否則色彩本身就在誇大），並直接印出「同時歸給 N 次改動」。
 
+**`ostracon why` 標同一件事。** 它印的是 evidence 而不是 claim，但尺度的定義一樣，
+所以 `TimelineRow` 也帶 `affectedEntities`，由同一支 `affectedEntityCounts` 填。
+畫面標了而 CLI 沒標的話，同一條引文在兩個介面上的份量不一樣——實測 vuejs/core 的
+`baseCreateRenderer` 有六條這種引文，扇出 3 到 44 不等，而 CLI 原本一律印成
+無條件的「理由」。
+
 **稀疏度標頭因此拆成兩個數字。** 合起來會誇大一個數量級——vuejs/core 是
 37 次專屬對 656 次整批，Osiris 是 **0 對 74**。
 

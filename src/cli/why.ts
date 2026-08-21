@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
+import { affectedEntityCounts, scopeOf } from "../claim/scope.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { repoConsolidationNotice } from "../git/persist.ts";
@@ -76,6 +77,14 @@ export interface TimelineRow {
    * 於是這種列被靜默丟掉——而「不得靜默丟掉」正是這整個機制的前提。
    */
   suppressedStatedQuotes: number;
+  /**
+   * 這顆 commit 有幾次相關改動——也就是這一列的引文同時被歸給幾個宣告。
+   *
+   * `> 1` 代表那句話是**整批改動的共同理由**，不是專講這個宣告的。畫面早就
+   * 這樣標了，CLI 沒標的話同一條引文在兩個介面上的份量不一樣——而「兩個介面
+   * 對同一件事各說各話」正是這個專案反覆出事的那條線。
+   */
+  affectedEntities: number;
 }
 
 /** `rationale` 欄位裡多段引文的分隔符。SQL 端用 `char(31)` 串接。 */
@@ -200,12 +209,20 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
     bucket.push(rationale);
     linkedByCommit.set(commitSha, bucket);
   }
+  // 尺度用共用的那支算，不在這裡另寫一份 SQL。repoId 由 entity 反查——
+  // `timelineOf` 的呼叫端手上不一定有它。
+  const repoId = (db.prepare("SELECT repo_id AS r FROM entity WHERE id = ?")
+    .get(entityId) as { r: number } | undefined)?.r;
+  const affected = repoId === undefined
+    ? new Map<string, number>()
+    : affectedEntityCounts(db, repoId);
   return rows.map((row) =>
     suppressUnrelatedRationale({
       ...row,
       linked: linkedByCommit.get(row.sha) ?? [],
       suppressedReferences: [],
       suppressedStatedQuotes: 0,
+      affectedEntities: affected.get(row.sha) ?? 1,
     })
   );
 }
@@ -460,9 +477,14 @@ export function renderTimeline(
     out.push(`            ${row.subject}`);
     // 已驗證的逐字引用。前綴用「理由」而不是把它混進 subject，
     // 是為了讓「作者說的」與「我們整理的」在視覺上就分得開。
+    // 整批理由要標出來。畫面標了而這裡沒標的話，同一條引文在兩個介面上
+    // 的份量不一樣——那是這個專案反覆出事的那條線。
+    const batch = scopeOf(row.affectedEntities) === "batch"
+      ? `（整批：這次 commit 同時改了 ${row.affectedEntities} 處）`
+      : "";
     for (const quote of row.rationale ? row.rationale.split(RATIONALE_SEPARATOR) : []) {
       // 跨行的引文在儲存層是逐字的；印成一行時硬換行要收掉，否則版面撐斷。
-      out.push(`            理由「${unwrapQuote(quote)}」`);
+      out.push(`            理由「${unwrapQuote(quote)}」${batch}`);
     }
     for (const linked of row.linked) {
       const source = linked.kind === "pr"

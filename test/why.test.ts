@@ -14,6 +14,7 @@ import {
 import { sha256 } from "../src/evidence/span.ts";
 
 const row = (over: Partial<TimelineRow> = {}): TimelineRow => ({
+  affectedEntities: 1,
   sha: "a".repeat(40),
   shortSha: "aaaaaaaaaa",
   committedAt: "2026-01-01T00:00:00Z",
@@ -609,5 +610,27 @@ describe("why 的呈現接線（真實 git，完整路徑）", () => {
       /不必然是這個想法/,
       "措辭必須保留不確定性——這是純名稱比對，不是語意判定",
     );
+  });
+});
+
+describe("整批理由在 CLI 上也要標出來", () => {
+  it("**同一條引文在兩個介面上的份量必須一致**", () => {
+    // 畫面標「整批 · 同時歸給 33 次」而 CLI 印無條件的「理由」，讀起來就像
+    // 那句話是專講這個宣告的。實測 vuejs/core 的 baseCreateRenderer 有六條
+    // 這種引文，扇出 3 到 44 不等。
+    const out = renderTimeline(
+      { path: "src/a.ts", symbol: "alpha", stableKey: "k" },
+      [row({ rationale: "to avoid the cycle.", affectedEntities: 33 })],
+    );
+    assert.match(out, /理由「to avoid the cycle\.」（整批：這次 commit 同時改了 33 處）/);
+  });
+
+  it("只影響一處時不加註", () => {
+    const out = renderTimeline(
+      { path: "src/a.ts", symbol: "alpha", stableKey: "k" },
+      [row({ rationale: "to avoid the cycle.", affectedEntities: 1 })],
+    );
+    assert.match(out, /理由「to avoid the cycle\.」$/m);
+    assert.doesNotMatch(out, /整批/);
   });
 });

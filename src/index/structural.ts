@@ -830,6 +830,103 @@ function encodeMinhash(values: Int32Array): Buffer {
   return Buffer.from(values.buffer, values.byteOffset, values.byteLength);
 }
 
+/**
+ * 雜湊在記憶體裡是 hex 字串，在資料庫裡是 BLOB。
+ *
+ * **值完全相同，只是不再用兩倍空間存**——64 個 hex 字元與 32 個位元組帶的是同一
+ * 個數字。轉換只發生在這一層，雜湊層與匹配器都不知道有這回事。
+ */
+export const hexToBlob = (hex: string): Buffer => Buffer.from(hex, "hex");
+export const blobToHex = (blob: Uint8Array): string => Buffer.from(blob).toString("hex");
+
+/**
+ * 內容向量的鍵：整個向量的 sha256。
+ *
+ * **不是 `hash_raw`。** 實測 vue 上相異 `hash_raw` 22,774 而相異
+ * `(hash_raw, shape_profile)` 22,789——有 15 組逐字相同的宣告落在不同剖面上
+ * （`.ts` 與 `.tsx` 各一份 grammar），`hash_shape` 不同。再者「同一份文字在同一個
+ * 剖面下必定解析成同一棵樹」沒有人能保證。與其論證碰撞不會發生，不如讓鍵涵蓋
+ * 全部欄位；實測這個更保守的鍵沒有付出任何去重率的代價。
+ */
+function contentKey(
+  hashes: HashVector,
+  signature: string,
+  ngramCount: number,
+  mode: string,
+): Buffer {
+  return createHash("sha256").update([
+    hashes.hashRaw,
+    hashes.hashToken,
+    hashes.hashAlpha,
+    hashes.hashAlphaSelf,
+    hashes.hashShape,
+    hashes.shapeProfile,
+    signature,
+    String(hashes.nodeCount),
+    String(hashes.tokenCount),
+    String(NGRAM_SIZE),
+    String(ngramCount),
+    mode,
+  ].join("")).digest();
+}
+
+/**
+ * 取得（必要時建立）這份內容的共用列。
+ *
+ * 先查再插，不是先插再處理衝突：實測九成以上的呼叫會命中既有列
+ * （requests 7.4% 相異、vue 9.8%），查詢命中的路徑該是最短的那一條。
+ */
+function ensureContent(
+  db: DatabaseSync,
+  observed: ObservedDeclaration,
+): number {
+  const exactMode = observed.signature.exact !== undefined;
+  const mode = exactMode ? "exact" : "minhash128";
+  const signature = observed.node.text.split("\n", 1)[0] ?? "";
+  const key = contentKey(observed.hashes, signature, observed.signature.ngramCount, mode);
+
+  const found = prep(db, "SELECT id FROM declaration_content WHERE content_key = ?")
+    .get(key) as { id: number } | undefined;
+  if (found) return found.id;
+
+  const info = prep(db,
+    `INSERT INTO declaration_content (
+       content_key,
+       hash_raw, hash_token, hash_alpha, hash_alpha_self, hash_shape, shape_profile,
+       signature, node_count, token_count,
+       ngram_size, ngram_count, similarity_recall_mode,
+       minhash, minhash_num_perm, minhash_version, minhash_seed_version,
+       exact_ngram_hashes
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (content_key) DO NOTHING`,
+  ).run(
+    key,
+    hexToBlob(observed.hashes.hashRaw),
+    hexToBlob(observed.hashes.hashToken),
+    hexToBlob(observed.hashes.hashAlpha),
+    hexToBlob(observed.hashes.hashAlphaSelf),
+    hexToBlob(observed.hashes.hashShape),
+    observed.hashes.shapeProfile,
+    signature,
+    observed.hashes.nodeCount,
+    observed.hashes.tokenCount,
+    NGRAM_SIZE,
+    observed.signature.ngramCount,
+    mode,
+    exactMode ? null : encodeMinhash(observed.signature.minhash!),
+    exactMode ? null : MINHASH_PERMUTATIONS,
+    exactMode ? null : SIGNATURE_VERSION,
+    exactMode ? null : MINHASH_SEED_VERSION,
+    exactMode ? encodeExact(observed.signature.exact!) : null,
+  );
+  // DO NOTHING 時 changes 為 0——另一條路徑剛插進去，回頭查它的 id。
+  if (info.changes === 0) {
+    return (prep(db, "SELECT id FROM declaration_content WHERE content_key = ?")
+      .get(key) as { id: number }).id;
+  }
+  return Number(info.lastInsertRowid);
+}
+
 export function ensureRevision(
   db: DatabaseSync,
   repo: string,
@@ -853,26 +950,12 @@ export function ensureRevision(
 
   const bytes = utf8ByteRange(observed.node, observed.source);
   const { startLine: lineStart, endLine: lineEnd } = lineRange(observed);
-  const exactMode = observed.signature.exact !== undefined;
 
-  const info = prep(db, 
+  const info = prep(db,
     `INSERT INTO revision (
-       repo_id, commit_id, slot_id, entity_id, lineage_id, path,
-       blob_sha, byte_start, byte_end, line_start, line_end,
-       hash_raw, hash_token, hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-       signature, node_count, token_count,
-       ngram_size, ngram_count, similarity_recall_mode,
-       minhash, minhash_num_perm, minhash_version, minhash_seed_version,
-       exact_ngram_hashes
-     ) VALUES (
-       ?, ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?, ?,
-       ?, ?, ?,
-       ?, ?, ?,
-       ?, ?, ?, ?,
-       ?
-     )`,
+       repo_id, commit_id, slot_id, entity_id, lineage_id, path, content_id,
+       blob_sha, byte_start, byte_end, line_start, line_end
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     repoId,
     commitId(db, repoId, observed.commit),
@@ -880,28 +963,12 @@ export function ensureRevision(
     entityId,
     lineageId,
     observed.path,
-    observed.blobSha,
+    ensureContent(db, observed),
+    hexToBlob(observed.blobSha),
     bytes.startByte,
     bytes.endByte,
     lineStart,
     lineEnd,
-    observed.hashes.hashRaw,
-    observed.hashes.hashToken,
-    observed.hashes.hashAlpha,
-    observed.hashes.hashAlphaSelf,
-    observed.hashes.hashShape,
-    observed.hashes.shapeProfile,
-    observed.node.text.split("\n", 1)[0] ?? "",
-    observed.hashes.nodeCount,
-    observed.hashes.tokenCount,
-    NGRAM_SIZE,
-    observed.signature.ngramCount,
-    exactMode ? "exact" : "minhash128",
-    exactMode ? null : encodeMinhash(observed.signature.minhash!),
-    exactMode ? null : MINHASH_PERMUTATIONS,
-    exactMode ? null : SIGNATURE_VERSION,
-    exactMode ? null : MINHASH_SEED_VERSION,
-    exactMode ? encodeExact(observed.signature.exact!) : null,
   );
   return Number(info.lastInsertRowid);
 }

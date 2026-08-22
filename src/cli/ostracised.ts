@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +11,7 @@ import {
   unboundExcursionNotice,
 } from "../claim/derive.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
-import { repoConsolidationNotice } from "../git/persist.ts";
+import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import { assertNoCrossRepoRows } from "../index/structural.ts";
 import {
@@ -218,13 +218,7 @@ export async function ostracised(
   until: string,
   filter?: { strength?: ExcursionStrength; includeTests?: boolean },
 ): Promise<string> {
-  if (!existsSync(dbPath)) {
-    mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
-    const schema = readFileSync(new URL("../../db/schema.sql", import.meta.url), "utf8");
-    const init = new DatabaseSync(dbPath);
-    init.exec(schema);
-    init.close();
-  }
+  openIndexDatabase(dbPath).close();
 
   await verifyParserAdapters();
   const gitReport = indexGit(repo, { dbPath, until });

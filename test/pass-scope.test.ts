@@ -16,6 +16,7 @@ import {
 import { lineageIdAt } from "../src/index/structural.ts";
 import { why } from "../src/cli/why.ts";
 import { ostracised } from "../src/cli/ostracised.ts";
+import { openIndexDatabase } from "../src/git/persist.ts";
 
 /**
  * 兩個結構層 pass 的候選池不同（`indexLineage` 只看一條血緣，`indexRepoStructure`
@@ -72,9 +73,9 @@ function makeMoveRepo() {
 
 function freshDb(): string {
   const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-scope-db-")), "i.db");
-  const db = new DatabaseSync(dbPath);
-  db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
-  db.close();
+  // 走產品的建庫路徑，不自己 exec schema：那樣 schema_migration 不會被寫入，
+  // 而測試建的資料庫就會被版本守門擋下來——那是測試自己造的假失敗。
+  openIndexDatabase(dbPath).close();
   return dbPath;
 }
 

@@ -97,11 +97,20 @@ function candidates(db: DatabaseSync, repoId: number): EntityRow[] {
             CASE WHEN instr(dc.message, char(10)) > 0
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
                  ELSE dc.message END AS deathSubject,
-            (SELECT r.hash_raw FROM revision r
+            -- 雜湊住在 declaration_content，不再逐列複製在 revision 上。
+            --
+            -- **hex() 不是為了好看，是為了讓嚴格相等還能用。** 這幾個值下游會拿去
+            -- 直接比較（firstRaw 等於 lastRaw 就是 A 級 inverse_diff 的判準），
+            -- 而 BLOB 讀出來是 Uint8Array，=== 在上面是**參照**比較，兩個內容
+            -- 相同的緩衝區也會不相等——那會讓整個 A 級靜默歸零。
+            (SELECT hex(dcn.hash_raw) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id LIMIT 1) AS firstRaw,
-            (SELECT r.hash_raw FROM revision r
+            (SELECT hex(dcn.hash_raw) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id DESC LIMIT 1) AS lastRaw,
-            (SELECT r.hash_alpha FROM revision r
+            (SELECT hex(dcn.hash_alpha) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id DESC LIMIT 1) AS lastAlpha,
             (SELECT COUNT(*) FROM revision r WHERE r.entity_id = e.id) AS revisions
        FROM entity e
@@ -159,17 +168,22 @@ function stillExistsElsewhere(
   db: DatabaseSync,
   entity: EntityRow,
 ): boolean {
-  const query = (column: "hash_raw" | "hash_alpha", value: string) =>
+  // 從內容表出發再 join 回 revision，不是反過來：相異內容只有全部列的 7.4%
+  // （requests 實測），而 `hash_raw` 那一路原本完全沒有索引，是 148,199 列的
+  // 全表掃描。方向換過來之後兩條路都走索引。**語意完全不變**——條件仍然是
+  // 「有另一個 entity 帶著同一份內容，而且活得比我久」。
+  const query = (column: "hash_raw" | "hash_alpha", hex: string) =>
     db.prepare(
       `SELECT 1 AS ok
-         FROM entity o
-         JOIN revision r ON r.entity_id = o.id
+         FROM declaration_content dcn
+         JOIN revision r ON r.content_id = dcn.id
+         JOIN entity o ON o.id = r.entity_id
          LEFT JOIN git_commit dc ON dc.id = o.death_commit_id
-        WHERE r.${column} = ?
+        WHERE dcn.${column} = ?
           AND o.id <> ?
           AND (o.death_commit_id IS NULL OR dc.topo_order > ?)
         LIMIT 1`,
-    ).get(value, entity.id, entity.deathTopo) !== undefined;
+    ).get(Buffer.from(hex, "hex"), entity.id, entity.deathTopo) !== undefined;
 
   return query("hash_raw", entity.lastRaw) || query("hash_alpha", entity.lastAlpha);
 }

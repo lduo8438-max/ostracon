@@ -9,6 +9,7 @@ import { canonicalRepoPath, indexGit } from "../src/git/index.ts";
 import { consolidateRepoPaths } from "../src/git/persist.ts";
 import { entitiesFor, why } from "../src/cli/why.ts";
 import { assertNoCrossRepoRows } from "../src/index/structural.ts";
+import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 /**
  * repo 的身分先前是 `--repo` 的**原字串**，所以同一個 repo 的不同拼法會在同一個
@@ -118,15 +119,12 @@ describe("repo 的身分", () => {
          (2, 2, 7, 'serializeAccount', 'function');
        INSERT INTO entity (id, repo_id, stable_key, birth_commit_id) VALUES
          (1, 1, 'key', 1), (2, 2, 'key', 2);
-       INSERT INTO revision
-         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-          node_count, token_count, similarity_recall_mode, exact_ngram_hashes) VALUES
-         (1, 1, 1, 1, 1, 7, 'src/account.ts', 'b', 0, 1, 1, 2,
-          'r','t','a','as','sh','p', 30, 10, 'exact', x'00'),
-         (2, 2, 2, 2, 2, 7, 'src/account.ts', 'b', 0, 1, 1, 2,
-          'r','t','a','as','sh','p', 30, 10, 'exact', x'00');`,
+       ${INSERT_CONTENT_FIXTURE}
+       INSERT INTO revision ${REVISION_COLUMNS} VALUES
+         ${revisionValues({ id: 1, repoId: 1, commitId: 1, slotId: 1, entityId: 1,
+                           lineageId: 7, path: "src/account.ts" })},
+         ${revisionValues({ id: 2, repoId: 2, commitId: 2, slotId: 2, entityId: 2,
+                           lineageId: 7, path: "src/account.ts" })};`,
     );
 
     assert.deepEqual(

@@ -23,6 +23,13 @@ PRAGMA foreign_keys = ON;
 -- 0. 元資料
 -- =============================================================================
 
+-- Schema 版本。**這張表從 v0.5 起就存在，但一直沒有任何程式讀寫它**——
+-- 於是拿舊 schema 的資料庫來跑，失敗方式是 `no such column: content_id`，
+-- 那個訊息不會告訴任何人原因。現在建庫時寫入、開庫時比對（`openIndexDatabase`），
+-- 不符就明確要求刪檔重建，與剖面版本守門同一種說法。
+--
+--   1 = 內容定址之前的 v0.5 系列（回溯編號，實際上從沒被寫進去過）
+--   2 = declaration_content：內容與位置分離、雜湊改存 BLOB
 CREATE TABLE schema_migration (
   version     INTEGER PRIMARY KEY,
   applied_at  TEXT NOT NULL
@@ -220,36 +227,41 @@ CREATE TABLE slot_discontinuity (
 ) STRICT;
 
 -- =============================================================================
--- 3. Revision：四層雜湊向量 + 預留的 self-normalized 特徵
+-- 3. Revision：身分與位置，內容另表共用
 --
 -- 「兩個 revision 第一次不相等的那一層」= 變更性質。分類器變成一次查表。
+--
+-- **內容與位置分開存。** 實測 psf/requests 148,199 筆 revision 只有 11,001 個
+-- 相異的內容向量（7.4%）、vuejs/core 233,665 筆只有 22,789 個（9.8%）：
+-- 九成以上的列，內容衍生欄位與另一列逐位元相同，差別只在 commit、路徑與位置。
+-- 位置**確實會變**（同一段程式碼會因為檔案別處的改動而位移），所以不能刪列；
+-- 能做的是把內容那一半抽出去共用。設計與取捨見 docs/plan-content-addressed.md。
 -- =============================================================================
 
-CREATE TABLE revision (
+-- 一份宣告的內容衍生資料，跨 revision、跨 repo 共用。
+--
+-- **鍵是整個向量的摘要，不是 hash_raw。** 直覺上內容一樣其餘欄位就一樣，但
+-- 實測 vue 上相異 hash_raw 是 22,774、相異 (hash_raw, shape_profile) 是 22,789——
+-- 有 15 組逐字相同的宣告落在不同剖面上（.ts 與 .tsx 各一份 grammar），
+-- hash_shape 不同。而「同一份文字在同一個剖面下必定解析成同一棵樹」這句話
+-- 沒有人能保證（同樣的文字在類別方法與物件字面值裡節點型別可能不同）。
+-- 與其論證它不會發生，不如讓鍵涵蓋全部欄位。實測這個更保守的鍵去重率不變。
+CREATE TABLE declaration_content (
   id            INTEGER PRIMARY KEY,
-  repo_id       INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
-  commit_id     INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
-  slot_id       INTEGER NOT NULL REFERENCES slot(id),
-  entity_id     INTEGER NOT NULL REFERENCES entity(id),
-  lineage_id    INTEGER NOT NULL REFERENCES path_lineage(id),
-  path          TEXT NOT NULL,          -- 該 commit 當下的實際路徑（冗餘，為了查詢方便）
+  -- sha256(下列所有欄位)。碰撞在密碼學意義上不可能，不需要任何「應該不會」的推論。
+  content_key   BLOB NOT NULL UNIQUE,
 
-  -- 位置：不存原始碼，存 blob 內的位移。需要時回本地 Git 或 blob_cache 讀。
-  blob_sha      TEXT NOT NULL,
-  byte_start    INTEGER NOT NULL,
-  byte_end      INTEGER NOT NULL,
-  line_start    INTEGER NOT NULL,
-  line_end      INTEGER NOT NULL,
-
-  -- [LOCK] 四層雜湊階梯（由細到粗）
-  hash_raw      TEXT NOT NULL,          -- 原始碼位元組
-  hash_token    TEXT NOT NULL,          -- 忽略空白與註解的 token 序列
-  hash_alpha    TEXT NOT NULL,          -- 只正規化局部變數（alpha 等價）
+  -- [LOCK] 四層雜湊階梯（由細到粗）。
+  -- **存 32 bytes 的 BLOB 而不是 64 字元 hex**：值完全相同，只是不再用兩倍空間存。
+  -- 雜湊層仍以 hex 字串運算，轉換只發生在持久化邊界。
+  hash_raw      BLOB NOT NULL,          -- 原始碼位元組
+  hash_token    BLOB NOT NULL,          -- 忽略空白與註解的 token 序列
+  hash_alpha    BLOB NOT NULL,          -- 只正規化局部變數（alpha 等價）
   -- L3b：在 hash_alpha 基礎上，再把宣告自身的名稱與解析為該宣告的
   -- self-reference 正規化為 $SELF。只允許同檔、同 profile/kind、
   -- node_count >= 25 且前後唯一 1:1 bucket 的候選使用。
-  hash_alpha_self TEXT NOT NULL,
-  hash_shape    TEXT NOT NULL,          -- node type + field name + 有序樹；內容抹除，並以 shape_profile domain-separate
+  hash_alpha_self BLOB NOT NULL,
+  hash_shape    BLOB NOT NULL,          -- node type + field name + 有序樹；內容抹除，並以 shape_profile domain-separate
   shape_profile TEXT NOT NULL,          -- 語言家族 + 精確 grammar 版本 + serializer 版本
 
   signature     TEXT,                   -- 簽名文字，供 UI 顯示
@@ -259,6 +271,10 @@ CREATE TABLE revision (
   -- token n-gram 集合的候選召回資料。v1 以去重後 ngram_count <= 200
   -- 為 exact mode；超過才使用 128-permutation MinHash。200 是
   -- indexer_version 的參數，不寫死成 schema CHECK。
+  --
+  -- **這兩個欄位目前寫進去之後沒有任何程式讀出來過**（沒有 decode 的對應函式）。
+  -- 去重之後它們的成本從 34 MB 掉到 2.6 MB，不值得為了省那一點而移除一個未來
+  -- 可能要用的欄位——但這件事寫在這裡是為了讓它可見，不是為了讓它被忘記。
   ngram_size             INTEGER NOT NULL DEFAULT 3 CHECK (ngram_size > 0),
   ngram_count            INTEGER NOT NULL DEFAULT 0 CHECK (ngram_count >= 0),
   similarity_recall_mode TEXT NOT NULL
@@ -270,11 +286,6 @@ CREATE TABLE revision (
   -- 小函式保存排序且去重後的 n-gram hash 集合，直接做精確 Jaccard。
   exact_ngram_hashes     BLOB,
 
-  -- 保留核心不變量：一個 commit snapshot 中，一個 slot 只有一個 revision。
-  -- [修正] 原本同時有 (commit_id, slot_id) 與 (repo_id, commit_id, slot_id)。
-  -- commit_id 已經決定 repo_id，後者是前者的冗餘超集，只是多付一份寫入成本
-  -- 與一份磁碟空間，不提供任何額外保證。刪除。
-  UNIQUE (commit_id, slot_id),
   CHECK (
     (similarity_recall_mode = 'exact'
       AND exact_ngram_hashes IS NOT NULL)
@@ -287,12 +298,48 @@ CREATE TABLE revision (
   )
 ) STRICT;
 
-CREATE INDEX idx_revision_entity ON revision(entity_id, commit_id);
-CREATE INDEX idx_revision_slot   ON revision(slot_id, commit_id);
-CREATE INDEX idx_revision_shape  ON revision(repo_id, hash_shape) WHERE node_count >= 25;
-CREATE INDEX idx_revision_alpha  ON revision(repo_id, hash_alpha);
-CREATE INDEX idx_revision_alpha_self
-  ON revision(repo_id, lineage_id, hash_alpha_self) WHERE node_count >= 25;
+CREATE TABLE revision (
+  id            INTEGER PRIMARY KEY,
+  repo_id       INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+  commit_id     INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
+  slot_id       INTEGER NOT NULL REFERENCES slot(id),
+  entity_id     INTEGER NOT NULL REFERENCES entity(id),
+  lineage_id    INTEGER NOT NULL REFERENCES path_lineage(id),
+  path          TEXT NOT NULL,          -- 該 commit 當下的實際路徑（冗餘，為了查詢方便）
+
+  -- 內容衍生的一切都在這裡。**不隨 revision 複製。**
+  content_id    INTEGER NOT NULL REFERENCES declaration_content(id),
+
+  -- 位置：不存原始碼，存 blob 內的位移。需要時回本地 Git 或 blob_cache 讀。
+  -- blob_sha 同樣改存 20 bytes 的 BLOB 而不是 40 字元 hex。
+  blob_sha      BLOB NOT NULL,
+  byte_start    INTEGER NOT NULL,
+  byte_end      INTEGER NOT NULL,
+  line_start    INTEGER NOT NULL,
+  line_end      INTEGER NOT NULL,
+
+  -- 保留核心不變量：一個 commit snapshot 中，一個 slot 只有一個 revision。
+  -- [修正] 原本同時有 (commit_id, slot_id) 與 (repo_id, commit_id, slot_id)。
+  -- commit_id 已經決定 repo_id，後者是前者的冗餘超集，只是多付一份寫入成本
+  -- 與一份磁碟空間，不提供任何額外保證。刪除。
+  UNIQUE (commit_id, slot_id)
+) STRICT;
+
+CREATE INDEX idx_revision_entity  ON revision(entity_id, commit_id);
+CREATE INDEX idx_revision_slot    ON revision(slot_id, commit_id);
+-- 迂迴的搬移守門從內容表 join 回 revision 要用它。
+CREATE INDEX idx_revision_content ON revision(content_id);
+
+-- 搬移守門用這兩條回答「有沒有一份相同的內容活得比它久」。
+-- **hash_raw 那一路原本完全沒有索引**（148,199 列全表掃描）；搬到內容表之後
+-- 不只有了索引，掃描範圍還降到 7.4% 的列數。
+CREATE INDEX idx_content_raw   ON declaration_content(hash_raw);
+CREATE INDEX idx_content_alpha ON declaration_content(hash_alpha);
+
+-- 原本還有 idx_revision_shape 與 idx_revision_alpha_self（requests 上合計 21.4 MB）。
+-- **兩條都沒有任何 SQL 讀者**——匹配階梯比對的是 buildPool 現場觀察出來的記憶體
+-- 候選池，不是資料庫。沒有讀者的索引就是索引版的死旗標，所以刪掉而不是搬家。
+-- 哪天真要做資料庫端的匹配，那個設計會自己定義它需要什麼索引。
 
 -- 匹配階梯的完整紀錄。連被否決的候選也存，否則第四週調參時無從除錯。
 CREATE TABLE revision_match (

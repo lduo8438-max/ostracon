@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { reconcileEntityDeaths } from "../src/index/structural.ts";
+import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 /**
  * `entity.death_commit_id` 是**衍生欄位**，真相在 `revision_change` 的 `death` 列。
@@ -20,8 +21,7 @@ function fixture(): DatabaseSync {
   const commits = [1, 2, 3, 4].map((n) =>
     `(${n}, 1, 'c${n}', '2026-01-0${n}', '2026-01-0${n}', 'm${n}', ${n})`).join(",");
   const rev = (id: number, commit: number) =>
-    `(${id}, 1, ${commit}, 1, 1, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-      'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`;
+    revisionValues({ id, commitId: commit });
   db.exec(
     `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
      INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
@@ -32,11 +32,8 @@ function fixture(): DatabaseSync {
        VALUES (1, 1, 1, 'alpha', 'function');
      INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
        VALUES (1, 1, 'k1', 1);
-     INSERT INTO revision
-       (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-        byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-        hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-        node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+     ${INSERT_CONTENT_FIXTURE}
+     INSERT INTO revision ${REVISION_COLUMNS}
        VALUES ${rev(1, 1)}, ${rev(3, 3)};`,
   );
   return db;

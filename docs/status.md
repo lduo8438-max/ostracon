@@ -56,7 +56,7 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/git/hunks.ts` | **純函式**：unified diff parser、路徑去引號、hunk 掛回 | 嚴格狀態機，見 `plan-diff-hunk.md` |
 | `src/git/lineage.ts` | **純函式**：`CommitRecord[]` → 路徑血緣 | 不碰 git、不碰 DB |
 | `src/git/types.ts` | 走訪、檔案變更與血緣的共用型別 | |
-| `src/git/persist.ts` | 走訪層的 SQLite persistence | 含 FTS5 探測、增量水位線、血緣狀態載入、`file_hunk` 寫入 |
+| `src/git/persist.ts` | 走訪層的 SQLite persistence | 含 FTS5 探測、增量水位線、血緣狀態載入、`file_hunk` 寫入、`openIndexDatabase` 與 schema 版本守門 |
 | `src/git/index.ts` | 編排 + 增量 | force push 偵測（水位線非祖先即拒絕並要求重建） |
 | `src/ast/types.ts` | `SynNode` 介面與 `LanguageProfile` | 欄位是 `startIndex`/`endIndex`（UTF-16），另有 `utf8ByteRange` 轉換 |
 | `src/ast/hash.ts` | **純函式**：四層雜湊、S-expression、`changeLevel` 查表 | |
@@ -172,6 +172,57 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### 內容定址：資料庫小三倍，索引快四成（2026-08-22，schema v2）
+
+設計與取捨在 `plan-content-addressed.md`。這裡只記前後數字。
+
+**體積**（同一台機器、同一份語料、各一次全 repo pass）：
+
+| 語料 | 前 | 後 | |
+|---|---:|---:|---:|
+| psf/requests | 181.2 MiB | **52.5 MiB** | −71.0% |
+| vuejs/core | 279.0 MiB | **93.1 MiB** | −66.6% |
+
+`revision` 表加索引在 requests 上從 **157.1 MB（86.7%）降到 19.5 MB（37.1%）**，
+新增的 `declaration_content` 是 8.9 MB（11,001 列）——兩者合計 28.4 MB，
+比原本那一張表少 **82%**。現在最大的兩塊換成 `revision_change`（11.4 MB）與
+`revision_match`（7.8 MB），都不在這次的題目裡。
+
+**時間**（這是意料之外的收穫，不是目標）：
+
+| 語料 | 前 | 後 | |
+|---|---:|---:|---:|
+| psf/requests | 180.8 s | **100.7 s** | −44% |
+| vuejs/core | 293.6 s | **170.0 s** | −42% |
+
+每列少寫約 634 bytes、三條大索引少維護，寫入 I/O 直接反映在時間上。
+每 revision 的成本因此從 1.22–1.26 ms 降到 **0.68–0.73 ms**、
+從 1.24–1.25 KB 降到 **0.36–0.41 KB**。預算已在 `roadmap.md` §3 更新
+（一萬 commit 由 6.9 分鐘變 4.0 分鐘）。
+
+**驗收的重點不是變小，是沒變。**
+
+- **四套 TypeScript 語料 5,222 筆 revision 的雜湊指紋，解碼後與改動前逐位元相同**
+  （osiris 1,582 `5a32a4e9402dec0f`、controlled 32 `98428935e3a251d2`、
+  create-t3-app 3,606 `fe4cae454f2da698`、vue-core 2 `0ebd96df5d8fa257`）。
+  雜湊**值**沒有改變，改變的只是它存在哪裡、用幾個位元組存。
+- **迂迴偵測的語意不變**：requests 1,701 條（A 1,079／C 622）、vue 1,285 條
+  （A 710／C 575），前後完全相同，`stable_key` 集合也相同。這條要特別驗，
+  因為搬移守門的查詢方向被換掉了（改成從內容表出發再 join 回 revision）。
+- 五套黃金測試集全過，測試 421 全過。
+
+**踩到一個會靜默壞掉的地方**：迂迴的 A 級判準是 `firstRaw === lastRaw`，
+而 BLOB 從 SQLite 讀出來是 `Uint8Array`——`===` 在上面是**參照**比較，兩個內容
+相同的緩衝區也會不相等，整個 A 級會靜默歸零。修法是查詢端用 `hex()` 讓它仍是
+字串。**型別檢查抓不到這個**（兩邊都是 `string` 或都是 `Uint8Array` 都過得了），
+是寫的時候想到才擋下來的。
+
+**代價**：schema 換版，所有既有資料庫都要重建。`schema_migration` 那張表從 v0.5
+起就存在卻從來沒有任何程式讀寫過，這次啟用它——否則舊資料庫的失敗方式會是
+`no such column: content_id`，而那個訊息不會告訴任何人原因。建庫邏輯原本在
+`why.ts` / `ostracised.ts` / `materialize.ts` 各抄一份，一併收斂成
+`openIndexDatabase`。
+
 ### 成本控制重新定義：計價單位是 revision（2026-08-22 量測）
 
 W5 排程上的「成本控制」原本指的是 LLM token。**零 LLM 之下那一項早就由四層雜湊
@@ -231,8 +282,8 @@ W5 排程上的「成本控制」原本指的是 LLM token。**零 LLM 之下那
    而非 205），但那會改變召回語意——**不是免費的空間，是拿精確度換的**，不列為
    成本控制的選項。
 
-**目前不動手。** 這一輪的產出是把預算的軸修正、把體積的歸屬量清楚；第 1 項是
-資料模型變更，屬於「必須逐行讀懂」的範圍，該由人決定要不要開。
+**第 1、2 項已經做了**（2026-08-22，作者裁定這是發布前最後一個資料模型變更窗口），
+前後數字見下一節。第 3 項維持不採用。
 
 ### 裝飾器把宣告自身的名稱吸進 hash_alpha（2026-08-22，已修：剖面 1.1.1）
 
@@ -1775,11 +1826,16 @@ materializer、runner 與 evaluator 目前會為建料／查詢直接使用 `nod
 
 ---
 
-## 3. Schema v0.5 重點
+## 3. Schema 重點
+
+**目前是 v2**（`schema_migration` 記錄它，`openIndexDatabase` 比對它）。
+v1 → v2 的唯一差別是內容定址：內容衍生欄位移到 `declaration_content`，
+`revision` 只留身分與位置，雜湊與 `blob_sha` 改存 BLOB。見上方對照與
+`plan-content-addressed.md`。以下是 v0.5 當時記的其餘重點，仍然成立。
 
 表：`repo` / `git_commit` / `git_commit_parent` / `path_lineage` /
 `path_lineage_segment` / `file_change` / `file_hunk` / `slot` / `entity` / `entity_link` /
-`slot_discontinuity` / `revision` / `revision_match` / `revision_change` /
+`slot_discontinuity` / `declaration_content` / `revision` / `revision_match` / `revision_change` /
 `construct` / `construct_span` / `source_doc` / `reference_link` /
 `evidence_candidate` / `evidence` / `claim` / `claim_evidence` / `excursion` /
 `llm_cache` / `pass_state`，加上 FTS5 虛擬表與同步 trigger。

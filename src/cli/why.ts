@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -7,7 +7,7 @@ import { verifyParserAdapters } from "../ast/parser.ts";
 import { affectedEntityCounts, scopeOf } from "../claim/scope.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
-import { repoConsolidationNotice } from "../git/persist.ts";
+import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import {
@@ -123,7 +123,7 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
             COALESCE(nr.path, pr.path) AS path,
             COALESCE(nr.line_start, pr.line_start) AS lineStart,
             COALESCE(nr.line_end, pr.line_end) AS lineEnd,
-            COALESCE(nr.signature, pr.signature) AS signature,
+            COALESCE(nc.signature, pc.signature) AS signature,
             COALESCE(ns.qualified_name, ps.qualified_name) AS symbol,
             -- 這裡照實取回。抑制**全部**在 suppressUnrelatedRationale 一個地方做，
             -- 不拆到 SQL：第一版把 stated 的抑制寫成這裡的 WHERE 條件，結果標頭
@@ -140,6 +140,9 @@ export function timelineOf(db: DatabaseSync, entityId: number): TimelineRow[] {
        JOIN git_commit c ON c.id = rc.commit_id
        LEFT JOIN revision nr ON nr.id = rc.next_revision
        LEFT JOIN revision pr ON pr.id = rc.prev_revision
+       -- 簽章文字住在內容表；同一份宣告在幾百個 commit 上共用同一列。
+       LEFT JOIN declaration_content nc ON nc.id = nr.content_id
+       LEFT JOIN declaration_content pc ON pc.id = pr.content_id
        LEFT JOIN slot ns ON ns.id = nr.slot_id
        LEFT JOIN slot ps ON ps.id = pr.slot_id
        LEFT JOIN revision_match m
@@ -544,13 +547,9 @@ export async function why(
 ): Promise<string> {
   const target = parseTarget(targetRaw);
 
-  if (!existsSync(dbPath)) {
-    mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
-    const schema = readFileSync(new URL("../../db/schema.sql", import.meta.url), "utf8");
-    const init = new DatabaseSync(dbPath);
-    init.exec(schema);
-    init.close();
-  }
+  // 建庫與 schema 版本檢查共用 openIndexDatabase：這段邏輯原本在三支指令裡
+  // 各抄一份，而版本檢查正好要加在裡面。
+  openIndexDatabase(dbPath).close();
 
   await verifyParserAdapters();
   const gitReport = indexGit(repo, { dbPath, until });

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { grammarForPath, grammarSpecFor } from "../ast/languages.ts";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import {
   aggregateSuppressionNotice,
@@ -106,12 +107,26 @@ export function listOstracised(
  * 判準是路徑，抽樣驗過 40 條全部命中真正的測試檔。**預設排除但不靜默**：
  * 標頭會報出被排除的數量，`--include-tests` 可以看回來。整段藏起來的話，
  * 使用者會以為這個 repo 的試錯比實際少。
+ *
+ * **判準拆成兩半是實測逼出來的。** 目錄慣例（`tests/`、`__tests__/`）跨語言通用，
+ * 但**檔名慣例不是**：原本整條規則只認得 JS/TS 的 `*.test.ts`，於是 psf/requests
+ * 根目錄的 `test_requests.py` 完全逃過過濾，整份出現在「被推翻的做法」清單裡
+ * （205 條 `.py` 路徑中命中 25 條，補上 Python 慣例後是 30 條）。
+ * 檔名那一半因此改由語言註冊表提供——**加一種語言要一起帶進來的東西，
+ * 就該放在加語言的那一個地方。**
  */
-export const TEST_PATH =
-  /(^|\/)(__tests__|__mocks__|tests?|e2e|spec)\/|\.(spec|test|bench)\.[cm]?[jt]sx?$/;
+export const TEST_DIR = /(^|\/)(__tests__|__mocks__|tests?|e2e|spec)\//;
+
+export function isTestPath(pathName: string): boolean {
+  if (TEST_DIR.test(pathName)) return true;
+  const kind = grammarForPath(pathName);
+  if (kind === undefined) return false;
+  const pattern = grammarSpecFor(kind).testFilePattern;
+  return pattern !== undefined && pattern.test(pathName);
+}
 
 export const isTestDeclaration = (row: OstracisedRow): boolean =>
-  TEST_PATH.test(row.path);
+  isTestPath(row.path);
 
 const METHOD_LABEL: Record<ExcursionMethod, string> = {
   git_revert: "revert",

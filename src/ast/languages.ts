@@ -26,6 +26,17 @@ export interface GrammarSpec {
    * 所以 `.tsx` 必須排在 `.ts` 之前處理——這裡改用完整比對，沒有前綴問題。
    */
   extensions: readonly string[];
+  /**
+   * 這個語言的**測試檔命名慣例**（目錄慣例是跨語言的，不放這裡）。
+   *
+   * 它會出現在這個介面而不是 `LanguageProfile`，是因為它不是 grammar 知識——
+   * `LanguageProfile` 描述的是語法樹，這一條描述的是社群慣例。但它確實是
+   * 「加一種語言要一起帶進來的東西」，所以歸註冊表管。
+   *
+   * 少了它的症狀是實測到的：`ostracised` 的判準原本只認得 JS/TS 慣例，於是
+   * psf/requests 根目錄的 `test_requests.py` 整份被當成「被推翻的做法」列出來。
+   */
+  testFilePattern?: RegExp;
 }
 
 export const GRAMMARS: readonly GrammarSpec[] = [
@@ -34,12 +45,14 @@ export const GRAMMARS: readonly GrammarSpec[] = [
     wasm: "tree-sitter-typescript/tree-sitter-tsx.wasm",
     profile: tsxProfile,
     extensions: [".tsx", ".jsx"],
+    testFilePattern: /\.(spec|test|bench)\.[cm]?[jt]sx?$/,
   },
   {
     kind: "typescript",
     wasm: "tree-sitter-typescript/tree-sitter-typescript.wasm",
     profile: typescriptProfile,
     extensions: [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"],
+    testFilePattern: /\.(spec|test|bench)\.[cm]?[jt]sx?$/,
   },
   {
     kind: "python",
@@ -48,6 +61,9 @@ export const GRAMMARS: readonly GrammarSpec[] = [
     // `.pyi` 是型別存根，只有簽章沒有實作。收它會讓同一個函式在
     // `foo.py` 與 `foo.pyi` 各有一個實體，而兩者的血緣其實是同一條。
     extensions: [".py"],
+    // pytest 與 unittest 的慣例。`conftest.py` 刻意不收：它是設定不是測試，
+    // 而且裡面的 fixture 被推翻時確實是一個值得看見的決定。
+    testFilePattern: /(^|\/)(test_[^/]+|[^/]+_test)\.py$/,
   },
 ];
 

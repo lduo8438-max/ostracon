@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { DiffHunk } from "../git/types.ts";
-import { grammarForPath } from "../ast/parser.ts";
+import { GRAMMARS, grammarForPath } from "../ast/parser.ts";
 import { SIGNATURE_VERSION } from "../match/signature.ts";
 import {
   buildPool,
@@ -140,12 +140,29 @@ const keyOf = (lineageId: number, o: ObservedDeclaration) =>
  * `minhash_version` 欄位，沒有進水位線——結果是改了簽章演算法之後續跑不會報錯，
  * 資料庫裡會靜默混進兩族互不可比的簽章。註解裡寫「換了就要重算」但系統不強制，
  * 那不是規則，是願望。
+ *
+ * **語言剖面同理，而且是加 Python 那一刀當下就漏掉的。** 剖面決定「哪個節點是
+ * 宣告」與「哪個名字是繫結」，兩者都是雜湊的輸入。少了它：
+ *
+ *  - 加一種語言之後，含該語言檔案的舊資料庫會**續跑**，只有水位線之後的
+ *    commit 拿得到新語言的宣告——一份一半有、一半沒有的索引，而且不報錯。
+ *  - 移動實體邊界（Python 的裝飾器）之後續跑，新舊 `stable_key` 混在同一個
+ *    資料庫裡，同一段程式碼會被算成兩個實體。
+ *
+ * 兩個都是靜默錯誤。`shape_profile` 擋不住它們——同一趟 pass 的兩側都是用當下
+ * 的剖面現場觀察的，本來就一致，它偵測不到版本改變。**能擋的是水位線。**
+ *
+ * 版本字串由註冊表推導，所以新增語言會自動改變它，不必記得手動加一筆。
  */
+const profilesVersion = (): string =>
+  GRAMMARS.map((g) => `${g.profile.family}@${g.profile.profileVersion}`).join(",");
+
 export const declarationIndexerVersion = (
   structuralVersion: string,
   scope: DeclarationScope,
 ): string =>
-  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}+scope:${scope}`;
+  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}`
+  + `+profiles:${profilesVersion()}+scope:${scope}`;
 
 /**
  * 作廢整個 repo 的結構層產出。

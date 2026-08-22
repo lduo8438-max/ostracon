@@ -151,20 +151,11 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 
 #### 三個還沒修的，都已量過
 
-1. **裝飾器不在實體邊界內**：`@property` 改成 `@cached_property` 四層雜湊全部
-   看不見。**requests 在 HEAD 有 17.0% 的宣告帶裝飾器（807 之中的 137）**，
-   不是邊角案例。修它要移動實體邊界，而邊界進 `stable_key`，必須另外提版本並
-   附前後指標。
+1. **裝飾器不在實體邊界內**（第二刀已修，見下一節）。
 2. **docstring 進 token 層、JSDoc 不進**：同一個「只改說明文字」的動作在兩個
    語言被分到不同的 `change_level`。`commentTypes` 是型別集合，表達不了「區塊
-   開頭的字串字面值」這種位置相依概念。
-3. **`ostracised` 的測試檔判準是 TS 慣例**：`TEST_PATH` 認得 `tests/` 目錄與
-   `*.test.ts`，但認不得 Python 的 `test_*.py`／`*_test.py`。requests 的 205 條
-   `.py` 路徑裡現行命中 25 條，加上 Python 慣例後是 30 條——`test_requests.py`
-   在 repo 根目錄，現在會出現在「被推翻的做法」清單裡。
-
-1 與 2 有測試明確斷言**目前**行為，**目的是讓限制在被修掉的那一刻變成紅燈**，
-而不是默默地變成「應該已經修好了吧」。
+   開頭的字串字面值」這種位置相依概念。**仍未修**，有測試釘住目前行為。
+3. **`ostracised` 的測試檔判準是 TS 慣例**（第二刀已修，見下一節）。
 
 #### 相依論證
 
@@ -180,6 +171,75 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
+
+### 裝飾器進實體邊界、剖面版本進水位線（2026-08-22）
+
+W5 的第二刀。兩個都是 Python 專屬、都不動 TypeScript 的雜湊，所以合成一刀。
+
+#### 1. 實體邊界含裝飾器
+
+`decorated_definition` 是包裝節點，實體原本落在裡面的 `function_definition` 上，
+於是 `@property` 換成 `@cached_property` 四層雜湊全部看不見。剖面因此多一個欄位
+`declarationWrappers`（包裝節點型別 → 被包裝宣告的欄位名），TypeScript 留空
+（那份 grammar 的 `decorator` 是子節點不是包裝，本來就在邊界內）。
+
+前後對照（psf/requests，6,491 commits，各一次全 repo pass）：
+
+| 指標 | 前 | 後 | 差 |
+|---|---:|---:|---:|
+| revision | 148,184 | 148,184 | 0 |
+| entity | 3,406 | 3,409 | +3 |
+| `change_level = none` | 136,056 | **135,940** | **−116** |
+| shape | 5,753 | 5,811 | +58 |
+| alpha | 1,618 | 1,643 | +25 |
+| raw | 1,184 | 1,213 | +29 |
+| token | 31 | 32 | +1 |
+| L1／L2／L3／L3b／L3c／L4／L5 | 143,918／753／2／17／11／71／21 | 143,918／753／3／16／11／69／20 | |
+
+**116 次改動從「沒有改動」移到真實的變更層級**，那些正是原本看不見的裝飾器編輯。
+`revision` 筆數不變是預期的——同一批宣告，只是位元組範圍變寬。
+
+單一實例眼檢：`2ccecf6dbd`（只加了一行 `@pytest.mark.skip`）在舊邊界下
+`change_level = none`、新邊界下 `shape`；`ostracon why
+'tests/test_testserver.py:TestTestServer.test_request_recovery'` 的那一列也從
+「無變更」變成「結構重構」。
+
+#### 2. 剖面版本進 declarations pass 的水位線
+
+**這是加 Python 那一刀當下就漏掉的。** 剖面決定「哪個節點是宣告」與「哪個名字是
+繫結」，兩者都是雜湊的輸入，不變量 7 適用，但它原本不在任何版本字串裡。兩個
+靜默錯誤：
+
+- 加一種語言之後，含該語言檔案的舊資料庫會**續跑**，只有水位線之後的 commit
+  拿得到新語言的宣告——一份一半有、一半沒有的索引，不報錯。
+- 移動實體邊界之後續跑，新舊 `stable_key` 混在同一個資料庫裡。
+
+**`shape_profile` 擋不住這兩件事**——同一趟 pass 的兩側都是用當下的剖面現場觀察
+出來的，本來就一致，它偵測不到版本改變。能擋的是水位線。版本字串由註冊表推導，
+新增語言會自動改變它。實測拿舊資料庫重跑會直接拒絕：
+
+```
+資料庫的 declarations indexer_version 是 …+scope:lineage，
+目前版本是 …+profiles:tsx@profile-1.0.0,typescript@profile-1.0.0,python@profile-1.1.0+scope:repo。
+演算法改變後既有的索引不可續跑（不變量 7）。請刪除 --db 指向的檔案後重跑。
+```
+
+**代價要說清楚**：這個字串一變，所有既有資料庫都不得續跑。錯誤訊息會明確說出
+怎麼辦，而且刪掉重建是安全的——但這是一次真實的中斷，不是零成本的守門。
+
+#### 3. 測試檔判準拆成目錄慣例與檔名慣例
+
+目錄慣例（`tests/`、`__tests__/`、`e2e/`）跨語言通用，**檔名慣例不是**。原本整條
+規則只認得 `*.test.ts`，於是 requests 根目錄的 `test_requests.py` 完全逃過過濾。
+檔名那一半移進語言註冊表（`GrammarSpec.testFilePattern`）——**加一種語言要一起
+帶進來的東西，就該放在加語言的那一個地方**。`conftest.py` 刻意不收：它是設定不是
+測試，裡面的 fixture 被推翻是值得看見的決定。
+
+requests 的 `ostracised` 因此從「A 988／C 512、隱藏 200」變成
+「**A 973／C 503、隱藏 225**」。
+
+TypeScript 一如既往逐位元不變（四套語料 5,222 筆指紋相同、四套 golden 全過），
+測試 414 → 418。
 
 ### 意圖層與 Chrome 算繪驗證（2026-08-17）
 

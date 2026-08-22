@@ -294,19 +294,17 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 ### Python 只到「架構驗證」的程度，不是產品支援
 
 `.py` 檔會被索引，四層雜湊、匹配階梯與迂迴偵測在 Python 上都實測跑得通
-（psf/requests，6,491 commits：148,184 筆 revision、3,406 個 entity，
+（psf/requests，6,491 commits：148,184 筆 revision、3,409 個 entity，
 L1–L5 每一層都有命中）。**但它存在的理由是驗證架構沒有寫死在單一語言，
-不是宣稱 Python 支援已經完整。** 兩個已量過、還沒修的缺口：
+不是宣稱 Python 支援已經完整。** 一個已量過、還沒修的缺口：
 
-- **裝飾器不在實體範圍內。** `@property` 改成 `@cached_property` 四層雜湊
-  全部看不見。requests 在 HEAD 有 **17.0% 的宣告帶裝飾器**，不是邊角案例。
-  修它要移動實體邊界，而邊界進 `stable_key`。
 - **docstring 算 token 級改動，JSDoc 算 raw 級。** Python 的 docstring 是字串
   字面值不是註解節點，於是「只改說明文字」這同一個動作在兩個語言被分到不同的
   `change_level`。
 
-另外 `ostracised` 的測試檔判準目前只認得 JS/TS 慣例（`tests/`、`*.test.ts`），
-認不得 `test_*.py`，所以 Python 的測試骨架會混進「被推翻的做法」清單。
+裝飾器一度不在實體範圍內（`@property` 改成 `@cached_property` 看不見，而
+requests 在 HEAD 有 17.0% 的宣告帶裝飾器），已修——邊界含裝飾器之後，
+requests 有 116 次改動從「沒有改動」移到真實的變更層級。
 
 ### diff hunk 只是把歧義轉移，不是消滅它
 

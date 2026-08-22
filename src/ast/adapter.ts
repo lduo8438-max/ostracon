@@ -93,15 +93,27 @@ export function extractDeclarations(
     return v !== undefined && valueBearing.functionTypes.has(v.type);
   };
 
+  /** 包裝節點（Python 的 `decorated_definition`）→ 它包住的那個宣告 */
+  const unwrap = (n: SynNode): SynNode | undefined => {
+    const field = profile.declarationWrappers.get(n.type);
+    if (field === undefined) return undefined;
+    return n.children.find((c) => c.fieldName === field);
+  };
+
   const walk = (n: SynNode, prefix: string) => {
-    if (profile.declarationTypes.has(n.type)) {
-      const name = nameOf(n);
-      if (name && bearsFunction(n)) {
+    // 名稱與 kind 取自被包裝的宣告，**節點本身取包裝**——實體的位元組範圍
+    // 因此含裝飾器，`@property` 換掉才看得見。
+    const inner = unwrap(n);
+    const named = inner ?? n;
+    if (profile.declarationTypes.has(named.type)) {
+      const name = nameOf(named);
+      if (name && bearsFunction(named)) {
         const qualified = prefix ? `${prefix}.${name}` : name;
-        out.push({ node: n, qualifiedName: qualified, kind: n.type });
-        // 類別成員要帶著類別名當前綴，讓 qualifiedName 與 fixture 的
-        // symbol 欄位（ClassName.method）對得上。
-        for (const c of n.children) walk(c, qualified);
+        out.push({ node: n, qualifiedName: qualified, kind: named.type });
+        // 從 `named` 的子節點往下走，不是從 `n`：否則被包裝的那個宣告會被
+        // 當成自己的子宣告再抽一次，變成 `C.size.size`。
+        // 裝飾器本身不含宣告（它是運算式），跳過它不會漏掉東西。
+        for (const c of named.children) walk(c, qualified);
         return;
       }
     }

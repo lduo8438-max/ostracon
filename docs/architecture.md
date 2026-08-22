@@ -285,6 +285,7 @@ handler，`hash_alpha_self` 應該不同，因此仍預期由 L4 接住。這條
 | `adapter.ts` 直接用字面值 `variable_declarator` / `value` / `arrow_function` 判斷「值是函式才算宣告」 | Python 沒有這種形狀，卻要為它繞過一段 TS 專屬邏輯 | `profile.valueBearingDeclarations`，Python 留 undefined |
 | `preservedIdentifierTypes` 依**型別**保護屬性名 | 只在 grammar 給屬性名專屬型別時成立。Python 的 `self._d` 的 `_d` 就是普通 `identifier` | 加 `preservedFields`，依**欄位**保護 |
 | `parser.ts` 的 `grammar === "tsx" ? tsxProfile : typescriptProfile` | 加入第三種語言時會靜默判成 TypeScript：型別檢查過得去，雜湊用錯剖面照樣算得出數字 | 語言註冊表 `src/ast/languages.ts` |
+| `ostracised` 的測試檔判準只認 JS/TS 檔名慣例 | psf/requests 根目錄的 `test_requests.py` 整份被當成「被推翻的做法」列出來 | 目錄慣例留在共用規則，**檔名慣例移進註冊表** |
 
 第二條是其中最貴的：少了它，Python 的 `self._data` 改成 `self._cache`
 **alpha 雜湊相等**——真實改動被歸類成「沒有改動」。這與 TypeScript 早就靠
@@ -296,7 +297,7 @@ handler，`hash_alpha_self` 應該不同，因此仍預期由 L4 接住。這條
 `directOnly`——Python 的 `parameters` 少了它會把型別註記收成繫結，於是
 `def f(x: int)` 與 `def f(x: str)` 的 alpha 雜湊相等。旗標已刪除並換成 `directOnly`。
 
-**這三個加上死旗標，都是同一型缺陷：宣稱支援兩種東西，只驗了其中一種。**
+**這四個加上死旗標，都是同一型缺陷：宣稱支援兩種東西，只驗了其中一種。**
 
 驗收方式是雙向的，兩邊都必須成立：
 
@@ -306,26 +307,63 @@ handler，`hash_alpha_self` 應該不同，因此仍預期由 L4 接住。這條
 - **新機制確實在做事**：把 `preservedFields` 與 `directOnly` 分別拿掉之後，
   對應的語意改動立刻變成看不見。機制若拿掉也照樣通過，那它就是下一個死旗標。
 
-Python 實測（psf/requests，6,491 commits）：148,184 筆 revision，3,406 個 entity，
-匹配階梯每一層都有命中（L1 143,918／L2 753／L3 2／L3b 17／L3c 11／L4 71／L5 21），
-`change_level` 分佈正常（alpha 1,618／token 31／shape 5,753／raw 1,184）。
+Python 實測（psf/requests，6,491 commits）：148,184 筆 revision，3,409 個 entity，
+匹配階梯每一層都有命中（L1 143,918／L2 753／L3 3／L3b 16／L3c 11／L4 69／L5 20），
+`change_level` 分佈正常（alpha 1,643／token 32／shape 5,811／raw 1,213）。
 **匹配器、雜湊、圖遍歷、增量索引沒有任何一處需要因為換語言而改動。**
 
-#### 兩個已知限制，用測試釘住而不是修掉
+#### 實體邊界含裝飾器（剖面 1.1.0）
 
-1. **裝飾器不在實體邊界內。** `decorated_definition` 是包裝節點，實體落在裡面的
-   `function_definition` 上，所以 `@property` 改成 `@cached_property` 四層雜湊
-   全部看不見。**requests 在 HEAD 有 17.0% 的宣告帶裝飾器（807 之中的 137）**，
-   這不是邊角案例。修它要移動實體邊界，而邊界進 `stable_key`，必須另外提版本
-   並附前後指標，因此另開一刀。
-2. **docstring 進 token 層，JSDoc 不進。** Python 的 docstring 是
-   `expression_statement > string`，不是 `comment` 節點，所以「只改說明文字」在
-   Python 是 token 級改動、在 TypeScript 是 raw 級。同一個動作在兩個語言被分到
-   不同的 `change_level`。`commentTypes` 是型別集合，表達不了「區塊開頭的字串
-   字面值」這種位置相依的概念，要修就要加新的剖面概念。
+`decorated_definition` 是包裝節點：名稱在 `definition` 欄位底下的
+`function_definition` 上，但**實體的位元組範圍必須含裝飾器**。切在 `def` 上的話
+`@property` 換成 `@cached_property` 四層雜湊全部看不見，而
+**requests 在 HEAD 有 17.0% 的宣告帶裝飾器（807 之中的 137）**。
 
-兩條都有測試明確斷言目前行為。**這樣做的目的是讓限制在被修掉的那一刻變成紅燈，
-而不是默默地變成「應該已經修好了吧」。**
+剖面因此多一個欄位 `declarationWrappers`（包裝節點型別 → 被包裝宣告的欄位名）。
+TypeScript 留空——那份 grammar 把 `decorator` 放成 `class_declaration` 的**子節點**
+而不是包裝，本來就落在邊界內。同一個語言概念，兩份 grammar 兩種形狀。
+
+抽取時名稱與 `kind` 取自被包裝的宣告、節點取包裝本身，並且從被包裝宣告的**子節點**
+往下走——否則被包裝的那個宣告會被當成自己的子宣告再抽一次，變成 `C.size.size`。
+
+實測（psf/requests 6,491 commits，前後各一次全 repo pass）：
+
+| 指標 | 前 | 後 |
+|---|---:|---:|
+| revision | 148,184 | 148,184 |
+| entity | 3,406 | 3,409 |
+| `change_level = none` | 136,056 | **135,940** |
+| shape ／ alpha ／ raw ／ token | 5,753／1,618／1,184／31 | **5,811／1,643／1,213／32** |
+
+**116 次改動從「沒有改動」移到真實的變更層級。** 那些正是原本看不見的裝飾器編輯。
+單一實例眼檢過：`2ccecf6dbd`（只加了一行 `@pytest.mark.skip`）在舊邊界下是
+`none`，新邊界下是 `shape`，`ostracon why` 的時間軸也從「無變更」變成「結構重構」。
+
+#### 剖面版本必須進水位線，這是加 Python 當下就漏掉的
+
+剖面決定「哪個節點是宣告」與「哪個名字是繫結」，兩者都是雜湊的輸入，所以
+不變量 7 適用。原本它不在任何版本字串裡，於是有兩個靜默錯誤：
+
+- **加一種語言之後**，含該語言檔案的舊資料庫會**續跑**，只有水位線之後的 commit
+  拿得到新語言的宣告——一份一半有、一半沒有的索引，而且不報錯。
+- **移動實體邊界之後**續跑，新舊 `stable_key` 混在同一個資料庫裡，同一段程式碼
+  被算成兩個實體。
+
+**`shape_profile` 擋不住這兩件事**：它回答的是「這兩個雜湊在同一趟 pass 裡可不可以
+比較」，而同一趟 pass 的兩側都是用當下的剖面現場觀察出來的，本來就一致——它偵測
+不到版本改變。能擋的是水位線，而水位線那條路徑早就有「版本不符就拒絕並要求刪檔
+重建」的處理。剖面版本因此加進 `declarationIndexerVersion`，並且由註冊表推導，
+新增語言會自動改變它。
+
+#### 還沒修的：docstring 與 JSDoc 不同級
+
+Python 的 docstring 是 `expression_statement > string`，不是 `comment` 節點，
+所以「只改說明文字」在 Python 是 token 級改動、在 TypeScript 是 raw 級。同一個
+動作在兩個語言被分到不同的 `change_level`。`commentTypes` 是型別集合，表達不了
+「區塊開頭的字串字面值」這種位置相依的概念，要修就要加新的剖面概念。
+
+這一條有測試明確斷言目前行為。**目的是讓限制在被修掉的那一刻變成紅燈**，
+而不是默默地變成「應該已經修好了吧」。
 
 ### 第 4 層：必須用結構化編碼
 

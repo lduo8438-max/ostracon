@@ -6,6 +6,8 @@ import { collectBindings } from "../src/ast/bindings.ts";
 import { hashDeclaration } from "../src/ast/hash.ts";
 import { PYTHON_GRAMMAR_VERSION, pythonProfile } from "../src/ast/profiles/python.ts";
 import { typescriptProfile } from "../src/ast/profiles/typescript.ts";
+import { declarationIndexerVersion } from "../src/index/repo-pass.ts";
+import { isTestPath } from "../src/cli/ostracised.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -28,6 +30,24 @@ test("python profile 使用實際安裝的精確 grammarVersion", () => {
 test("每份剖面的 family 都互異，shape_profile 才隔得開", () => {
   const families = GRAMMARS.map((g) => g.profile.family);
   assert.equal(new Set(families).size, families.length, families.join("、"));
+});
+
+/**
+ * 剖面決定「哪個節點是宣告」與「哪個名字是繫結」，兩者都是雜湊的輸入，
+ * 所以它必須在**水位線**裡（不變量 7）。少了它有兩個靜默錯誤：加一種語言之後
+ * 舊資料庫會續跑、只有水位線之後的 commit 拿得到新語言；移動實體邊界之後續跑，
+ * 新舊 `stable_key` 混在同一個資料庫裡。
+ *
+ * `shape_profile` 擋不住這兩件事——同一趟 pass 的兩側都是用當下的剖面現場觀察的。
+ */
+test("剖面版本進得了 declarations pass 的水位線", () => {
+  const version = declarationIndexerVersion("walk-x", "repo");
+  for (const g of GRAMMARS) {
+    assert.ok(
+      version.includes(`${g.profile.family}@${g.profile.profileVersion}`),
+      `${g.profile.family} 的剖面版本沒有進版本字串：${version}`,
+    );
+  }
 });
 
 test("副檔名對應到正確的 grammar，且認不得的一律不索引", () => {
@@ -219,31 +239,55 @@ test("繫結清單不含型別名與屬性名", async () => {
 });
 
 /**
- * **已知限制，刻意用測試釘住而不是修掉。**
+ * 裝飾器在實體邊界內（剖面 1.1.0）。
  *
- * 裝飾器不在實體範圍內：`decorated_definition` 是包裝節點，實體的邊界落在裡面
- * 的 `function_definition` 上。於是 `@property` 改成 `@cached_property`
- * 四層雜湊全部看不到。
- *
- * 修它要移動實體邊界，而實體邊界進 `stable_key`——那是一次全量重建，必須另外
- * 提版本並附前後指標。這條測試的作用是：**有人哪天改了邊界，這裡會紅**，
- * 而不是讓限制默默地變成「已經修好了吧」。
+ * 在此之前 `decorated_definition` 是包裝節點、實體落在裡面的 `function_definition`
+ * 上，於是 `@property` 改成 `@cached_property` 四層雜湊全部看不見——而
+ * psf/requests 在 HEAD 有 17.0% 的宣告帶裝飾器。
  */
-test("已知限制：裝飾器的改動目前看不見", async () => {
+test("裝飾器的改動看得見", async () => {
   const before = "class C:\n    @property\n    def size(self):\n        return 1\n";
   const after = "class C:\n    @cached_property\n    def size(self):\n        return 1\n";
   const a = await declarationNamed(before, "C.size");
   const b = await declarationNamed(after, "C.size");
-  assert.equal(
+  assert.notEqual(
     hashDeclaration(a.node, before, pythonProfile).hashRaw,
     hashDeclaration(b.node, after, pythonProfile).hashRaw,
   );
-  // 但整個類別是看得見的——裝飾器落在 class 的實體範圍內。
-  const ca = await declarationNamed(before, "C");
-  const cb = await declarationNamed(after, "C");
-  assert.notEqual(
-    hashDeclaration(ca.node, before, pythonProfile).hashRaw,
-    hashDeclaration(cb.node, after, pythonProfile).hashRaw,
+});
+
+test("包裝節點不會讓同一個宣告被抽兩次", async () => {
+  const parsed = await parse(
+    "class C:\n" +
+      "    @property\n" +
+      "    def size(self):\n" +
+      "        return 1\n" +
+      "\n" +
+      "@decorate\n" +
+      "class D:\n" +
+      "    @staticmethod\n" +
+      "    def make():\n" +
+      "        return D()\n",
+  );
+  // 沒有 `C.size.size`，也沒有漏掉被裝飾的類別自己的方法。
+  assert.deepEqual(
+    parsed.declarations.map((d) => d.qualifiedName),
+    ["C", "C.size", "D", "D.make"],
+  );
+  // kind 取被包裝的宣告，不是 `decorated_definition`——帶不帶裝飾器
+  // 是同一種東西，`kind` 分岔會讓 L3b 的同 kind 條件在兩者之間失效。
+  assert.deepEqual(
+    parsed.declarations.map((d) => d.kind),
+    ["class_definition", "function_definition", "class_definition", "function_definition"],
+  );
+});
+
+test("實體範圍從裝飾器開始，不是從 def 開始", async () => {
+  const source = "class C:\n    @property\n    def size(self):\n        return 1\n";
+  const decl = await declarationNamed(source, "C.size");
+  assert.ok(
+    source.slice(decl.node.startIndex, decl.node.endIndex).startsWith("@property"),
+    source.slice(decl.node.startIndex, decl.node.endIndex),
   );
 });
 
@@ -269,4 +313,34 @@ test("已知不對稱：docstring 進 token 層，JSDoc 不進", async () => {
     hashDeclaration(tsA.declarations[0]!.node, tsOne, typescriptProfile).hashToken,
     hashDeclaration(tsB.declarations[0]!.node, tsTwo, typescriptProfile).hashToken,
   );
+});
+
+/**
+ * 測試檔的檔名慣例是語言的一部分，目錄慣例不是。實測：psf/requests 的 205 條
+ * `.py` 路徑裡，只認 JS/TS 慣例時命中 25 條，補上 Python 慣例後 30 條——
+ * 根目錄的 `test_requests.py` 原本整份出現在「被推翻的做法」清單裡。
+ */
+test("測試檔判準認得 Python 慣例，也沒有放寬 TypeScript 那一側", () => {
+  // Python 慣例
+  assert.equal(isTestPath("test_requests.py"), true);
+  assert.equal(isTestPath("requests/test_utils.py"), true);
+  assert.equal(isTestPath("models_test.py"), true);
+  // 設定不是測試：conftest 裡的 fixture 被推翻是值得看見的決定
+  assert.equal(isTestPath("conftest.py"), false);
+  // 不得誤傷正常模組
+  assert.equal(isTestPath("requests/models.py"), false);
+  assert.equal(isTestPath("requests/latest.py"), false);
+  assert.equal(isTestPath("requests/contest.py"), false);
+  assert.equal(isTestPath("src/protest/x.py"), false);
+  // TypeScript 那一側行為不變
+  assert.equal(isTestPath("packages/a/__tests__/x.spec.ts"), true);
+  assert.equal(isTestPath("src/x.test.ts"), true);
+  assert.equal(isTestPath("e2e/flow.ts"), true);
+  assert.equal(isTestPath("src/latest.ts"), false);
+  // Python 的檔名慣例不得外溢到別的語言
+  assert.equal(isTestPath("src/test_helper.ts"), false);
+  // 目錄慣例跨語言通用
+  assert.equal(isTestPath("tests/anything.py"), true);
+  // 認不得的副檔名沒有檔名規則可套
+  assert.equal(isTestPath("test_notes.md"), false);
 });

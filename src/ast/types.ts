@@ -31,6 +31,17 @@ export interface LanguageProfile {
   family: string;
   /** grammar 版本，進入 shape_profile。grammar 一升版節點型別就可能改，雜湊必須跟著作廢 */
   grammarVersion: string;
+  /**
+   * 剖面本身的版本。**改動任何會影響「哪個節點是宣告」或「哪個名字是繫結」的
+   * 欄位都必須提升它**——那些欄位決定雜湊的輸入，不變量 7 適用。
+   *
+   * 它進的是 **declarations pass 的版本字串**，不是 `shape_profile`。理由：
+   * `shape_profile` 回答的是「這兩個雜湊在同一趟 pass 裡可不可以比較」，而同一趟
+   * pass 的兩側都是用當下的剖面現場觀察出來的，本來就一致——它偵測不到版本變更。
+   * 真正會讓新舊規則混進同一個資料庫的是**續跑**，而擋住續跑的是 pass 版本，
+   * 那裡已經有「版本不符就拒絕並要求刪檔重建」的路徑。
+   */
+  profileVersion: string;
 
   /** 註解節點型別。token 層要整批捨棄 */
   commentTypes: ReadonlySet<string>;
@@ -62,6 +73,19 @@ export interface LanguageProfile {
 
   /** 什麼節點算一個「宣告」（entity 的邊界） */
   declarationTypes: ReadonlySet<string>;
+  /**
+   * 包裝節點：實體的邊界該落在包裝上，名稱卻在被包裝的宣告裡。
+   * key 是包裝節點型別，value 是被包裝宣告所在的欄位名。
+   *
+   * Python 的 `decorated_definition` 是唯一的使用者：`@property` 與它裝飾的
+   * `def` 是同一件事的兩半，邊界切在 `def` 上會讓 `@property` 換成
+   * `@cached_property` **四層雜湊全部看不見**。
+   *
+   * TypeScript 不需要它——`decorator` 在那份 grammar 裡是 `class_declaration`
+   * 的**子節點**而不是包裝，本來就落在邊界內。這正是「同一個概念兩種 grammar
+   * 兩種形狀」的又一例。
+   */
+  declarationWrappers: ReadonlyMap<string, string>;
   /** 宣告的名稱所在的欄位名 */
   nameField: string;
   /**

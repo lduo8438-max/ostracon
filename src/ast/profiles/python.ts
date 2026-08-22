@@ -24,7 +24,7 @@ import type { LanguageProfile } from "../types.ts";
  * 本身就是宣告，`x = lambda: 1` 刻意不收（那是賦值，不是宣告；而且收了會讓
  * 每一個模組層級的常數都變成候選實體）。所以 `valueBearingDeclarations` 留空。
  */
-const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion"> = {
+const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion" | "profileVersion"> = {
   commentTypes: new Set(["comment"]),
 
   /**
@@ -48,16 +48,20 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion"> = {
    */
   preservedFields: new Set(["attribute"]),
 
-  /**
-   * `decorated_definition` 刻意**不**列入。它是包裝節點，名字在子節點的
-   * `definition` 欄位底下，直接列入會抽不到名稱；而 `extractDeclarations` 會走
-   * 進它的子節點，所以被裝飾的函式仍然收得到。
-   *
-   * 代價是**裝飾器本身不在實體範圍內**：`@property` 改成 `@cached_property`
-   * 四層雜湊全部看不到。這是已知限制，不是疏漏──修它要改的是實體邊界，
-   * 那會動到 `stable_key`，必須另外提版本並重跑黃金測試集。
-   */
   declarationTypes: new Set(["function_definition", "class_definition"]),
+
+  /**
+   * **裝飾器在實體邊界內**（剖面 1.1.0 起）。
+   *
+   * `decorated_definition` 是包裝節點：名稱在 `definition` 欄位底下的
+   * `function_definition` 上，但實體的位元組範圍必須含裝飾器，否則
+   * `@property` 換成 `@cached_property` 四層雜湊全部看不見。
+   *
+   * 這不是邊角案例：**psf/requests 在 HEAD 有 17.0% 的宣告帶裝飾器**
+   * （807 之中的 137）。而裝飾器往往正是那個宣告最重要的語意——
+   * `@property`、`@staticmethod`、`@contextmanager` 改掉就是換了一個東西。
+   */
+  declarationWrappers: new Map([["decorated_definition", "definition"]]),
 
   nameField: "name",
 
@@ -100,6 +104,13 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion"> = {
   ],
 };
 
+/**
+ * 剖面版本。1.0.0 → 1.1.0 的唯一差別是**裝飾器進了實體邊界**。
+ * 那會改變 `stable_key`，所以舊索引不得續跑——`declarationIndexerVersion`
+ * 會因此變動，續跑時直接拒絕並要求刪檔重建（不變量 7）。
+ */
+export const PYTHON_PROFILE_VERSION = "profile-1.1.0";
+
 /** 必須與 package.json 鎖定的 tree-sitter-python 精確版本一致。 */
 export const PYTHON_GRAMMAR_VERSION = "0.25.0";
 
@@ -107,4 +118,5 @@ export const pythonProfile: LanguageProfile = {
   ...baseProfile,
   family: "python",
   grammarVersion: PYTHON_GRAMMAR_VERSION,
+  profileVersion: PYTHON_PROFILE_VERSION,
 };

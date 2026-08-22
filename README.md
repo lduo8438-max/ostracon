@@ -13,6 +13,9 @@
 
 **<https://lduo8438-max.github.io/ostracon-demo/>** —— 不用安裝，三個真實 repo：
 
+![Ostracon 走過一遍：全部宣告 → 被推翻的做法 → 挑一條看它的時間軸與意圖](https://lduo8438-max.github.io/ostracon-demo/ostracon-w4.gif)
+
+
 | 語料 | 有專屬理由的改動 | 展示什麼 |
 |---|---|---|
 | [vuejs/core](https://lduo8438-max.github.io/ostracon-demo/vuejs-core/) | 37 / 24,779 | 意圖層。非 squash 歷史，理由指得到單一宣告 |

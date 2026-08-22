@@ -2,6 +2,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import {
+  declarationScopeOf,
+  PARTIAL_INDEX_NOTICE,
+} from "../index/repo-pass.ts";
 import { startUiServer } from "../ui/server.ts";
 
 /**
@@ -30,7 +35,14 @@ export async function main(args: string[]): Promise<void> {
   }
   const port = Number(valueAfter(args, "--port") ?? 4319);
   const repoId = Number(valueAfter(args, "--repo-id") ?? 1);
+  // 本機檢視不擋，但要說出來——降級過的索引會少掉跨檔案搬移、多出假誕生。
+  // 匯出那一支是直接拒絕的：它的產出會被發佈出去，收不回來。
+  const probe = new DatabaseSync(dbPath, { readOnly: true });
+  const scope = declarationScopeOf(probe, repoId);
+  probe.close();
+
   const { url } = await startUiServer({ dbPath, repoId, port });
+  if (scope === "lineage") console.log(`注意：${PARTIAL_INDEX_NOTICE}`);
   console.log(`ostracon ui：${url}`);
   console.log("只綁 127.0.0.1——資料庫裡是整個 repo 的歷史。Ctrl-C 結束。");
 }

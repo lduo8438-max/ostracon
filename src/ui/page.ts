@@ -29,7 +29,7 @@
  * 用 `\``。同理，頁面 JS 裡的樣板字串要寫成 `\`…\``。
  */
 export const PAGE = `<!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ostracon</title>
@@ -166,7 +166,7 @@ h2 #list-title { float: none; }
 .claim q {
   display: block; margin-top: 3px; padding: 7px 9px;
   background: var(--voice-ground); border-left: 2px solid var(--voice);
-  color: var(--voice); font: 400 14px/1.45 var(--prose); quotes: "「" "」";
+  color: var(--voice); font: 400 14px/1.45 var(--prose); quotes: "“" "”";
   overflow-wrap: anywhere;
 }
 .claim .prov { color: var(--muted); font-size: 10px; margin-top: 3px; }
@@ -199,21 +199,21 @@ h2 #list-title { float: none; }
 <p class="aggregate" id="aggregate" hidden></p>
 
 <main>
-  <section aria-label="結構">
-    <h2><span id="list-title">結構</span> <span id="entity-count"></span></h2>
+  <section aria-label="Declarations">
+    <h2><span id="list-title">Declarations</span> <span id="entity-count"></span></h2>
     <div class="tabs" role="tablist">
-      <button id="tab-live" class="tab" role="tab" aria-selected="true">全部宣告</button>
-      <button id="tab-gone" class="tab" role="tab" aria-selected="false">被推翻的做法</button>
+      <button id="tab-live" class="tab" role="tab" aria-selected="true">All declarations</button>
+      <button id="tab-gone" class="tab" role="tab" aria-selected="false">Ostracised approaches</button>
     </div>
-    <input id="filter" type="search" placeholder="篩選路徑或符號" autocomplete="off">
+    <input id="filter" type="search" placeholder="Filter by path or symbol" autocomplete="off">
     <div id="entities"></div>
   </section>
-  <section aria-label="演化">
-    <h2>演化 <span id="evolution-count"></span></h2>
+  <section aria-label="Evolution">
+    <h2>Evolution <span id="evolution-count"></span></h2>
     <div id="evolution"></div>
   </section>
-  <section aria-label="意圖">
-    <h2>意圖 <span id="intent-count"></span></h2>
+  <section aria-label="Intent">
+    <h2>Intent <span id="intent-count"></span></h2>
     <div id="intent"></div>
   </section>
 </main>
@@ -225,20 +225,22 @@ const text = (value) => {
   node.textContent = value;
   return node.innerHTML;
 };
+const count = (value, singular, plural = singular + "s") =>
+  value + " " + (Number(value) === 1 ? singular : plural);
 const LEVEL = {
-  birth: "誕生", death: "消亡", none: "無變更", raw: "格式／註解",
-  token: "區域改名", alpha: "字面量或呼叫目標", shape: "結構重構",
+  birth: "Added", death: "Removed", none: "Unchanged", raw: "Formatting / comment",
+  token: "Local rename", alpha: "Literal or callee", shape: "Structural refactor",
 };
 const TYPE = {
-  why: "理由",
-  constraint: "約束",
-  tradeoff: "被拒絕的替代方案",
-  abandoned_reason: "放棄理由",
+  why: "Rationale",
+  constraint: "Constraint",
+  tradeoff: "Rejected alternative",
+  abandoned_reason: "Abandonment rationale",
 };
 
-const EMPTY_EVOLUTION = '<p class="hint">從左邊挑一個宣告。</p>';
+const EMPTY_EVOLUTION = '<p class="hint">Select a declaration from the left.</p>';
 const EMPTY_INTENT =
-  '<p class="hint">意圖只在原文說得出來時才有。<b>空白是真實的觀測值</b>，不是還沒載入。</p>';
+  '<p class="hint">Intent appears only when the source says why. <b>Blank space is an observed value</b>, not a loading state.</p>';
 
 let entities = [];
 let ostracised = { rows: [], hiddenTests: 0 };
@@ -253,21 +255,23 @@ async function boot() {
   // 稀疏度講在最上面，而且**專屬理由與整批理由分開數**。合起來會誇大一個
   // 數量級：實測 vuejs/core 是 34 對 508。
   $("density").innerHTML =
-    \`<b>\${summary.changesWithEntityIntent}</b> / \${summary.changes} 次改動有專屬理由\`
-    + \`（\${pct.toFixed(1)}%）\`
+    \`<b>\${summary.changesWithEntityIntent}</b> / \${summary.changes} changes with entity-specific rationale\`
+    + \` (\${pct.toFixed(1)}%)\`
     + (summary.changesWithBatchIntent > 0
-      ? \`　另有 \${summary.changesWithBatchIntent} 次只有整批理由\`
+      ? \` · \${count(summary.changesWithBatchIntent, "batch-only change")}\`
       : "")
     + (summary.untouched > 0
-      ? \`　時間軸另列出 \${summary.untouched} 次「檔案動了但這裡沒動」\`
+      ? \` · \${summary.untouched} unchanged-in-touched-file entries\`
       : "");
   // **抑制不能靜默。** 沒有這一行，使用者會把大片空白讀成「這個團隊不寫理由」，
   // 而實情是理由寫了、squash 把它跟改動的對應關係銷毀了。
   if (summary.aggregate.quotes > 0) {
     $("aggregate").textContent =
-      \`另有 \${summary.aggregate.quotes} 條引文來自 \${summary.aggregate.commits} 顆聚合 commit\`
-      + \`（squash 合併了多個 PR），會影響 \${summary.aggregate.candidates} 次改動。\`
-      + \`證據仍在，但無法歸因到單一改動，因此意圖欄留白。\`;
+      count(summary.aggregate.quotes, "quote") + " from "
+      + count(summary.aggregate.commits, "aggregate commit")
+      + " (squashed PRs) affect "
+      + count(summary.aggregate.candidates, "candidate change") + ". "
+      + \`The evidence is retained but cannot be attributed to one change, so Intent stays blank.\`;
     $("aggregate").hidden = false;
   }
 
@@ -289,20 +293,20 @@ function renderEntities(query) {
   const shown = q === ""
     ? all
     : all.filter((e) => (e.path + ":" + e.symbol).toLowerCase().includes(q));
-  $("list-title").textContent = tab === "gone" ? "被推翻的做法" : "宣告";
-  $("entity-count").textContent = all.length + " 個";
+  $("list-title").textContent = tab === "gone" ? "Ostracised approaches" : "Declarations";
+  $("entity-count").textContent = count(all.length, "item");
   if (tab === "gone") {
     // **排除不得靜默**，而且這行的數字與 CLI 是同一個 predicate 算出來的。
     // **排除不得靜默**，而且這兩個數字與 CLI 是同一個 predicate 算出來的。
     // C 級是「僅生命週期符合、未經證實」，不進清單也不進頭條。
     const aside = [
       ostracised.hiddenTests > 0
-        ? \`另有 \${ostracised.hiddenTests} 條在測試檔裡（測試骨架，不是被推翻的做法）\`
+        ? \`\${ostracised.hiddenTests} more are in test files (test scaffolding, not ostracised approaches)\`
         : "",
       ostracised.suspected > 0
-        ? \`另有 \${ostracised.suspected} 條 C 級疑似，未經證實，不列入\`
+        ? \`\${ostracised.suspected} more are Grade C candidates, unverified and omitted\`
         : "",
-    ].filter(Boolean).join("；");
+    ].filter(Boolean).join("; ");
     const note = aside === ""
       ? ""
       : \`<div class="note-line">\${aside}</div>\`;
@@ -311,7 +315,7 @@ function renderEntities(query) {
               aria-current="\${r.stableKey === current}">
         <div class="symbol">\${text(r.symbol)}</div>
         <div class="path">\${text(r.path)}</div>
-        <div class="meta"><span><span class="days">\${r.durationDays.toFixed(0)}</span> 天</span><span>A 確證</span></div>
+        <div class="meta"><span class="days">\${count(r.durationDays.toFixed(0), "day")}</span><span>Grade A</span></div>
         <div class="path">\${text(r.diedSubject)}</div>
       </button>\`).join("");
     return;
@@ -321,14 +325,14 @@ function renderEntities(query) {
             aria-current="\${e.stableKey === current}">
       <div class="symbol">\${text(e.symbol)}</div>
       <div class="path">\${text(e.path)}</div>
-      <div class="meta"><span>\${e.dead ? "已消亡 · " : ""}\${e.revisions} 次改動\${
-        e.untouched > 0 ? " · " + e.untouched + " 次未動" : ""
+      <div class="meta"><span>\${e.dead ? "Removed · " : ""}\${count(e.revisions, "change")}\${
+        e.untouched > 0 ? " · " + count(e.untouched, "unchanged entry", "unchanged entries") : ""
       }</span><span>\${
         e.withEntityIntent > 0
-          ? e.withEntityIntent + " 次有專屬理由"
+          ? count(e.withEntityIntent, "entity-specific rationale", "entity-specific rationales")
           : e.withBatchIntent > 0
-            ? e.withBatchIntent + " 次只有整批理由"
-            : "沒有理由可查"
+            ? count(e.withBatchIntent, "batch-only rationale", "batch-only rationales")
+            : "No rationale available"
       }</span></div>
     </button>\`).join("");
 }
@@ -350,8 +354,8 @@ async function select(stableKey) {
   const rows = await (await fetch("./api/evolution/" + stableKey + ".json")).json();
   // 「幾次」要與結構欄用同一個定義，否則同一個宣告在兩欄顯示兩個數字。
   const changed = rows.filter((r) => r.changeLevel !== "none").length;
-  $("evolution-count").textContent = changed + " 次改動"
-    + (rows.length > changed ? "　共 " + rows.length + " 列" : "");
+  $("evolution-count").textContent = count(changed, "change")
+    + (rows.length > changed ? " · " + count(rows.length, "row") : "");
   const entityLevel = rows.filter(
     (r) => r.intent.some((c) => c.scope === "entity"),
   ).length;
@@ -359,7 +363,7 @@ async function select(stableKey) {
     (r) => r.intent.length > 0 && r.intent.every((c) => c.scope === "batch"),
   ).length;
   $("intent-count").textContent = entityLevel + " / " + rows.length
-    + (batchOnly > 0 ? "（另 " + batchOnly + " 整批）" : "");
+    + (batchOnly > 0 ? " (" + batchOnly + " batch-only)" : "");
 
   $("evolution").innerHTML = rows.map((r) => \`
     <div class="rev" data-level="\${text(r.changeLevel)}">
@@ -368,7 +372,7 @@ async function select(stableKey) {
         <span class="when">\${text(r.committedAt.slice(0, 10))}</span>
         <span class="where">\${LEVEL[r.changeLevel] ?? text(r.changeLevel)}</span>
         <span class="tier">\${r.tier ? text(r.tier) : ""}\${
-          r.ambiguitySize > 1 ? "，" + r.ambiguitySize + " 個等價候選" : ""
+          r.ambiguitySize > 1 ? " · " + r.ambiguitySize + " equivalent candidates" : ""
         }</span>
       </div>
       <div class="subject">\${text(r.subject)}</div>
@@ -382,16 +386,16 @@ async function select(stableKey) {
         <div class="claim\${c.scope === "batch" ? " batch" : ""}">
           <div class="type"><b>\${TYPE[c.claimType] ?? text(c.claimType)}</b>\${
             c.scope === "batch"
-              ? '<span class="tag">整批 · 同時歸給 ' + c.affectedEntities + " 次改動</span>"
+              ? '<span class="tag">Batch · shared across ' + count(c.affectedEntities, "change") + "</span>"
               : ""
           }</div>
           <q>\${text(c.text)}</q>
           <div class="prov">\${
             c.scope === "batch"
-              ? "這句話是在講這次 commit 的整批改動，不是專講這個宣告"
+              ? "This statement describes the whole commit, not this declaration"
               : c.tier === "stated"
-                ? "作者在這次 commit 的訊息裡寫的"
-                : "來自被參照的討論串，關聯可信度 " + c.confidence
+                ? "Written by the author in this commit message"
+                : "From a linked discussion; association confidence " + c.confidence
           }</div>
         </div>\`).join("")}</div>\`).join("");
 

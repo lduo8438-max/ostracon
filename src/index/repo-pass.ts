@@ -206,6 +206,33 @@ function declarationState(
 }
 
 /**
+ * 這個資料庫的宣告層是用哪一種候選池建的。
+ *
+ * **讀取端必須看得到這件事。** `why` 的快路徑只走單一血緣，搬移守門在那個範圍
+ * 下是瞎的，跨檔案搬移看不見，而且匹配不到的宣告會被當成誕生——實測 vuejs/core
+ * 上，對一個已經跑過全 repo pass 的資料庫再跑一次 `why`，會多出 3 個假 entity
+ * 與約 155 列改動。
+ *
+ * 索引端已經處理了這件事（marker 降級成 `lineage`，下次 `--full` 會作廢重建），
+ * 但**畫面與匯出原本讀得一聲不響**——我自己就從一個被降級的資料庫匯出過線上
+ * demo，數字因此比乾淨重建多了 8 列改動與 147 列「沒動」。
+ */
+export function declarationScopeOf(
+  db: DatabaseSync,
+  repoId: number,
+): DeclarationScope | undefined {
+  const version = declarationState(db, repoId)?.version;
+  if (version === undefined) return undefined;
+  return version.endsWith(":lineage") ? "lineage" : "repo";
+}
+
+/** 讀取端看到 `lineage` 時該說的話。一份文字，CLI 與匯出共用。 */
+export const PARTIAL_INDEX_NOTICE =
+  "這個索引是 `ostracon why` 的快路徑建的，只走單一血緣：跨檔案搬移看不見，"
+  + "配不到的宣告會被算成誕生。先跑一次 `ostracon ostracised --repo <repo> --db <db>`"
+  + "（或 `why --full`）重建成全 repo 範圍。";
+
+/**
  * 決定這一趟該續跑、該重建、還是該拒絕。
  *
  * 只有一種 scope 不合是可以自動處理的：`lineage` → `repo`。使用者打 `--full`

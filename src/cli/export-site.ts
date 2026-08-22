@@ -2,6 +2,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import {
+  declarationScopeOf,
+  PARTIAL_INDEX_NOTICE,
+} from "../index/repo-pass.ts";
 import { exportStaticSite, SERVE_HINT } from "../ui/export.ts";
 
 /** `ostracon export` — 把索引匯出成可直接託管的靜態站台。 */
@@ -33,6 +37,13 @@ export function main(args: string[]): void {
 
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
+    // **匯出會被發佈出去，收不回來。** 讀到降級過的索引就停下來，而不是印個
+    // 警告然後照樣產生一份數字偏高的站台——我自己踩過一次。
+    if (declarationScopeOf(db, 1) === "lineage") {
+      console.error(`拒絕匯出：${PARTIAL_INDEX_NOTICE}`);
+      process.exitCode = 2;
+      return;
+    }
     const report = exportStaticSite(db, outDir, {
       label,
       ...(limit === undefined ? {} : { limit }),

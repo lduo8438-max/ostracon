@@ -19,6 +19,7 @@ import {
   startUiServer,
 } from "../src/ui/server.ts";
 import { exportStaticSite } from "../src/ui/export.ts";
+import { declarationScopeOf } from "../src/index/repo-pass.ts";
 import { PAGE } from "../src/ui/page.ts";
 import { sha256 } from "../src/evidence/span.ts";
 
@@ -444,7 +445,7 @@ describe("整批理由要標示而不是收回", () => {
 
   it("整批的引文不給暖色——顏色本身也不能誇大", () => {
     assert.match(PAGE, /\.claim\.batch q \{/);
-    assert.match(PAGE, /同時歸給/);
+    assert.match(PAGE, /Batch · shared across/);
   });
 });
 
@@ -668,7 +669,7 @@ describe("對外身分是 stable_key，不是 rowid", () => {
     assert.match(PAGE, /clearSelection\(\);\s*\n\s*renderEntities\(""\);/);
     assert.match(PAGE, /function clearSelection\(\)/);
     // 初始提示只有一份文字，HTML 與 clearSelection 共用同一個常數。
-    assert.equal((PAGE.match(/從左邊挑一個宣告。/g) ?? []).length, 1);
+    assert.equal((PAGE.match(/Select a declaration from the left\./g) ?? []).length, 1);
   });
 });
 
@@ -695,8 +696,22 @@ describe("清單的名稱要符合資料", () => {
   });
 
   it("tab 名稱不宣稱「現存」", () => {
-    assert.match(PAGE, /全部宣告/);
-    assert.doesNotMatch(PAGE, /現存的宣告/);
+    assert.match(PAGE, /All declarations/);
+    assert.doesNotMatch(PAGE, /Current declarations/);
+  });
+});
+
+describe("公開 demo 的介面文字是英文", () => {
+  it("靜態標題、互動提示與時間軸標籤一起英文化", () => {
+    assert.match(PAGE, /<html lang="en">/);
+    assert.match(PAGE, /Ostracised approaches/);
+    assert.match(PAGE, /Filter by path or symbol/);
+    assert.match(PAGE, /Blank space is an observed value/);
+    assert.match(PAGE, /birth: "Added", death: "Removed"/);
+    assert.match(PAGE, /abandoned_reason: "Abandonment rationale"/);
+    assert.match(PAGE, /Grade C candidates, unverified and omitted/);
+    assert.match(PAGE, /Written by the author in this commit message/);
+    assert.match(PAGE, /"unchanged entry", "unchanged entries"/);
   });
 });
 
@@ -712,5 +727,39 @@ describe("反白與標題的可讀性", () => {
     // 左欄的標題本身是 span（要隨 tab 換字），被一起浮動之後標題跑到右邊，
     // h2 也因為沒有 in-flow 內容而高度塌陷，底線從計數文字中間穿過。
     assert.match(PAGE, /h2 #list-title \{ float: none; \}/);
+  });
+});
+
+describe("降級過的索引不得靜默地被讀出去", () => {
+  const scopedDb = (scope: "repo" | "lineage") => {
+    const dbPath = fixtureDb();
+    const db = open(dbPath);
+    db.prepare(
+      `INSERT INTO pass_state
+         (repo_id, pass_name, last_commit_id, indexer_version, updated_at)
+       VALUES (1, 'declarations', NULL, ?, '2026-01-01')
+       ON CONFLICT (repo_id, pass_name) DO UPDATE SET
+         indexer_version = excluded.indexer_version`,
+    ).run(`walk-0.0.0+whatever+scope:${scope}`);
+    return { dbPath, db };
+  };
+
+  it("**認得出索引是快路徑建的**", () => {
+    // `why` 的快路徑只走單一血緣：搬移守門在那個範圍下是瞎的，配不到的宣告
+    // 會被算成誕生。實測對一個已跑過全 repo pass 的資料庫再跑一次 why，
+    // vuejs/core 多出 3 個假 entity 與約 155 列改動。
+    const lineage = scopedDb("lineage");
+    assert.equal(declarationScopeOf(lineage.db, 1), "lineage");
+    lineage.db.close();
+
+    const repo = scopedDb("repo");
+    assert.equal(declarationScopeOf(repo.db, 1), "repo");
+    repo.db.close();
+  });
+
+  it("沒有宣告層水位線時回 undefined，而不是猜一個", () => {
+    const db = open(fixtureDb());
+    assert.equal(declarationScopeOf(db, 1), undefined);
+    db.close();
   });
 });

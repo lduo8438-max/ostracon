@@ -1,0 +1,24 @@
+{
+  "cases": [
+    {
+      "id": "py-comment-edit-is-raw",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "py-declaration-rename-only",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "py-docstring-edit-is-alpha",
+      "difficulty": "hard",
+      "status": "pass"
+    },
+    {
+      "id": "py-method-move-across-files",
+      "difficulty": "hard",
+      "status": "pass"
+    }
+  ]
+}

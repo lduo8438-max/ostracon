@@ -172,6 +172,41 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### Python 進黃金測試集（2026-08-22）
+
+**在這之前，整道閘門只有 TypeScript 語料。** W5 加 Python 的論點是「加新語言＝
+新增一份剖面，匹配器／雜湊／圖遍歷／增量索引一處都不動」，而那個論點原本只有
+一次手跑 psf/requests 6,491 commit 的量測撐著——不可重跑、不進 CI。剖面被改壞的
+話，四套 TypeScript 語料逐位元不變，閘門一聲不響。
+
+語料選 psf/requests，`index_until` 釘在 `4d6871d917`（1,744 個 commit）。這份
+fixture 沒有 excursion 案例，所以 `golden:index` 不跑全 repo pass——**實測
+clone 16 MB／6.9 秒、materialize 2.8 秒**，是整道閘門裡最便宜的一步。
+
+四條案例，每一條都先驗過會咬：
+
+| 案例 | 釘什麼 | 拿掉什麼機制會紅 |
+|---|---|---|
+| `py-docstring-edit-is-alpha` | 只改 docstring 是 `alpha`（字串字面值不是註解） | `string` 加進 `commentTypes` → `raw` |
+| `py-comment-edit-is-raw` | 只改 `#` 註解是 `raw` | `comment` 移出 `commentTypes` → `shape` |
+| `py-declaration-rename-only` | 純改名走 L3b（`hash_alpha_self`） | 拿掉自身名稱正規化 → L4 |
+| `py-method-move-across-files` | 帶類別名前綴的方法跨檔案搬移走 L5 | 拿掉 `class_definition` → 兩條 missing |
+
+**前兩條是一對，缺一不可。** 單獨的 docstring 案例只證明「這顆 commit 是 alpha」，
+證明不了「docstring 與註解不同」；註解那條是對照組，兩條一起才鎖得住那條分界線。
+實測也確認它們互不重疊：破壞 `commentTypes` 的兩個方向各自只讓其中一條紅。
+
+**刻意沒收進來的兩件事，理由寫在 fixture 裡而不是假裝有覆蓋**：裝飾器編輯
+（整個 requests 歷史只有三顆「只改裝飾器」的 commit，最早在 2016 年、要多索引
+4,000 多個 commit）與屬性名的 alpha 保護（早期歷史沒有單純改 `self.<attr>` 的
+commit，硬找一顆夾雜其他改動的來當錨點，失敗時分不出是哪裡壞了）。兩者都由
+`test/python-profile.test.ts` 直接釘住。
+
+fixture 沒有負例，驗證器會警告——與 vue-core 相同。現有的案例類型表達不了
+「這個符號不得被當成宣告」（模組層級賦值那類），而唯一想得到的迂迴負例
+（搬移的方法不得判為迂迴）在 lineage 案例通過時必然通過，**不會失敗的案例
+什麼都沒守到**，所以不收。
+
 ### 版本守門只裝在兩條路徑裡的一條（2026-08-22，已修）
 
 **第十三發。** 而且是上一刀自己留下的：剖面版本進水位線那一節寫的「水位線那條

@@ -312,6 +312,13 @@ Python 實測（psf/requests，6,491 commits）：148,184 筆 revision，3,409 �
 `change_level` 分佈正常（alpha 1,643／token 32／shape 5,811／raw 1,213）。
 **匹配器、雜湊、圖遍歷、增量索引沒有任何一處需要因為換語言而改動。**
 
+**但那次量測是手跑的，不可重跑也不進 CI。** 上面這段驗收成立於交出去的那一天，
+之後沒有任何東西擋著它退步——四套黃金測試集全是 TypeScript 語料，剖面改壞了
+它們逐位元不變。缺口已補上：`fixtures/requests.yaml` 把同一份語料的前 1,744 個
+commit 收進閘門，四條案例分別釘住 docstring 與註解的分界、`hash_alpha_self` 在
+Python 上的自身名稱正規化，以及帶類別名前綴的方法跨檔案搬移。每一條都先驗過
+拿掉對應機制會紅，前後數字見 `status.md`。
+
 #### 實體邊界含裝飾器（剖面 1.1.0）
 
 `decorated_definition` 是包裝節點：名稱在 `definition` 欄位底下的

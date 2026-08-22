@@ -93,6 +93,27 @@ jobs:
             --baseline fixtures/baselines/vue-core.json \
             --report "$RUNNER_TEMP/golden-vue.json"
 
+      # **在這一步之前，整道閘門只有 TypeScript 語料。** W5 加 Python 的論點是
+      # 「加新語言＝新增一份剖面，匹配器／雜湊／圖遍歷／增量索引一處都不動」，
+      # 而那個論點原本只有一次手跑 psf/requests 的量測撐著——不可重跑、不進 CI。
+      # 剖面被改壞的話，四套 TypeScript 語料逐位元不變，閘門一聲不響。
+      #
+      # 四條案例都驗過會咬：把 `comment` 移出 commentTypes → 註解案例 raw 變 shape；
+      # 把 `string` 加進去 → docstring 案例 alpha 變 raw；拿掉 alpha_self 的自身
+      # 名稱正規化 → 改名案例 L3b 掉到 L4；拿掉 class_definition → 方法失去類別名
+      # 前綴，兩條案例直接 missing。
+      #
+      # `index_until` 釘在 1,744 個 commit；lineage 與 change_level 案例只需要
+      # 錨點檔案，實測 materialize 2.8 秒。
+      - name: 黃金測試集 — psf/requests（Python 剖面）
+        run: |
+          pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/requests" \
+            --fixture fixtures/requests.yaml --db "$RUNNER_TEMP/requests.db"
+          pnpm golden -- --fixture fixtures/requests.yaml \
+            --db "$RUNNER_TEMP/requests.db" \
+            --baseline fixtures/baselines/requests.json \
+            --report "$RUNNER_TEMP/golden-requests.json"
+
       - name: 黃金測試集 — 受控 fixture
         run: |
           pnpm golden:index -- --repo "$RUNNER_TEMP/corpora/controlled-typescript" \

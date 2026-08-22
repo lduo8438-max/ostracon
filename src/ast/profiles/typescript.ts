@@ -36,6 +36,12 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion"> = {
     "statement_identifier",
   ]),
 
+  /**
+   * TypeScript 的 grammar 給屬性名一個專屬型別（`property_identifier`），
+   * 所以依型別就保護得到，不需要依欄位。Python 沒有這個條件，見那份剖面。
+   */
+  preservedFields: new Set<string>(),
+
   declarationTypes: new Set([
     "function_declaration",
     "generator_function_declaration",
@@ -52,21 +58,32 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion"> = {
 
   nameField: "name",
 
+  valueBearingDeclarations: {
+    types: new Set(["variable_declarator"]),
+    valueField: "value",
+    functionTypes: new Set([
+      "arrow_function",
+      "function",
+      "function_expression",
+      "class",
+    ]),
+  },
+
   bindingRules: [
     // 參數
-    { nodeType: "required_parameter", field: "pattern", destructuring: true },
-    { nodeType: "optional_parameter", field: "pattern", destructuring: true },
-    { nodeType: "rest_pattern", destructuring: true },
+    { nodeType: "required_parameter", field: "pattern" },
+    { nodeType: "optional_parameter", field: "pattern" },
+    { nodeType: "rest_pattern" },
     // 區域變數宣告
-    { nodeType: "variable_declarator", field: "name", destructuring: true },
+    { nodeType: "variable_declarator", field: "name" },
     // 巢狀函式與類別
     { nodeType: "function_declaration", field: "name" },
     { nodeType: "generator_function_declaration", field: "name" },
     { nodeType: "class_declaration", field: "name" },
     // catch
-    { nodeType: "catch_clause", field: "parameter", destructuring: true },
+    { nodeType: "catch_clause", field: "parameter" },
     // for...of / for...in
-    { nodeType: "for_in_statement", field: "left", destructuring: true },
+    { nodeType: "for_in_statement", field: "left" },
     // 型別參數 <T>
     { nodeType: "type_parameter", field: "name" },
   ],

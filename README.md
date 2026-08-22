@@ -50,7 +50,7 @@ node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRT
 原因，所以寫在這裡。實測 **v24.14.1 可用、v23.11.0 不可用**（後者 `node:sqlite`
 存在，但沒有把 FTS5 編進去）。全文檢索是 schema 的一部分，不是選配。
 
-零執行期相依是刻意的取捨（只有 tree-sitter 兩個套件），代價就是綁在 Node 內建的
+零執行期相依是刻意的取捨（只有 tree-sitter 的解析器與三份 grammar），代價就是綁在 Node 內建的
 SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `ExperimentalWarning`。
 
 ## 安裝
@@ -59,7 +59,7 @@ SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `Ex
 npx ostracon why 'src/auth.ts:validateToken' --repo /path/to/repo
 ```
 
-或裝起來：`npm i -g ostracon`。零執行期相依（只有 tree-sitter 兩個套件），
+或裝起來：`npm i -g ostracon`。零執行期相依（只有 tree-sitter 的解析器與三份 grammar），
 索引存在本機 SQLite，不上傳任何東西。
 
 ```
@@ -290,6 +290,23 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 
 屬性名與 shorthand 屬性名永不正規化：`obj.foo` 的 `foo` 改掉就是改語意，
 `{ userId }` 的 `userId` 同時是物件的鍵。
+
+### Python 只到「架構驗證」的程度，不是產品支援
+
+`.py` 檔會被索引，四層雜湊、匹配階梯與迂迴偵測在 Python 上都實測跑得通
+（psf/requests，6,491 commits：148,184 筆 revision、3,406 個 entity，
+L1–L5 每一層都有命中）。**但它存在的理由是驗證架構沒有寫死在單一語言，
+不是宣稱 Python 支援已經完整。** 兩個已量過、還沒修的缺口：
+
+- **裝飾器不在實體範圍內。** `@property` 改成 `@cached_property` 四層雜湊
+  全部看不見。requests 在 HEAD 有 **17.0% 的宣告帶裝飾器**，不是邊角案例。
+  修它要移動實體邊界，而邊界進 `stable_key`。
+- **docstring 算 token 級改動，JSDoc 算 raw 級。** Python 的 docstring 是字串
+  字面值不是註解節點，於是「只改說明文字」這同一個動作在兩個語言被分到不同的
+  `change_level`。
+
+另外 `ostracised` 的測試檔判準目前只認得 JS/TS 慣例（`tests/`、`*.test.ts`），
+認不得 `test_*.py`，所以 Python 的測試骨架會混進「被推翻的做法」清單。
 
 ### diff hunk 只是把歧義轉移，不是消滅它
 

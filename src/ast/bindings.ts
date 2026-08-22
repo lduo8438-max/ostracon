@@ -24,20 +24,21 @@ export function collectBindings(decl: SynNode, profile: LanguageProfile): string
     order.push(name);
   };
 
-  /** 從一個 pattern 節點撈出所有繫結名稱，會遞迴進解構 */
-  const harvest = (node: SynNode, deep: boolean) => {
+  /**
+   * 從一個 pattern 節點撈出所有繫結名稱。
+   *
+   * `preservedFields` 的子樹整棵跳過：它們佔的是屬性名／關鍵字引數名這類位置，
+   * 名字改了就是改語意，正規化掉會讓真實改動變成「沒有改動」。
+   */
+  const harvest = (node: SynNode) => {
     if (profile.identifierTypes.has(node.type)) {
       add(node.text);
       return;
     }
-    // 解構模式中的 shorthand（{ a, b }）在 tree-sitter 裡是
-    // shorthand_property_identifier_pattern 這類節點——它在 pattern 位置
-    // 確實是繫結，跟物件字面值裡的同名節點意義相反，所以只在這裡撈。
-    if (node.type.endsWith("_pattern") || deep) {
-      for (const c of node.children) harvest(c, true);
-      return;
+    for (const c of node.children) {
+      if (c.fieldName && profile.preservedFields.has(c.fieldName)) continue;
+      harvest(c);
     }
-    for (const c of node.children) harvest(c, deep);
   };
 
   const walk = (node: SynNode, isRoot: boolean) => {
@@ -49,12 +50,19 @@ export function collectBindings(decl: SynNode, profile: LanguageProfile): string
     // 宣告自身的名稱歸 hash_alpha_self 管，不歸這裡。
     for (const rule of isRoot ? [] : profile.bindingRules) {
       if (node.type !== rule.nodeType) continue;
-      if (rule.field) {
-        for (const c of node.children) {
-          if (c.fieldName === rule.field) harvest(c, rule.destructuring ?? false);
+      const direct = rule.directOnly ?? false;
+      // 這裡**刻意不套 preservedFields**：規則指名了欄位就是剖面作者的明確決定，
+      // 而 preservedFields 擋的是 harvest 一路遞迴下去時**順帶**撞到的欄位。
+      // 兩者混在一起的話，`{ field: "name" }` 這種規則會被自己的保護清單否決。
+      for (const c of node.children) {
+        if (rule.field !== undefined && c.fieldName !== rule.field) continue;
+        // directOnly 時「直屬」指的是 node 的孫節點還是子節點？——子節點。
+        // 規則命中的是 node，而 harvest 從 c 開始，所以 c 本身仍要判定。
+        if (direct) {
+          if (profile.identifierTypes.has(c.type)) add(c.text);
+        } else {
+          harvest(c);
         }
-      } else {
-        for (const c of node.children) harvest(c, rule.destructuring ?? false);
       }
     }
     for (const c of node.children) walk(c, false);

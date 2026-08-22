@@ -47,11 +47,38 @@ export interface LanguageProfile {
    *   正規化會把物件的鍵名一起改掉——這是最容易漏掉的一個。
    */
   preservedIdentifierTypes: ReadonlySet<string>;
+  /**
+   * 永不正規化的**欄位**。佔據這些欄位的子樹整棵不當繫結。
+   *
+   * 這個欄位的存在本身就是一個實測發現：`preservedIdentifierTypes` 是**依型別**
+   * 保護的，而那只在 grammar 願意給屬性名一個專屬型別時才成立。TypeScript 給了
+   * （`property_identifier`），Python 沒有——`self._d` 的 `_d` 與區域變數 `_d`
+   * 同樣是 `identifier`，唯一的差別是它佔據 `attribute` 這個欄位。
+   *
+   * 少了這一條，Python 的 `self._d = x` 會把屬性名 `_d` 收成繫結，於是
+   * `self._d` 與 `self._cache` 的 alpha 雜湊相等——改欄位名會變成「沒有改動」。
+   */
+  preservedFields: ReadonlySet<string>;
 
   /** 什麼節點算一個「宣告」（entity 的邊界） */
   declarationTypes: ReadonlySet<string>;
   /** 宣告的名稱所在的欄位名 */
   nameField: string;
+  /**
+   * 只有在某個欄位是函式／類別時才算宣告的節點型別。
+   *
+   * TypeScript 的 `const f = () => {}`：`variable_declarator` 進得了
+   * `declarationTypes`，但普通的 `const n = 1` 不該算一個實體。
+   * Python 沒有這種形狀，所以留 undefined——**這段判定原本寫死在 adapter 裡**，
+   * 而 adapter 是語言中立層。
+   */
+  valueBearingDeclarations?: {
+    types: ReadonlySet<string>;
+    /** 值所在的欄位名 */
+    valueField: string;
+    /** 值是這些型別之一才算宣告 */
+    functionTypes: ReadonlySet<string>;
+  };
 
   /** 區域繫結的產生規則 */
   bindingRules: readonly BindingRule[];
@@ -59,13 +86,24 @@ export interface LanguageProfile {
 
 /**
  * 一條繫結規則：在 nodeType 節點的 field 欄位底下，出現的識別子是區域繫結。
- * field 省略代表該節點底下所有直屬識別子都算。
+ * field 省略代表整個節點底下都算。
+ *
+ * **原本這裡有一個 `destructuring` 旗標，已刪除**：它的註解寫著「遞迴進解構模式」，
+ * 但 `harvest` 兩個分支都會遞迴進全部子節點，所以旗標開不開結果完全一樣。
+ * 對 `src/`（437 個宣告）與 create-t3-app（213 個）實測差異為 0。
+ * 真正需要的軸線是反過來的那一個——**要不要只看直屬子節點**，見 `directOnly`。
  */
 export interface BindingRule {
   nodeType: string;
   field?: string;
-  /** true 代表要遞迴進解構模式（{a, b} / [x, y]）去撈名字 */
-  destructuring?: boolean;
+  /**
+   * true 代表只收直屬子節點裡的識別子，不往下遞迴。
+   *
+   * Python 的 `parameters` 需要它：`(self, url: str)` 裡 `self` 是直屬 identifier，
+   * 而 `url: str` 的 `str` 也是 identifier，只是埋在 `type` 底下。整棵遞迴會把
+   * 型別名收成繫結，於是 `def f(x: int)` 與 `def f(x: str)` 的 alpha 雜湊相等。
+   */
+  directOnly?: boolean;
 }
 
 export interface HashVector {

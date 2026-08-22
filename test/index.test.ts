@@ -18,6 +18,7 @@ import "./ostracised.test.ts";
 import "./pass-scope.test.ts";
 import "./paths.test.ts";
 import "./position.test.ts";
+import "./python-profile.test.ts";
 import "./quote-audit.test.ts";
 import "./retry.test.ts";
 import "./repo-identity.test.ts";

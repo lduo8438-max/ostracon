@@ -61,9 +61,11 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/ast/types.ts` | `SynNode` 介面與 `LanguageProfile` | 欄位是 `startIndex`/`endIndex`（UTF-16），另有 `utf8ByteRange` 轉換 |
 | `src/ast/hash.ts` | **純函式**：四層雜湊、S-expression、`changeLevel` 查表 | |
 | `src/ast/bindings.ts` | **純函式**：區域繫結收集 | |
-| `src/ast/profiles/typescript.ts` | 全部 grammar 相依知識 | 加語言＝加一份剖面 |
+| `src/ast/profiles/typescript.ts` | TypeScript／TSX 的全部 grammar 相依知識 | 加語言＝加一份剖面 |
+| `src/ast/profiles/python.ts` | Python 的剖面 | **存在的理由是驗證架構不寫死單一語言**，不是產品支援 |
+| `src/ast/languages.ts` | 語言註冊表：副檔名 → wasm → 剖面 | 加語言只該改這裡加一份剖面；副檔名重複登記直接拋錯 |
 | `src/ast/adapter.ts` | tree-sitter → `SynNode` + `verifyAdapter` | 已通過真實驗證 |
-| `src/ast/parser.ts` | grammar 載入、TS/TSX 路由、解析與啟動驗證 | |
+| `src/ast/parser.ts` | grammar 載入、解析與啟動驗證 | 每份登記的 grammar 都必須有探測，缺一個就啟動失敗 |
 | `src/match/ladder.ts` | **純函式**：L1–L5 匹配階梯（含 L3b、L3c）與「本檔新生」排除 | 兩者都需呼叫端提供 `hunksByLineage`，省略時皆不啟用 |
 | `src/match/position.ts` | **純函式**：hunk 位移回推、純新增 hunk 判定 | L3c 與「本檔新生」的證據來源 |
 | `src/match/signature.ts` | n-gram、MinHash、精確 Jaccard | |
@@ -101,6 +103,83 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 **把核心邏輯寫成純函式（不吃 git、不吃 tree-sitter、不吃 DB）是刻意的架構決定**，
 已多次兌現：npm 被封鎖時仍能完整測試雜湊層；一個跨批次血緣的嚴重 bug 只有純函式
 的單元測試踩到，整合路徑剛好繞過了它。
+
+### 加 Python：三個寫死的 TypeScript 假設 + 一個死旗標（2026-08-22）
+
+W5 的第一項。**目的不是支援 Python，是驗證「加新語言＝新增一份剖面」這句話成立。**
+它在 W1 就寫在 `types.ts` 的註解裡，但只在 TypeScript 與 TSX 上驗過——而那兩份
+共用同一個 npm 套件、同一份 grammar 設計。實際加上第三種語言之後，那句話當時
+並不成立，四個缺陷全部屬於本專案追了整個 W2–W4 的同一型：**宣稱支援兩種東西，
+只驗了其中一種。**
+
+| # | 缺陷 | 症狀 |
+|---|---|---|
+| 1 | `adapter.ts` 用字面值判斷「值是函式才算宣告」 | `variable_declarator` / `value` / `arrow_function` 四個 TS 專屬字串寫在語言中立層 |
+| 2 | `preservedIdentifierTypes` 依**型別**保護屬性名 | Python 的 `self._d` 的 `_d` 是普通 `identifier`，於是 `self._data` 改成 `self._cache` **alpha 雜湊相等**——真實改動被歸類成「沒有改動」 |
+| 3 | `parser.ts` 的 `grammar === "tsx" ? tsxProfile : typescriptProfile` | 第三種語言會被**靜默**判成 TypeScript：型別檢查過得去，雜湊用錯剖面照樣算得出數字 |
+| 4 | `BindingRule.destructuring` 是死旗標 | 註解說它會遞迴進解構模式，但 `harvest` 兩個分支都會遞迴進全部子節點。對 `src/` 437 個宣告與 create-t3-app 213 個宣告實測，開不開差異 **0** |
+
+修法：`profile.valueBearingDeclarations`、`profile.preservedFields`（依欄位保護）、
+語言註冊表 `src/ast/languages.ts`、把死旗標換成真正需要的反向軸 `directOnly`
+（Python 的 `parameters` 少了它會把型別註記收成繫結，`def f(x: int)` 與
+`def f(x: str)` 的 alpha 雜湊會相等）。
+
+**驗收是雙向的，兩邊都要成立。**
+
+- **TypeScript 逐位元不變**：四套語料合計 **5,222 筆 revision** 的
+  `hash_raw/token/alpha/alpha_self/shape` 與 `shape_profile` 指紋前後完全相同
+  （osiris 1,582 `934d9efbbba1d567`、create-t3-app 3,606 `e591acbce0d88120`、
+  vue-core 2 `e86b2c111792953a`、controlled 32 `3218f7d9312490d1`），
+  四套黃金測試集全數 pass、測試 387 → 414。
+- **新機制確實在做事**：把 `preservedFields` 與 `directOnly` 分別拿掉之後，
+  對應的語意改動立刻變成看不見。**機制若拿掉也照樣通過，它就是下一個死旗標**——
+  第 4 項就是這樣被抓到的，所以這一步不能省。
+
+Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3 分 04 秒）：
+
+| 指標 | 值 |
+|---|---|
+| revision | 148,184（`python/0.25.0/sexp-1.0.0`） |
+| entity | 3,406 |
+| 匹配階梯 | L1 143,918／L2 753／L3 2／L3b 17／L3c 11／L4 71／L5 21 |
+| change_level | none 136,056／shape 5,753／birth 3,114／death 2,254／alpha 1,618／raw 1,184／token 31 |
+| ostracised | A 確證 988／C 疑似 512（另 200 條在測試檔） |
+
+**匹配器、雜湊、圖遍歷、增量索引沒有任何一處因為換語言而改動。** `ostracon why`
+在 Python 符號上也直接跑得通（`requests/models.py:PreparedRequest.prepare_body`，
+311 次改動，且正好走到「路徑在 HEAD 已不存在，fallback 到血緣」那條路徑）。
+
+#### 三個還沒修的，都已量過
+
+1. **裝飾器不在實體邊界內**：`@property` 改成 `@cached_property` 四層雜湊全部
+   看不見。**requests 在 HEAD 有 17.0% 的宣告帶裝飾器（807 之中的 137）**，
+   不是邊角案例。修它要移動實體邊界，而邊界進 `stable_key`，必須另外提版本並
+   附前後指標。
+2. **docstring 進 token 層、JSDoc 不進**：同一個「只改說明文字」的動作在兩個
+   語言被分到不同的 `change_level`。`commentTypes` 是型別集合，表達不了「區塊
+   開頭的字串字面值」這種位置相依概念。
+3. **`ostracised` 的測試檔判準是 TS 慣例**：`TEST_PATH` 認得 `tests/` 目錄與
+   `*.test.ts`，但認不得 Python 的 `test_*.py`／`*_test.py`。requests 的 205 條
+   `.py` 路徑裡現行命中 25 條，加上 Python 慣例後是 30 條——`test_requests.py`
+   在 repo 根目錄，現在會出現在「被推翻的做法」清單裡。
+
+1 與 2 有測試明確斷言**目前**行為，**目的是讓限制在被修掉的那一刻變成紅燈**，
+而不是默默地變成「應該已經修好了吧」。
+
+#### 相依論證
+
+`tree-sitter-python@0.25.0` 是新的執行期相依，而「不增加執行期相依」是禁令，
+所以要論證：
+
+- **形狀與已接受的 `tree-sitter-typescript` 完全相同**：同樣的 `install:
+  node-gyp-build`、同樣的 `node-addon-api` / `node-gyp-build`、同樣把
+  `tree-sitter` 列為 optional peer。不引入任何新種類的安裝步驟。
+- **pnpm 實測不跑建置腳本**（`Ignored build scripts`），沒有原生編譯。
+- **裝起來 7.2 MB**，其中 wasm 458 KB；對照 `tree-sitter-typescript` 的 37 MB。
+- 解析走 `import.meta.resolve` 拿 wasm，與 TS 同一條路徑，封裝後位置照樣解得到。
+
+**這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
+移除它只要刪一份剖面與註冊表裡的一列。
 
 ### 意圖層與 Chrome 算繪驗證（2026-08-17）
 

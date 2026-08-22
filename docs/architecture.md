@@ -274,6 +274,59 @@ handler，`hash_alpha_self` 應該不同，因此仍預期由 L4 接住。這條
 
 理由：`obj.method()` 改成 `obj.other()` 是語意變更，必須被偵測到；`const a` 改名為 `const b` 不是。alpha 層要精確捕捉這條界線。
 
+### 語言剖面是唯一的 grammar 相依處——用 Python 驗過了
+
+「加新語言＝新增一份剖面，不動雜湊邏輯」這句話從 W1 就寫在 `types.ts` 裡，
+但在 W5 之前**只在 TypeScript 與 TSX 上驗過，而那兩份共用同一個 npm 套件與
+同一份 grammar 設計**。實際加上 Python 之後，這句話當時是不成立的：
+
+| 原本寫死在語言中立層的東西 | 症狀 | 修法 |
+|---|---|---|
+| `adapter.ts` 直接用字面值 `variable_declarator` / `value` / `arrow_function` 判斷「值是函式才算宣告」 | Python 沒有這種形狀，卻要為它繞過一段 TS 專屬邏輯 | `profile.valueBearingDeclarations`，Python 留 undefined |
+| `preservedIdentifierTypes` 依**型別**保護屬性名 | 只在 grammar 給屬性名專屬型別時成立。Python 的 `self._d` 的 `_d` 就是普通 `identifier` | 加 `preservedFields`，依**欄位**保護 |
+| `parser.ts` 的 `grammar === "tsx" ? tsxProfile : typescriptProfile` | 加入第三種語言時會靜默判成 TypeScript：型別檢查過得去，雜湊用錯剖面照樣算得出數字 | 語言註冊表 `src/ast/languages.ts` |
+
+第二條是其中最貴的：少了它，Python 的 `self._data` 改成 `self._cache`
+**alpha 雜湊相等**——真實改動被歸類成「沒有改動」。這與 TypeScript 早就靠
+`property_identifier` 擋住的是同一件事，只是 Python 的 grammar 不提供那個型別。
+
+同一輪還發現 `BindingRule.destructuring` **是死旗標**：註解說它會遞迴進解構模式，
+但 `harvest` 的兩個分支都會遞迴進全部子節點，所以開不開結果相同（對 `src/`
+437 個宣告與 create-t3-app 213 個宣告實測差異為 0）。真正需要的是反向的
+`directOnly`——Python 的 `parameters` 少了它會把型別註記收成繫結，於是
+`def f(x: int)` 與 `def f(x: str)` 的 alpha 雜湊相等。旗標已刪除並換成 `directOnly`。
+
+**這三個加上死旗標，都是同一型缺陷：宣稱支援兩種東西，只驗了其中一種。**
+
+驗收方式是雙向的，兩邊都必須成立：
+
+- **TypeScript 逐位元不變**：四套語料合計 5,222 筆 revision 的
+  `hash_raw/token/alpha/alpha_self/shape` 與 `shape_profile` 指紋前後完全相同，
+  四套黃金測試集全數 pass。這證明重構沒有改變既有語意。
+- **新機制確實在做事**：把 `preservedFields` 與 `directOnly` 分別拿掉之後，
+  對應的語意改動立刻變成看不見。機制若拿掉也照樣通過，那它就是下一個死旗標。
+
+Python 實測（psf/requests，6,491 commits）：148,184 筆 revision，3,406 個 entity，
+匹配階梯每一層都有命中（L1 143,918／L2 753／L3 2／L3b 17／L3c 11／L4 71／L5 21），
+`change_level` 分佈正常（alpha 1,618／token 31／shape 5,753／raw 1,184）。
+**匹配器、雜湊、圖遍歷、增量索引沒有任何一處需要因為換語言而改動。**
+
+#### 兩個已知限制，用測試釘住而不是修掉
+
+1. **裝飾器不在實體邊界內。** `decorated_definition` 是包裝節點，實體落在裡面的
+   `function_definition` 上，所以 `@property` 改成 `@cached_property` 四層雜湊
+   全部看不見。**requests 在 HEAD 有 17.0% 的宣告帶裝飾器（807 之中的 137）**，
+   這不是邊角案例。修它要移動實體邊界，而邊界進 `stable_key`，必須另外提版本
+   並附前後指標，因此另開一刀。
+2. **docstring 進 token 層，JSDoc 不進。** Python 的 docstring 是
+   `expression_statement > string`，不是 `comment` 節點，所以「只改說明文字」在
+   Python 是 token 級改動、在 TypeScript 是 raw 級。同一個動作在兩個語言被分到
+   不同的 `change_level`。`commentTypes` 是型別集合，表達不了「區塊開頭的字串
+   字面值」這種位置相依的概念，要修就要加新的剖面概念。
+
+兩條都有測試明確斷言目前行為。**這樣做的目的是讓限制在被修掉的那一刻變成紅燈，
+而不是默默地變成「應該已經修好了吧」。**
+
 ### 第 4 層：必須用結構化編碼
 
 不可以只把節點型別做前序展開後串接——不同的樹會產生相同的序列。必須用帶括號

@@ -72,25 +72,31 @@ export function utf8ByteRange(
  *
  * `const Foo = () => {}` 這種要特別處理：declarationTypes 含 variable_declarator，
  * 但只有 value 是函式或類別時才算一個實體，否則普通的 const 也會被當成宣告。
+ *
+ * **那條判定原本寫死在這裡**（節點型別 `variable_declarator`、欄位名 `value`、
+ * 四個 TS/JS 專屬的函式節點型別全部是字面值），而這一層照定義是語言中立的。
+ * 現在改由 `profile.valueBearingDeclarations` 描述，Python 留 undefined。
  */
 export function extractDeclarations(
   root: SynNode,
   profile: LanguageProfile,
 ): Array<{ node: SynNode; qualifiedName: string; kind: string }> {
   const out: Array<{ node: SynNode; qualifiedName: string; kind: string }> = [];
+  const valueBearing = profile.valueBearingDeclarations;
 
   const nameOf = (n: SynNode): string | undefined =>
     n.children.find((c) => c.fieldName === profile.nameField)?.text;
 
-  const isFunctionLike = (n: SynNode): boolean => {
-    const v = n.children.find((c) => c.fieldName === "value");
-    return !!v && /^(arrow_function|function|function_expression|class)$/.test(v.type);
+  const bearsFunction = (n: SynNode): boolean => {
+    if (valueBearing === undefined || !valueBearing.types.has(n.type)) return true;
+    const v = n.children.find((c) => c.fieldName === valueBearing.valueField);
+    return v !== undefined && valueBearing.functionTypes.has(v.type);
   };
 
   const walk = (n: SynNode, prefix: string) => {
     if (profile.declarationTypes.has(n.type)) {
       const name = nameOf(n);
-      if (name && (n.type !== "variable_declarator" || isFunctionLike(n))) {
+      if (name && bearsFunction(n)) {
         const qualified = prefix ? `${prefix}.${name}` : name;
         out.push({ node: n, qualifiedName: qualified, kind: n.type });
         // 類別成員要帶著類別名當前綴，讓 qualifiedName 與 fixture 的

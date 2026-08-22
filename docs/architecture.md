@@ -355,6 +355,35 @@ TypeScript 留空——那份 grammar 把 `decorator` 放成 `class_declaration`
 重建」的處理。剖面版本因此加進 `declarationIndexerVersion`，並且由註冊表推導，
 新增語言會自動改變它。
 
+#### 但那道守門只裝在兩條路徑裡的一條
+
+上一段說的「水位線那條路徑早就有版本不符就拒絕的處理」，指的是全 repo pass 的
+`resolveResumePoint`。**快路徑（`indexLineage`）一道都沒有**——而 `ostracon why`
+預設走的正是快路徑。同一條規則、兩種執行方式，只驗了其中一種：這正是這個專案
+從 W2 追到 W5 的那一型，而且它就發生在專門修這一型的那一刀裡面。
+
+實測（模擬「加 Python 之前」的資料庫，Osiris 前 50 個 commit）：
+
+| 執行方式 | 修正前 |
+|---|---|
+| `why --full`（全 repo pass） | 如設計拋錯，訊息說明要刪檔重建 |
+| `why`（預設快路徑） | **靜默續跑**，revision 208 → 371 |
+
+那 371 列裡有 208 列是用舊剖面算的、163 列是用新剖面算的，混在同一個資料庫。
+而收尾的 `recordDeclarationScope` 會把水位線覆寫成**新**版本字串，於是**混合的
+證據被自己抹掉**：下一趟 `--full` 看到版本相符，判定為增量，永遠不會重建。
+守門失效與失效的證據同時消失，這比單純漏掉一道檢查更難察覺。
+
+修法是 `assertDeclarationsResumable`，兩個 pass 共用同一段比對與同一則錯誤訊息，
+裝在 `indexLineage` 進場處——在任何寫入之前。比對的是版本字串裡**去掉 `scope:`
+之後**的部分：scope 描述的是候選池大小，兩種 scope 都是用同一套規則算的，所以
+`lineage` → `repo` 仍然自動作廢重建；其餘每一欄都直接決定雜湊或 `stable_key`，
+一變就不是同一份產出。
+
+**代價要說清楚**：這道守門在**讀**的路徑上也會咬。舊版本的資料庫即使已經索引
+完整、`why` 一列都不會寫，一樣拋錯——因為它印出來的 `stable_key` 與改動層級就是
+用另一套規則算的。這與「降級過的索引不得被靜默讀出去」是同一條線。
+
 #### 還沒修的：docstring 與 JSDoc 不同級
 
 Python 的 docstring 是 `expression_statement > string`，不是 `comment` 節點，

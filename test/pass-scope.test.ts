@@ -200,6 +200,47 @@ describe("結構層的 scope", () => {
     assert.match(await ostracised(repo, dbPath, head), /作廢重建/);
   });
 
+  // 版本守門原本只裝在全 repo pass 上，而 `why` 預設走的是快路徑——同一條規則，
+  // 兩種執行方式，只驗了其中一種。實測一個「加 Python 之前」的資料庫：`--full`
+  // 如設計拋錯，快路徑卻靜默續跑成新舊混合，收尾再把水位線覆寫成新版本，
+  // 於是連「這份索引是混的」都看不出來。所以兩條路徑在同一條測試裡一起斷言。
+  it("**演算法變了之後，快路徑與 --full 必須同樣拒絕續跑**", async () => {
+    await verifyParserAdapters();
+    const { repo, git } = makeMoveRepo();
+    const head = git("rev-parse", "HEAD");
+    const { db, repoId } = await fastPass(repo, freshDb(), head, "src/guard.ts");
+
+    const versionNow = () => (db.prepare(
+      "SELECT indexer_version AS v FROM pass_state WHERE pass_name = ?",
+    ).get(DECLARATIONS_PASS_NAME) as { v: string }).v;
+
+    // 模擬「加 Python 之前建的資料庫」：拿掉版本字串裡的剖面段落。真的換一份
+    // 剖面需要另一個 grammar，而要驗的是守門，不是剖面。
+    const stale = versionNow().replace(/\+profiles:[^+]*/, "");
+    assert.notEqual(stale, versionNow(), "版本字串裡必須真的有剖面段落，否則這條測試什麼都沒模擬到");
+    db.prepare(
+      "UPDATE pass_state SET indexer_version = ? WHERE pass_name = ?",
+    ).run(stale, DECLARATIONS_PASS_NAME);
+
+    const before = shape(db);
+    const lineageId = lineageIdAt(db, repoId, head, "src/guard.ts");
+    await assert.rejects(
+      () => indexLineage(db, repo, repoId, lineageId!, INDEXER_VERSION),
+      /不變量 7/,
+      "快路徑必須擋——它是 why 的預設路徑",
+    );
+    await assert.rejects(
+      () => indexRepoStructure(db, repo, repoId, INDEXER_VERSION),
+      /不變量 7/,
+    );
+
+    // 拒絕之後兩件事都要原封不動。**水位線尤其重要**：被覆寫成新版本的話，
+    // 這份索引是混的這件事就永遠查不出來了，下一趟續跑會以為自己是乾淨的。
+    assert.deepEqual(shape(db), before, "拒絕之後不得留下任何用新規則算的列");
+    assert.equal(versionNow(), stale, "拒絕之後水位線不得被改寫");
+    db.close();
+  });
+
   it("外鍵關著時拒絕作廢，不留半個殘骸", async () => {
     await verifyParserAdapters();
     const { repo, git } = makeMoveRepo();

@@ -21,7 +21,7 @@ import {
   writeMatch,
   reconcileEntityDeaths,
 } from "./structural.ts";
-import { recordDeclarationScope } from "./repo-pass.ts";
+import { assertDeclarationsResumable, recordDeclarationScope } from "./repo-pass.ts";
 
 /**
  * 對**單一路徑血緣**跑完整的結構層索引：解析、匹配、寫 slot / entity /
@@ -95,6 +95,11 @@ export async function indexLineage(
   lineageId: number,
   indexerVersion: string,
 ): Promise<LineagePassReport> {
+  // **在做任何事之前先擋。** 全 repo pass 的守門在 `resolveResumePoint`，快路徑
+  // 原本一道都沒有——於是舊演算法的資料庫會被續跑成新舊混合，收尾的
+  // `recordDeclarationScope` 再把水位線覆寫成新版本，混合的證據當場消失。
+  assertDeclarationsResumable(db, repoId, indexerVersion);
+
   const { observe, prefetch } = createObserver(repo);
   const before = revisionCount(db, repoId);
   const report: LineagePassReport = {

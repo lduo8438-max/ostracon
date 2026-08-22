@@ -346,6 +346,26 @@ TypeScript 留空——那份 grammar 把 `decorator` 放成 `class_declaration`
 單一實例眼檢過：`2ccecf6dbd`（只加了一行 `@pytest.mark.skip`）在舊邊界下是
 `none`，新邊界下是 `shape`，`ostracon why` 的時間軸也從「無變更」變成「結構重構」。
 
+#### 移動邊界會連帶改變「誰是根節點」（1.1.0 的回歸，1.1.1 已修）
+
+`collectBindings` 在**根節點**不套 bindingRules，理由是宣告自己的名字不是它自己的
+區域繫結——套上去的話 `hash_alpha` 就等同 `hash_alpha_self`，「純改名」與
+「改名且改內容」再也分不開。
+
+把實體節點換成包裝節點之後，那個「根」不再是宣告本身：`function_definition` 降成
+`decorated_definition` 的子節點，繫結規則於是命中它。同一個包裝也讓
+`declarationName` 找不到 `name` 欄位（包裝的直屬子節點只有 `decorator` 與
+`definition`），`hash_alpha_self` 因此退化。**兩個半邊都要修。**
+
+實測 psf/requests 全歷史：`hash_alpha = hash_alpha_self` 的 revision
+**12,464 → 0**（8.4%）；輸出層面只動兩筆——一次帶裝飾器的純改名從 `token` 回到
+`alpha`，一條配對從 L3 回到 L3b；`stable_key` 3,409 個全部不變。
+
+**教訓不是「這裡寫錯了」，是「邊界是誰」這件事有三個地方在問**：
+`extractDeclarations`（實體範圍取包裝）、`collectBindings`（根判定取被包裝的那層）、
+`declarationName`（名稱取被包裝的那層）。三個問的是同一件事，卻只有第一個知道
+包裝的存在。現在共用 `unwrapDeclaration`。
+
 #### 剖面版本必須進水位線，這是加 Python 當下就漏掉的
 
 剖面決定「哪個節點是宣告」與「哪個名字是繫結」，兩者都是雜湊的輸入，所以

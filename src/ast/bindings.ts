@@ -1,3 +1,4 @@
+import { unwrapDeclaration } from "./adapter.ts";
 import type { LanguageProfile, SynNode } from "./types.ts";
 
 /**
@@ -48,6 +49,13 @@ export function collectBindings(decl: SynNode, profile: LanguageProfile): string
     // 會把實體自己的名字也正規化，於是 hash_alpha 等同 hash_alpha_self，
     // 兩者的區別整個消失——純改名就再也無法與「改名且改內容」區分。
     // 宣告自身的名稱歸 hash_alpha_self 管，不歸這裡。
+    //
+    // **「根」不等於「傳進來的那個節點」。** 剖面 1.1.0 讓 Python 的實體節點
+    // 變成包裝節點 `decorated_definition`，真正的 `function_definition` 因此
+    // 降成子節點——`isRoot` 對它是 false，上面那條規則於是命中，宣告自己的
+    // 名字被當成區域繫結收走。實測 psf/requests HEAD：137 個帶裝飾器的宣告
+    // （807 之中的 17.0%）全部 `hash_alpha === hash_alpha_self`，正是這段
+    // 註解說要避免的那個狀態。所以包裝底下那一層也算根（見下方遞迴）。
     for (const rule of isRoot ? [] : profile.bindingRules) {
       if (node.type !== rule.nodeType) continue;
       const direct = rule.directOnly ?? false;
@@ -65,19 +73,30 @@ export function collectBindings(decl: SynNode, profile: LanguageProfile): string
         }
       }
     }
-    for (const c of node.children) walk(c, false);
+    // 包裝節點只包一層，所以「還是根」最多往下傳一層，不會擴散。
+    const wrappedField = isRoot ? profile.declarationWrappers.get(node.type) : undefined;
+    for (const c of node.children) {
+      walk(c, wrappedField !== undefined && c.fieldName === wrappedField);
+    }
   };
 
   walk(decl, true);
   return order;
 }
 
-/** 取得宣告自身的名稱（供 hash_alpha_self 使用）。找不到回 undefined。 */
+/**
+ * 取得宣告自身的名稱（供 hash_alpha_self 使用）。找不到回 undefined。
+ *
+ * 包裝節點底下才有 `name` 欄位：`decorated_definition` 的直屬子節點只有
+ * `decorator` 與 `definition`。不先解開的話這裡一律回 undefined，
+ * `hash_alpha_self` 就退化成 `hash_alpha`，L3b 對帶裝飾器的宣告永遠不觸發。
+ */
 export function declarationName(
   decl: SynNode,
   profile: LanguageProfile,
 ): string | undefined {
-  for (const c of decl.children) {
+  const target = unwrapDeclaration(decl, profile) ?? decl;
+  for (const c of target.children) {
     if (c.fieldName === profile.nameField) return c.text;
   }
   return undefined;

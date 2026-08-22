@@ -172,6 +172,58 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### 裝飾器把宣告自身的名稱吸進 hash_alpha（2026-08-22，已修：剖面 1.1.1）
+
+**第十四發，而且是第二刀自己留下的。** 移動實體邊界會連帶改變「誰是根節點」，
+而那一點在 1.1.0 漏掉了。
+
+`bindings.ts` 的 `walk(decl, true)` 只在**根節點**跳過 bindingRules，理由寫在
+那段註解裡：套在根上會把實體自己的名字也正規化，`hash_alpha` 就等同
+`hash_alpha_self`，兩者的區別整個消失。剖面 1.1.0 把實體節點換成包裝節點
+`decorated_definition` 之後，`function_definition` 降成**子節點**——`isRoot`
+對它是 false，於是 `{ nodeType: "function_definition", field: "name" }` 命中它。
+**註解描述的正是實際發生的狀態。**
+
+同一個包裝還讓 `declarationName` 失效：`decorated_definition` 的直屬子節點只有
+`decorator` 與 `definition`，沒有 `name` 欄位，所以它一律回 `undefined`，
+`hash_alpha_self` 退化成 `hash_alpha`。**兩個半邊都要修，缺一不可**——實測分別
+還原任一半，帶裝飾器的測試都會紅。
+
+psf/requests 全 6,491 commit 的前後對照（各一次全 repo pass）：
+
+| 指標 | 前 | 後 | 差 |
+|---|---:|---:|---:|
+| `hash_alpha = hash_alpha_self` 的 revision | **12,464** | **0** | **−12,464** |
+| change_level `token` | 32 | 31 | −1 |
+| change_level `alpha` | 1,643 | 1,644 | +1 |
+| L3 ／ L3b | 3 ／ 16 | 2 ／ 17 | −1 ／ +1 |
+| revision ／ entity | 148,199 ／ 3,409 | 148,199 ／ 3,409 | 0 ／ 0 |
+| excursion ／ 其餘 change_level ／ 其餘 tier | 不變 | | |
+
+12,464 筆是 8.4% 的 revision（HEAD 快照上是 807 個宣告裡的 137 個，17.0%）。
+**輸出層面只動了兩筆**：一次帶裝飾器的純改名從 `token`（「只改局部變數名」）
+回到 `alpha`，一條配對從 L3 回到 L3b——L3 當時之所以成立，正是因為名字被吸收掉了。
+`stable_key` 逐一比對 **3,409 個全部相同**，沒有任何身份漂移。
+
+方向本來就是安全的（L3b 不觸發就往下掉，L4/L5 有精確驗證），錯的是分級：
+帶裝飾器的宣告單純改名會被報成「只改局部變數名」。
+
+**TypeScript 逐位元不變**：四套語料 5,222 筆 revision 的
+`hash_raw/token/alpha/alpha_self/shape` 與 `shape_profile` 指紋前後完全相同
+（osiris 1,582 `5a32a4e9402dec0f`、controlled 32 `98428935e3a251d2`、
+create-t3-app 3,606 `fe4cae454f2da698`、vue-core 2 `0ebd96df5d8fa257`）。
+`declarationWrappers` 只有 Python 非空，所以這一刀在 TypeScript 上照定義是 no-op，
+但仍然量過才敢說。
+
+剖面版本 1.1.0 → **1.1.1**。雜湊值變了就得升版（不變量 7），即使這份語料的
+`stable_key` 恰好一個都沒動——混在同一個資料庫裡的話，跨水位線的 `change_level`
+比較會拿兩套規則的 alpha 值互比。**版本字串把三份剖面串在一起，所以 Python 一動，
+TypeScript 的既有資料庫也一併不得續跑**，那是刻意的保守。
+
+抓到它的是「幫 Python 找黃金測試集案例」的過程，不是測試——
+`python-profile.test.ts` 的「宣告自身改名由 hash_alpha_self 吸收」用的是**沒有
+裝飾器**的 `def f`。現在那條測試改成帶／不帶裝飾器各跑一次。
+
 ### Python 進黃金測試集（2026-08-22）
 
 **在這之前，整道閘門只有 TypeScript 語料。** W5 加 Python 的論點是「加新語言＝

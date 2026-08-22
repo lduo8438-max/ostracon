@@ -282,6 +282,38 @@ test("包裝節點不會讓同一個宣告被抽兩次", async () => {
   );
 });
 
+/**
+ * **上面那條「宣告自身改名由 hash_alpha_self 吸收」用的是沒有裝飾器的 `def f`。**
+ * 剖面 1.1.0 把實體節點換成包裝節點之後，`function_definition` 降成子節點，
+ * `bindings.ts` 的根判定漏掉了它，於是繫結規則命中、宣告自己的名字被收成
+ * 區域繫結——實測 psf/requests HEAD 有 137 個帶裝飾器的宣告（807 之中的 17.0%）
+ * 因此 `hash_alpha === hash_alpha_self`，正是那段註解說要避免的狀態。
+ *
+ * 後果不是配錯而是分級錯：帶裝飾器的宣告單純改名會被報成 `token`
+ * （「只改局部變數名」），而且 L3b 對它們永遠不觸發。
+ *
+ * **兩條一起放，因為問題就出在兩種輸入只驗了一種。**
+ */
+for (
+  const [label, wrap] of [
+    ["沒有裝飾器", (body: string) => body],
+    ["帶裝飾器", (body: string) => `@staticmethod\n${body}`],
+  ] as const
+) {
+  test(`宣告自身的名稱不得被 hash_alpha 吸收：${label}`, async () => {
+    const body = (name: string) => `def ${name}(a, b):\n    total = a + b\n    return total\n`;
+    const one = await declarationNamed(wrap(body("alpha")), "alpha");
+    const two = await declarationNamed(wrap(body("beta")), "beta");
+    const h1 = hashDeclaration(one.node, one.source, pythonProfile);
+    const h2 = hashDeclaration(two.node, two.source, pythonProfile);
+    // 純改名：alpha 必須看得見，alpha_self 必須吸收掉。
+    assert.notEqual(h1.hashAlpha, h2.hashAlpha, "hash_alpha 把宣告自身的名字吸收掉了");
+    assert.equal(h1.hashAlphaSelf, h2.hashAlphaSelf);
+    // 兩者相等就代表 alpha_self 沒有多做任何事，L3b 與 L3 再也分不開。
+    assert.notEqual(h1.hashAlpha, h1.hashAlphaSelf);
+  });
+}
+
 test("實體範圍從裝飾器開始，不是從 def 開始", async () => {
   const source = "class C:\n    @property\n    def size(self):\n        return 1\n";
   const decl = await declarationNamed(source, "C.size");

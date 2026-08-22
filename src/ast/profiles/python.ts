@@ -60,6 +60,11 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion" | "profileV
    * 這不是邊角案例：**psf/requests 在 HEAD 有 17.0% 的宣告帶裝飾器**
    * （807 之中的 137）。而裝飾器往往正是那個宣告最重要的語意——
    * `@property`、`@staticmethod`、`@contextmanager` 改掉就是換了一個東西。
+   *
+   * **移動邊界會連帶影響「誰是根節點」**，而那一點在 1.1.0 漏掉了：實體節點
+   * 換成包裝之後，`function_definition` 降成子節點，於是繫結規則命中它、
+   * 把宣告自己的名字收成區域繫結。1.1.1 已修（`bindings.ts` 的根判定與
+   * `declarationName` 都改成先解開包裝）。
    */
   declarationWrappers: new Map([["decorated_definition", "definition"]]),
 
@@ -105,11 +110,19 @@ const baseProfile: Omit<LanguageProfile, "family" | "grammarVersion" | "profileV
 };
 
 /**
- * 剖面版本。1.0.0 → 1.1.0 的唯一差別是**裝飾器進了實體邊界**。
- * 那會改變 `stable_key`，所以舊索引不得續跑——`declarationIndexerVersion`
- * 會因此變動，續跑時直接拒絕並要求刪檔重建（不變量 7）。
+ * 剖面版本。
+ *
+ * - `1.0.0 → 1.1.0`：**裝飾器進了實體邊界**。
+ * - `1.1.0 → 1.1.1`：修掉 1.1.0 連帶造成的回歸——包裝節點讓
+ *   `function_definition` 降成子節點，宣告自己的名字因此被收成區域繫結
+ *   （實測 requests HEAD 137/807 個宣告 `hash_alpha === hash_alpha_self`）。
+ *
+ * 兩次都改變 `hash_alpha` 與 `hash_alpha_self`，所以舊索引不得續跑——
+ * `declarationIndexerVersion` 會因此變動，續跑時直接拒絕並要求刪檔重建
+ * （不變量 7）。**版本字串把三份剖面串在一起，所以 Python 的版本一動，
+ * TypeScript 的既有資料庫也一併不得續跑**——那是刻意的保守，不是疏漏。
  */
-export const PYTHON_PROFILE_VERSION = "profile-1.1.0";
+export const PYTHON_PROFILE_VERSION = "profile-1.1.1";
 
 /** 必須與 package.json 鎖定的 tree-sitter-python 精確版本一致。 */
 export const PYTHON_GRAMMAR_VERSION = "0.25.0";

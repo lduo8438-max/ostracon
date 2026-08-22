@@ -68,6 +68,24 @@ export function utf8ByteRange(
 }
 
 /**
+ * 包裝節點（Python 的 `decorated_definition`）→ 它包住的那個宣告。
+ * 不是包裝就回 `undefined`。
+ *
+ * **這件事有三個地方要問，所以只能有一份答案。** 實體節點取包裝（範圍含裝飾器），
+ * 但「哪個名字是這個宣告自己的」要問被包裝的那一層——`extractDeclarations` 問過，
+ * `collectBindings` 與 `declarationName` 原本沒問，於是帶裝飾器的宣告把自己的
+ * 名字當成區域繫結收走了（實測 psf/requests HEAD 807 個宣告裡的 137 個）。
+ */
+export function unwrapDeclaration(
+  node: SynNode,
+  profile: LanguageProfile,
+): SynNode | undefined {
+  const field = profile.declarationWrappers.get(node.type);
+  if (field === undefined) return undefined;
+  return node.children.find((c) => c.fieldName === field);
+}
+
+/**
  * 從一棵檔案樹中抽出所有宣告。
  *
  * `const Foo = () => {}` 這種要特別處理：declarationTypes 含 variable_declarator，
@@ -93,17 +111,10 @@ export function extractDeclarations(
     return v !== undefined && valueBearing.functionTypes.has(v.type);
   };
 
-  /** 包裝節點（Python 的 `decorated_definition`）→ 它包住的那個宣告 */
-  const unwrap = (n: SynNode): SynNode | undefined => {
-    const field = profile.declarationWrappers.get(n.type);
-    if (field === undefined) return undefined;
-    return n.children.find((c) => c.fieldName === field);
-  };
-
   const walk = (n: SynNode, prefix: string) => {
     // 名稱與 kind 取自被包裝的宣告，**節點本身取包裝**——實體的位元組範圍
     // 因此含裝飾器，`@property` 換掉才看得見。
-    const inner = unwrap(n);
+    const inner = unwrapDeclaration(n, profile);
     const named = inner ?? n;
     if (profile.declarationTypes.has(named.type)) {
       const name = nameOf(named);

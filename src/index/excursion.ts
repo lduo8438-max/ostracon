@@ -38,8 +38,12 @@ export type MoveGuardScope = "repo" | "lineage";
  * `1.0.0` → `1.1.0`：搬移守門的判準由「死得不比我早」（`>=`）改成
  * 「嚴格活得比我久」（`>`）。同一個 commit 刪除的相同內容原本會互相抑制，
  * 實測那是 84% 的排除。判準變了產出就變了，水位線必須要求重算（不變量 7）。
+ *
+ * `1.1.0` → `1.2.0`：`duration_days` 改由 `committed_at` 計算（見 `durationDays`）。
+ * 它不影響誰進得了名單，也不影響強度分級——但它是存進 `excursion` 的衍生欄位，
+ * 而且決定清單順序，所以既有產出必須重算。
  */
-const EXCURSION_ALGORITHM = "excursion-1.1.0+inverse-raw+move-guard-outlives";
+const EXCURSION_ALGORITHM = "excursion-1.2.0+inverse-raw+move-guard-outlives";
 
 export const excursionVersion = (scope: MoveGuardScope): string =>
   `${EXCURSION_ALGORITHM}+scope:${scope}`;
@@ -92,7 +96,7 @@ function candidates(db: DatabaseSync, repoId: number): EntityRow[] {
   return db.prepare(
     `SELECT e.id AS id,
             bc.sha AS birthSha, dc.sha AS deathSha,
-            bc.authored_at AS birthAt, dc.authored_at AS deathAt,
+            bc.committed_at AS birthAt, dc.committed_at AS deathAt,
             dc.topo_order AS deathTopo,
             CASE WHEN instr(dc.message, char(10)) > 0
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
@@ -226,11 +230,33 @@ function classify(entity: EntityRow): {
  * `duration_days` 是**屬性不是門檻**：三週後撤掉是試錯，三年後撤掉是技術演進，
  * 兩者都有價值但意義不同，讓使用者自己過濾。
  *
- * **用 `authored_at` 而不是 `committed_at`。** committer 時間會被 rebase、
- * cherry-pick 與 amend 重寫：Osiris 的 99 個 commit 只有 88 個相異的 committer
- * 時間，而引入與移除這個 fixture 案例的兩個 commit 的 committer 時間**完全相同**，
- * 算出來的存活時間會是 0 天。author 時間是程式碼實際被寫下的時刻，
- * 那才是「這個做法活了多久」的誠實答案。
+ * **用 `committed_at`，不是 `authored_at`——這是 1.2.0 反轉的決定。**
+ *
+ * 原本的理由是「author 時間是程式碼實際被寫下的時刻」。那句話沒錯，但它回答的
+ * 是另一個問題。這個欄位要答的是「這個做法**在這份 repo 裡**活了多久」，而它的
+ * 兩個端點是「引入的 commit 進入這份歷史」與「移除的 commit 進入這份歷史」——
+ * 那兩個時刻就是 `committed_at`。用 author 時間等於把兩個時鐘混在一起量一段
+ * 距離，**於是它可以是負的**：長命 PR、cherry-pick 與 rebase 都會讓移除的
+ * author 時間早於引入的 author 時間。
+ *
+ * 兩個方向都量過（A 級迂迴）：
+ *
+ * | 語料 | authored 倒轉 ／ 不到半天 | committed 倒轉 ／ 不到半天 |
+ * |---|---|---|
+ * | vuejs/core（710） | **12** ／ 100 | **0** ／ 137 |
+ * | nestjs/nest（1,955） | **1** ／ 129 | **0** ／ 137 |
+ * | create-t3-app（102） | 0 ／ 5 | 0 ／ 5 |
+ * | osiris（94） | 0 ／ 70 | 0 ／ **70（一樣）** |
+ *
+ * 倒轉的列被 `Math.max(0, …)` 夾成 0 天，而清單由短到長排序——**於是它們坐在
+ * 第一個畫面的最上面**，印出「0 天　2023-02-01 → 2023-01-06」這種自相矛盾的列。
+ * vuejs/core 的前十名有十條是這種，而那正是線上 demo 顯示的東西。
+ *
+ * 舊註解擔心的「Osiris 會變成 0 天」**實測不成立**：它在兩種算法下都是 94 條裡
+ * 有 70 條落在半天內。真正的代價是 vue 多 37 條進入「不到半天」那一桶，
+ * 而那些本來就是短命的——解析度變粗，不會變成謊話。
+ *
+ * 夾在 0 的那道 `Math.max` 留著當防禦，但在五套語料上它現在一次都不會觸發。
  */
 function durationDays(birthAt: string, deathAt: string): number {
   const ms = Date.parse(deathAt) - Date.parse(birthAt);

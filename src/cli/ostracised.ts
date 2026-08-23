@@ -73,8 +73,10 @@ export function listOstracised(
     `SELECT e.stable_key AS stableKey, x.strength AS strength, x.method AS method,
             x.duration_days AS durationDays,
             last.path AS path, last.symbol AS symbol,
-            bc.authored_at AS bornAt,
-            dc.authored_at AS diedAt, dc.sha AS diedSha,
+            -- 與 duration_days 同一個時鐘（committed_at，見 excursion.ts 的
+            -- durationDays）。混用的話畫面會出現「0 天」配上一組倒著走的日期。
+            bc.committed_at AS bornAt,
+            dc.committed_at AS diedAt, dc.sha AS diedSha,
             CASE WHEN instr(dc.message, char(10)) > 0
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
                  ELSE dc.message END AS diedSubject

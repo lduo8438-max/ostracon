@@ -280,6 +280,30 @@ async function boot() {
   // 被推翻的做法與 landing 的頭條數字**來自同一份 JSON**，畫面不自己數。
   ostracised = await (await fetch("./api/ostracised.json")).json();
   renderEntities("");
+  await openFromHash();
+}
+
+/**
+ * 網址片段（#stable_key）直接打開那一條時間軸。
+ *
+ * **網址用 stable_key，不是 rowid**（不變量 1）：rowid 會隨全量重建漂移，
+ * 而漂移最壞的後果不是 404，是舊網址在重建後**成功回傳另一個 entity**。
+ *
+ * 要找的宣告可能在「被推翻的做法」那份名單而不是「全部宣告」——兩份名單不是
+ * 互斥的，但左欄一次只顯示一份。所以先決定該站在哪一個 tab，否則右邊開了
+ * 時間軸、左邊卻沒有任何 aria-current 的列，看起來像資料失去來源。
+ */
+async function openFromHash() {
+  const key = decodeURIComponent(location.hash.replace(/^#/, "")).trim();
+  if (key === "") return;
+  const inLive = entities.some((e) => e.stableKey === key);
+  if (!inLive && ostracised.rows.some((r) => r.stableKey === key)) {
+    switchTab("gone");
+  }
+  if (!inLive && !ostracised.rows.some((r) => r.stableKey === key)) return;
+  await select(key);
+  document.querySelector('.entity[aria-current="true"]')
+    ?.scrollIntoView({ block: "center" });
 }
 
 /** 目前這一頁在看哪一份名單。兩份名單的列都連到同一個時間軸端點。 */
@@ -348,6 +372,9 @@ function clearSelection() {
 
 async function select(stableKey) {
   current = stableKey;
+  // 讓網址跟著選取走，時間軸因此是可分享的。用 replaceState 不是 pushState：
+  // 在左欄點十條宣告不該在上一頁堆十筆。
+  history.replaceState(null, "", "#" + encodeURIComponent(stableKey));
   renderEntities($("filter").value);
   // 對外身分一律是 stable_key：rowid 會隨全量重建漂移，而舊網址在重建後
   // 可能**成功回傳另一個 entity**——那比 404 難發現得多。
@@ -435,19 +462,23 @@ $("entities").addEventListener("click", (event) => {
   if (button) select(button.dataset.id);
 });
 $("filter").addEventListener("input", (event) => renderEntities(event.target.value));
-for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
-  $(id).addEventListener("click", () => {
-    tab = which;
-    $("tab-live").setAttribute("aria-selected", String(which === "live"));
-    $("tab-gone").setAttribute("aria-selected", String(which === "gone"));
-    $("filter").value = "";
-    // 切換時清掉選取。留著的話右邊還是上一個宣告的時間軸，左邊卻可能沒有
-    // 任何 aria-current 列——畫面看起來像右側資料失去來源。
-    // （兩份名單**不是**互斥的：「被推翻的做法」是「全部宣告」的子集。）
-    clearSelection();
-    renderEntities("");
-  });
+/** 切到哪一份名單。按鈕與深連結共用同一段，不各寫一份。 */
+function switchTab(which) {
+  tab = which;
+  $("tab-live").setAttribute("aria-selected", String(which === "live"));
+  $("tab-gone").setAttribute("aria-selected", String(which === "gone"));
+  $("filter").value = "";
+  // 切換時清掉選取。留著的話右邊還是上一個宣告的時間軸，左邊卻可能沒有
+  // 任何 aria-current 列——畫面看起來像右側資料失去來源。
+  // （兩份名單**不是**互斥的：「被推翻的做法」是「全部宣告」的子集。）
+  clearSelection();
+  renderEntities("");
 }
+for (const [id, which] of [["tab-live", "live"], ["tab-gone", "gone"]]) {
+  $(id).addEventListener("click", () => switchTab(which));
+}
+// 上一頁／下一頁與直接改網址都要能用，不只是首次載入。
+addEventListener("hashchange", () => { void openFromHash(); });
 // 兩欄各自捲動會讓對齊在視覺上斷掉，所以**雙向**同步。只有一個方向的話，
 // 滑鼠停在意圖欄捲動時仍會立刻拆開；Chrome 實測第一版正是這個 bug。
 const evolutionPane = $("evolution").parentElement;

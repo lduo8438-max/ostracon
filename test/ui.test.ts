@@ -658,6 +658,38 @@ describe("對外身分是 stable_key，不是 rowid", () => {
     // 初始提示只有一份文字，HTML 與 clearSelection 共用同一個常數。
     assert.equal((PAGE.match(/Select a declaration from the left\./g) ?? []).length, 1);
   });
+
+  /**
+   * 時間軸的深連結（`#<stable_key>`）。
+   *
+   * **這一組是原始碼層級的釘樁，不是行為驗證**——`page.ts` 是一段送到瀏覽器的
+   * 字串，node 這一端執行不了它。這個檔案既有的做法就是這樣：捲動同步那兩個
+   * bug 是在 Chrome 上抓到的，測試是事後補上去防止它們無聲回來。
+   *
+   * 資料那一半驗得到，而且驗過了：`Dep.ts:hasBit` 只出現在
+   * `ostracised.json`、不在 `entities.json`，所以深連結必須切到 gone tab。
+   */
+  it("**深連結用 stable_key，而且兩個入口共用同一段切換**", () => {
+    // 對外身分一律是 stable_key（不變量 1）：rowid 會隨全量重建漂移，
+    // 而舊網址在重建後可能成功回傳另一個 entity——那比 404 難發現得多。
+    assert.match(PAGE, /function openFromHash\(\)/);
+    assert.match(PAGE, /location\.hash/);
+    // 首次載入與之後改網址都要能用。
+    assert.match(PAGE, /addEventListener\("hashchange"/);
+    assert.match(PAGE, /await openFromHash\(\);/);
+    // 要找的宣告可能只在「被推翻的做法」那份名單裡，必須先切 tab。
+    assert.match(PAGE, /switchTab\("gone"\)/);
+    // 切 tab 的邏輯只有一份：按鈕與深連結共用。兩份的話遲早分岔。
+    assert.match(PAGE, /function switchTab\(which\)/);
+    assert.equal((PAGE.match(/\$\("tab-gone"\)\.setAttribute/g) ?? []).length, 1);
+  });
+
+  it("**選取會更新網址，但不得堆積上一頁**", () => {
+    // 時間軸要可分享；用 replaceState 而不是 pushState——在左欄點十條宣告
+    // 不該在上一頁堆十筆。
+    assert.match(PAGE, /history\.replaceState\(null, "", "#" \+ encodeURIComponent\(stableKey\)\)/);
+    assert.doesNotMatch(PAGE, /history\.pushState/);
+  });
 });
 
 describe("清單的名稱要符合資料", () => {

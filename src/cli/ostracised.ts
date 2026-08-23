@@ -58,11 +58,19 @@ export interface OstracisedRow {
  *
  * **由短到長。** 原本是由長到短，於是第一眼看到的是活了 2,676 天才被重構掉的
  * 函式——那是技術演進，不是試錯，正好是這支指令**最沒有資訊量**的一端。
- * 由短到長之後三套語料的開頭都是真的實驗：vuejs/core 是 reactivity 裡試過又
- * 丟掉的位元旗標追蹤（`hasBit` / `setBit` / `setWasTracked`），Osiris 是三個
- * 城市專用的 camera fetcher（後來換成全球資料源）。
+ * 由短到長之後開頭是真的實驗：Osiris 的頭條是一組被 `Revert` 掉的 balloon
+ * 追蹤 API，vuejs/core 是同一天加進去又拿掉的 codegen 型別。
  *
  * 排序方向不是門檻：長命的仍在名單裡，只是不再佔據第一個畫面。
+ *
+ * **但第一畫面具體是誰，不該當成穩定的事實去引用。** 這段註解原本舉的是
+ * vuejs/core 的位元旗標追蹤（`hasBit` / `setBit`）與 Osiris 的 camera fetcher；
+ * `duration_days` 改用 `committed_at` 之後（迂迴 1.2.0），「0 天」那一桶從 100 條
+ * 變成 137 條，兩個例子都被擠出前十——**排序判準沒變，例子變了**。
+ *
+ * 這也是為什麼線上 demo 的精選案例是**明示的連結**而不是靠排序浮上來的：
+ * 想講的故事就直接指名，不要用隱性的排序規則去救特定案例，否則排序規則會被
+ * 「哪一條該在最上面」綁架，而那是編輯的選擇不是資料的性質。
  */
 export function listOstracised(
   db: DatabaseSync,

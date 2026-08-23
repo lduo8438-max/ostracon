@@ -94,7 +94,7 @@ CI、文件與這支指令全都從它讀，沒有第二份 SHA 可以分岔。�
 
 ```bash
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
-pnpm test        # 先跑 typecheck，再跑單元測試（310 個）
+pnpm test        # 先跑 typecheck，再跑單元測試（427 個）
 
 # 印出一段程式碼的演化史
 pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo
@@ -104,6 +104,9 @@ pnpm why:cli -- 'src/lib/ssrf-guard.ts:isRateLimited' --repo /path/to/repo --ful
 
 # 列出試過又被推翻的做法（由短命到長命；測試檔的宣告預設排除）
 pnpm ostracised -- --repo /path/to/repo [--strength A] [--include-tests]
+
+# 列出被重構最多次的宣告（只算真的動到結構的改動）
+pnpm hotspots -- --repo /path/to/repo [--limit 20] [--include-tests]
 
 # 取回已參照的 GitHub PR / issue 文件（無 token 時安全略過）
 GITHUB_TOKEN=... pnpm evidence:linked -- --db /path/to/index.db
@@ -202,8 +205,19 @@ revert，或移除掉的內容與當初加入的逐字相同）；C 只有生命
 迂迴報在 B 消失的那一刻，也就是內容真正離開 repo 的時候。
 
 預設的快路徑只索引目標檔案的血緣，看不到跨檔案搬移；`--full` 看得到，代價是慢。
-全 repo 索引的效能已達標：`create-t3-app` 1,378 commits 實測 8.3 秒、峰值 RSS
-446 MiB，線性外推一萬 commit 約 1 分鐘（預算 10 分鐘）。
+
+**成本的計價單位是 revision，不是 commit。** 每 commit 有幾個宣告被碰到，在下面
+三套語料之間差 12.6 倍——用 commit 外推等於假設那個比值是常數，而它不是：
+
+| 語料 | commit | revision | 全 repo 索引 | 峰值 RSS | 索引體積 |
+|---|---:|---:|---:|---:|---:|
+| create-t3-app | 1,378 | 3,606 | 9 秒 | 443 MiB | 4.5 MB |
+| psf/requests | 6,491 | 148,199 | 100 秒 | 873 MiB | 52.5 MB |
+| vuejs/core | 7,156 | 233,665 | 166 秒 | 1,175 MiB | 93.1 MB |
+
+兩套大語料收斂在 **0.7 ms 與 0.4 KB／revision**（小語料的 2.4 ms 是行程啟動與
+wasm 載入攤不掉，不是單位成本較高）。以最密的 vuejs/core 的密度推一萬 commit
+約 **4 分鐘**，預算是 10 分鐘。**要估你自己的 repo，估 revision 數不要估 commit 數。**
 
 ### 三欄畫面
 
@@ -233,7 +247,8 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 全部零 LLM 呼叫。詳細現況見 [`docs/status.md`](docs/status.md)，
 設計與理由見 [`docs/architecture.md`](docs/architecture.md)。
 
-只支援 TypeScript。
+產品意義上只支援 TypeScript。`.py` 也索引得動，但那是**架構驗證**不是產品支援，
+理由與已量過的缺口見下方〈Python 只到「架構驗證」的程度〉。
 
 ---
 
@@ -295,17 +310,22 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 ### Python 只到「架構驗證」的程度，不是產品支援
 
 `.py` 檔會被索引，四層雜湊、匹配階梯與迂迴偵測在 Python 上都實測跑得通
-（psf/requests，6,491 commits：148,184 筆 revision、3,409 個 entity，
-L1–L5 每一層都有命中）。**但它存在的理由是驗證架構沒有寫死在單一語言，
+（psf/requests，6,491 commits：148,199 筆 revision、3,409 個 entity，
+L1–L5 每一層都有命中）。閘門也涵蓋它：`fixtures/requests.yaml` 有四條案例，
+每一條都驗過拿掉對應機制會紅。**但它存在的理由是驗證架構沒有寫死在單一語言，
 不是宣稱 Python 支援已經完整。** 一個已量過、還沒修的缺口：
 
-- **docstring 算 token 級改動，JSDoc 算 raw 級。** Python 的 docstring 是字串
-  字面值不是註解節點，於是「只改說明文字」這同一個動作在兩個語言被分到不同的
-  `change_level`。
+- **只改 docstring 在 Python 是 `alpha` 級，同樣的動作改 JSDoc 在 TypeScript
+  只到 `raw` 級。** Python 的 docstring 是字串**字面值**不是註解節點，所以
+  token 層不會把它剝掉，差異一路傳到 alpha；JSDoc 是 `comment`，token 層就沒了。
+  同一個動作在兩個語言被分到不同的 `change_level`。
 
 裝飾器一度不在實體範圍內（`@property` 改成 `@cached_property` 看不見，而
 requests 在 HEAD 有 17.0% 的宣告帶裝飾器），已修——邊界含裝飾器之後，
-requests 有 116 次改動從「沒有改動」移到真實的變更層級。
+requests 有 116 次改動從「沒有改動」移到真實的變更層級。**那次移動邊界又連帶
+造成一個回歸**：包裝節點讓宣告自己的名字被當成區域繫結收走，requests 有 12,464
+筆 revision（8.4%）的 `hash_alpha` 因此等同 `hash_alpha_self`，帶裝飾器的宣告
+純改名會被報成「只改局部變數名」。也已修（剖面 1.1.1），現在是 0 筆。
 
 ### diff hunk 只是把歧義轉移，不是消滅它
 

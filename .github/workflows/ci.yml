@@ -136,9 +136,18 @@ jobs:
           ./node_modules/.bin/ostracon --version
           # 完整跑一次 why：這會驗到 db/schema.sql 與 tree-sitter wasm
           # 在「安裝後的位置」解析得到——在原始碼樹裡跑是驗不到的。
+          #
+          # **schema 的相對路徑是這一步真正在守的東西。** 讀 schema 的程式碼
+          # 從 `cli/` 搬到 `git/persist.ts` 過一次，而 `../../db/schema.sql`
+          # 在 `dist/` 裡的深度剛好不變——那是巧合不是保證，下次搬就未必。
           ./node_modules/.bin/ostracon why 'src/match/signature.ts:modMulAdd' \
             --repo "$GITHUB_WORKSPACE" --db "$RUNNER_TEMP/smoke.db" \
             | grep -q modMulAdd
+          # 每一支子指令都要有人走過一次：`why` 走的是快路徑，`hotspots` 走的是
+          # 全 repo pass，兩者的失敗方式不同（前者不會碰 indexRepoStructure）。
+          ./node_modules/.bin/ostracon hotspots \
+            --repo "$GITHUB_WORKSPACE" --db "$RUNNER_TEMP/smoke-hot.db" --limit 5 \
+            | grep -q '次結構改動'
 
       # 失敗時要看得到是哪幾條案例退步，而不是只有一個 exit code。
       - name: 保留黃金測試集報告

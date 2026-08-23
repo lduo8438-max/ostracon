@@ -173,6 +173,46 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### 發布收斂：封裝冒煙測試與 README 的實測缺口（2026-08-23）
+
+W6 的第一刀。兩件事，都只有真的跑一次才知道。
+
+**一、封裝。** 這一輪把讀 `db/schema.sql` 的程式碼從 `cli/` 搬到 `git/persist.ts`
+（`openIndexDatabase`）。`../../db/schema.sql` 在 `dist/git/` 與 `dist/cli/` 下的
+深度剛好一樣，所以沒壞——**但那是巧合不是保證**。實際打包驗過：`pnpm build` →
+`npm pack`（267.7 KB）→ 在封裝外 `npm install` → 執行，`why` 與 `hotspots` 都跑得通
+（後者對 ostracon 自己的 repo 索引 1.76 秒）。CI 的冒煙測試因此多一條
+`hotspots`：`why` 走快路徑、`hotspots` 走全 repo pass，兩者的失敗方式不同。
+
+**二、README 的四處過期宣稱。** 其中一處是我自己的量測推翻的：
+
+| 位置 | 原本 | 現在 |
+|---|---|---|
+| 測試數 | 310 | 427 |
+| 效能 | 「線性外推一萬 commit 約 1 分鐘」 | 改為每 revision 計價的三語料表 |
+| 語言 | 「只支援 TypeScript」 | 與下方 Python 段落矛盾，改為「產品意義上」 |
+| Python revision 數 | 148,184 | 148,199（今日實測） |
+| docstring | 「算 token 級改動」 | **實際是 `alpha` 級**——黃金案例量到的 |
+
+**「一萬 commit 約一分鐘」錯的不只是數字，是形式**（見 §成本控制重新定義）。
+README 現在給的是三套語料的 commit／revision／時間／峰值 RSS／索引體積，
+並明說「要估你自己的 repo，估 revision 數不要估 commit 數」。
+
+docstring 那一條是文件與實作分岔：單元測試講的是「docstring 進 token 層」
+（意思是 token 層不剝掉它），README 把它寫成「算 token 級改動」，
+而使用者看到的 `change_level` 是 `alpha`。兩者差一級。
+
+峰值 RSS 這一輪新量（先前 README 只有 create-t3-app 一筆）：
+
+| 語料 | commit | revision | 秒 | 峰值 RSS | 索引體積 |
+|---|---:|---:|---:|---:|---:|
+| create-t3-app | 1,378 | 3,606 | 8.6 | 443 MiB | 4.5 MB |
+| psf/requests | 6,491 | 148,199 | 100.1 | 873 MiB | 52.5 MB |
+| vuejs/core | 7,156 | 233,665 | 165.8 | 1,175 MiB | 93.1 MB |
+
+**記憶體是以 revision 計價的第三個維度**（大語料 5–6 KB／revision）。
+一個七千 commit 的 repo 要 1.2 GB RSS，那是安裝前該知道的事。
+
 ### 攪動熱點：先量過才決定要不要做（2026-08-22）
 
 W5 的最後一項。動手前先回答一個問題：**這個功能有沒有可能只是重做 `git log`。**

@@ -213,6 +213,31 @@ docstring 那一條是文件與實作分岔：單元測試講的是「docstring 
 **記憶體是以 revision 計價的第三個維度**（大語料 5–6 KB／revision）。
 一個七千 commit 的 repo 要 1.2 GB RSS，那是安裝前該知道的事。
 
+### architecture.md 的一致性掃描（2026-08-23）
+
+`README.md` 那處「docstring 算 token 級」的轉述失真**在 architecture.md 有一份
+一模一樣的**。四個組合都實測過：
+
+| 動作 | change_level |
+|---|---|
+| Python 只改 docstring | **`alpha`** |
+| Python 只改 `#` 註解 | `raw` |
+| TypeScript 只改 JSDoc 內文 | `raw` |
+| TypeScript 只改 `//` 註解 | `raw` |
+
+**差兩級，不是一級。** 來源是單元測試那句「docstring **進** token 層」
+（意思是 token 層不剝掉它）被轉述成「**算** token 級改動」——一字之差降了一級，
+然後被複製到兩份文件。說明限制的句子本身失真，比限制本身更糟。
+
+其餘四處：`revision.hash_alpha_self` 與 `revision.minhash` 的表名（schema v2
+起在 `declaration_content`）、CI 冒煙測試現在跑兩支、靜態匯出那一節的
+「284 MB 的 SQLite」（現在同一份索引是 93 MB）。最後一處**結論沒有變**，
+更新它是為了不讓過期的量測繼續替一個仍然正確的決定背書。
+
+**補上內容定址那一節。** 這是這一段最大的資料模型決定，先前只寫在
+`plan-content-addressed.md` 與這份 status，而 `architecture.md` 才是「規則背後的
+定義與理由」該去的地方。
+
 ### 攪動熱點：先量過才決定要不要做（2026-08-22）
 
 W5 的最後一項。動手前先回答一個問題：**這個功能有沒有可能只是重做 `git log`。**

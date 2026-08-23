@@ -90,7 +90,7 @@ git 預設 `core.quotePath=true`，非 ASCII 檔名在 `--name-status` 會輸出
 
 **開發與測試不經過建置**（`node --experimental-strip-types`），`pnpm build` 只在發布時用而且由 `prepublishOnly` 觸發，所以「原始碼與產物不同步」的風險只存在於發布那一刻。建置用 tsc 本身、零新相依，關鍵是 `rewriteRelativeImportExtensions`：匯入寫的是 `./walk.ts`（strip-types 要求副檔名照實寫），emit 時改寫成 `.js`，同一份原始碼兩種執行方式都成立。
 
-CI 會真的打包、在封裝外安裝、實跑一次 `why`。那是唯一驗得到 `db/schema.sql` 與 tree-sitter wasm 在**安裝後的位置**解析得到的方法；在原始碼樹裡跑永遠會過。
+CI 會真的打包、在封裝外安裝、實跑 `why` 與 `hotspots`。那是唯一驗得到 `db/schema.sql` 與 tree-sitter wasm 在**安裝後的位置**解析得到的方法；在原始碼樹裡跑永遠會過。跑兩支是因為它們的失敗方式不同：`why` 走快路徑、`hotspots` 走全 repo pass，前者根本不會碰 `indexRepoStructure`。
 
 ### Git 走訪與路徑血緣
 
@@ -200,6 +200,52 @@ SQLite driver 使用 Node 內建 `node:sqlite`，所有呼叫集中在單一 per
 完整 schema 依賴 FTS5；啟動時必須先做 capability probe，缺少時明確失敗，不能等到
 建表中途或查詢時才暴露。
 
+### 內容與位置分開存（schema v2）
+
+`revision` 是「某個 commit 上某個 slot 的那一版」，一個 commit 碰到一個檔案，
+該檔所有宣告都會產生一列——即使內容一個位元組都沒變。實測 psf/requests
+148,199 筆 revision 只有 **11,001 個相異的內容向量（7.4%）**、vuejs/core
+233,665 筆只有 22,789 個（9.8%）。**九成以上的列在存重複的內容衍生欄位。**
+
+位置**確實會變**（同一段程式碼會因為檔案別處的改動而位移），所以不能刪列；
+能做的是把內容那一半抽到 `declaration_content` 共用。四層雜湊與 `blob_sha`
+同時改存 BLOB（32／20 bytes，而不是 64／40 字元 hex）——**值完全相同，
+只是不再用兩倍空間存**，轉換只發生在持久化邊界。
+
+| | requests | vue |
+|---|---:|---:|
+| 體積 | 181.2 → **52.5 MiB** | 279.0 → **93.1 MiB** |
+| 全 repo 索引 | 180.8 → **100.7 s** | 293.6 → **170.0 s** |
+
+時間變快是意外收穫不是目標：每列少寫約 634 bytes、少維護三條大索引。
+
+**內容表的鍵是整個向量的 sha256，不是 `hash_raw`。** 直覺上內容一樣其餘欄位就
+一樣，但實測 vue 上相異 `hash_raw` 是 22,774 而相異 `(hash_raw, shape_profile)`
+是 22,789——有 15 組逐字相同的宣告落在不同剖面上（`.ts` 與 `.tsx` 各一份 grammar）。
+而「同一份文字在同一個剖面下必定解析成同一棵樹」沒有人能保證（同樣的文字在
+類別方法與物件字面值裡節點型別可能不同）。與其論證碰撞不會發生，不如讓鍵涵蓋
+全部欄位；實測這個更保守的鍵沒有付出任何去重率的代價。
+
+同一輪刪掉 `idx_revision_shape` 與 `idx_revision_alpha_self`（requests 上合計
+21.4 MB）：**兩條都沒有任何 SQL 讀者**——匹配階梯比對的是 `buildPool` 現場觀察
+出來的記憶體候選池，不是資料庫。沒有讀者的索引就是索引版的死旗標。反過來
+`hash_raw` 那一路原本完全沒有索引（148,199 列全表掃描），搬到內容表之後不只
+有了索引，掃描範圍還降到 7.4% 的列數。
+
+**驗收的重點不是變小，是沒變**：四套 TypeScript 語料 5,222 筆 revision 的雜湊
+指紋解碼後逐位元相同；迂迴偵測的條數與 A／C 分佈前後完全相同（搬移守門的查詢
+方向被換掉了，所以那條單獨驗）；三套 demo 語料重新匯出後與線上站台逐檔比對
+1,964 個檔案、零差異。
+
+**踩到一個型別檢查抓不到的坑**：迂迴的 A 級判準是 `firstRaw === lastRaw`，
+而 BLOB 從 SQLite 讀出來是 `Uint8Array`——`===` 在上面是**參照**比較，兩個內容
+相同的緩衝區也會不相等，整個 A 級會靜默歸零。查詢端用 `hex()` 讓它仍是字串。
+兩邊都是 `Uint8Array` 時 `tsc` 完全過得了。
+
+schema 換版所以既有資料庫都要重建。`schema_migration` 那張表從 v0.5 起就存在卻
+從來沒有任何程式讀寫過，這次啟用它（`openIndexDatabase`）——否則舊資料庫的失敗
+方式會是 `no such column: content_id`，而那個訊息不會告訴任何人原因。
+
 ### diff hunk
 
 走訪還取第二趟 `git log --patch --unified=0`，把每個檔案改動的行號範圍存進
@@ -242,7 +288,8 @@ SQLite driver 使用 Node 內建 `node:sqlite`，所有呼叫集中在單一 per
 
 ### L3b：`hash_alpha_self`
 
-`revision.hash_alpha_self` 在索引時一併計算：先做 `hash_alpha` 的局部繫結正規化，
+`declaration_content.hash_alpha_self`（schema v2 起與其餘內容衍生欄位同表）
+在索引時一併計算：先做 `hash_alpha` 的局部繫結正規化，
 再把**該宣告自己的名稱**及解析為該宣告的 self-reference 替換為 `$SELF`。它能讓
 body 不變的同檔宣告改名不因模組層級宣告名而直接掉到相似度匹配。
 
@@ -413,10 +460,24 @@ TypeScript 留空——那份 grammar 把 `decorator` 放成 `class_declaration`
 
 #### 還沒修的：docstring 與 JSDoc 不同級
 
-Python 的 docstring 是 `expression_statement > string`，不是 `comment` 節點，
-所以「只改說明文字」在 Python 是 token 級改動、在 TypeScript 是 raw 級。同一個
-動作在兩個語言被分到不同的 `change_level`。`commentTypes` 是型別集合，表達不了
-「區塊開頭的字串字面值」這種位置相依的概念，要修就要加新的剖面概念。
+Python 的 docstring 是 `expression_statement > string`，不是 `comment` 節點。
+token 層只剝掉註解，所以剝不掉它；而 alpha 層正規化的是**局部繫結識別子**，
+不動字面量——差異因此一路傳到 alpha。四個組合都實測過：
+
+| 動作 | change_level |
+|---|---|
+| Python 只改 docstring | **`alpha`** |
+| Python 只改 `#` 註解 | `raw` |
+| TypeScript 只改 JSDoc 內文 | `raw` |
+| TypeScript 只改 `//` 註解 | `raw` |
+
+**同一個動作在兩個語言差兩級，不是一級。** 這份文件與 README 一度都寫成
+「在 Python 是 token 級」——那是把單元測試的「docstring **進** token 層」
+（意思是 token 層不剝掉它）轉述成「**算** token 級改動」，一字之差降了一級。
+說明限制的句子本身失真，比限制本身更糟。
+
+`commentTypes` 是型別集合，表達不了「區塊開頭的字串字面值」這種位置相依的概念，
+要修就要加新的剖面概念。
 
 這一條有測試明確斷言目前行為。**目的是讓限制在被修掉的那一刻變成紅燈**，
 而不是默默地變成「應該已經修好了吧」。
@@ -574,7 +635,7 @@ repo 的身分是 `git rev-parse --show-toplevel`，**不是 `--repo` 的原字�
 
 ### 相似度只由 MinHash 召回，不由它判定
 
-`revision.minhash`（128 permutations，token n-gram）僅用於產生 L4/L5 候選。**接受前必須計算精確 Jaccard 並寫入 `exact_jaccard`、`exact_verified = 1`**，schema 層級以 CHECK 強制。
+`declaration_content.minhash`（128 permutations，token n-gram）僅用於產生 L4/L5 候選。**接受前必須計算精確 Jaccard 並寫入 `exact_jaccard`、`exact_verified = 1`**，schema 層級以 CHECK 強制。
 
 切分依據是**排序去重後的 token n-gram 集合基數 `ngram_count`**，不是 AST 的
 `node_count`。若只能在原始計數中二選一，`token_count` 比 `node_count` 更接近
@@ -1077,10 +1138,15 @@ vuejs/core 752 → 1,245 筆、31.7 MB → 34.6 MB。
 
 `src/ui/export.ts` 把一個索引寫成純靜態檔，**不需要 node、不需要 SQLite**。
 
-散布方式是量出來的，不是挑的。託管一台伺服器要搬 284 MB 的 SQLite、要 Node 24
+散布方式是量出來的，不是挑的。託管一台伺服器要搬整個 SQLite、要 Node 24
 加 FTS5、還多一個會壞掉的執行期；而 API 只有三個端點，其中兩個是單例、一個以
 entity 分片，本來就對得上靜態檔。實測訪客實際下載（gzip）：**頁面 5 KB ＋清單
 17 KB ＋點開一條時間軸約 5 KB**。
+
+當初這個決定寫的是「要搬 284 MB 的 SQLite」。內容定址（schema v2）之後同一份
+索引是 93 MB——**小了三倍，結論一個字都沒變**：靜態檔那一側的成本仍然是零個
+執行期，而 93 MB 依然遠大於訪客實際需要的那幾十 KB。把數字更新在這裡是為了
+不讓一個過期的量測繼續替一個仍然正確的決定背書。
 
 **端點因此改成路徑式並帶 `.json`**（`/api/summary.json`、`/api/entities.json`、
 `/api/evolution/<id>.json`）。原本的 `?entity=7` 沒有辦法變成靜態檔，保留就得替

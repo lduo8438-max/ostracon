@@ -213,6 +213,34 @@ docstring 那一條是文件與實作分岔：單元測試講的是「docstring 
 **記憶體是以 revision 計價的第三個維度**（大語料 5–6 KB／revision）。
 一個七千 commit 的 repo 要 1.2 GB RSS，那是安裝前該知道的事。
 
+### 從零 clone 跑一次（2026-08-23）
+
+W6 的「陌生人安裝路徑」。**在本機重跑不算數**——本機有 `node_modules`、有語料、
+有半年份的 `.db`，任何「忘了進版控」或「只有我這台有」的東西都看不見。
+
+從 GitHub clone 分支到全部驗證通過，逐步實測：
+
+| 步驟 | 耗時 | 結果 |
+|---|---:|---|
+| `git clone`（單一分支） | 4.7 s | 工作區 2.5 MB、`.git` 940 KB |
+| `pnpm install` | 2.6 s | 三個 tree-sitter 套件，**沒有原生編譯**（`Ignored build scripts`，如設計） |
+| `pnpm corpus:fetch` | 35.3 s | 五套語料全抓齊並驗過 HEAD |
+| `pnpm test` | 19.5 s | 427/427 |
+| 五套黃金測試集 | 18.4 s | 全過，baseline 閘門 exit 0 |
+| `pnpm build` | 0.6 s | `dist/cli` 八支 |
+
+**README 只叫人跑 osiris 那一套，實測 5.4 秒。** 從 clone 到「自己確認 33/33 是
+真的」大約一分鐘，其中三分之二是抓語料。
+
+產品路徑也照 README 的範例原樣跑過：`why 'src/app/page.tsx:Dashboard.fetchEndpoint'`
+（README 寫的那個符號，在抓回來的 osiris 上真的存在，印出 4 個實體與斷層提示）、
+`ostracised`（94 條 A 級，與文件一致）、`hotspots`。
+
+**沒有找到阻斷問題。** 一個確認：`fixtures/osiris.yaml` 指向的
+`simplifaisoul/osiris` 是公開 repo，陌生人抓得到——那是整條驗證鏈裡唯一一個
+「作者自己的 repo」，如果它是私有的，README 的「不要相信它，自己跑一次」
+就是一句做不到的話。
+
 ### architecture.md 的一致性掃描（2026-08-23）
 
 `README.md` 那處「docstring 算 token 級」的轉述失真**在 architecture.md 有一份

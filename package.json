@@ -23,6 +23,7 @@
     "ui": "node --experimental-strip-types src/cli/ui.ts",
     "why:cli": "node --experimental-strip-types src/cli/why.ts",
     "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",
+    "hotspots": "node --experimental-strip-types src/cli/hotspots.ts",
     "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
     "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts",
     "prepublishOnly": "pnpm run build && pnpm test",

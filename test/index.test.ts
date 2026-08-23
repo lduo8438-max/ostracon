@@ -8,6 +8,7 @@ import "./git-index.test.ts";
 import "./golden-evidence.test.ts";
 import "./golden-runner.test.ts";
 import "./hash.test.ts";
+import "./hotspots.test.ts";
 import "./hunks.test.ts";
 import "./incremental.test.ts";
 import "./ladder.test.ts";

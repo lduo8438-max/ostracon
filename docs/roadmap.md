@@ -24,8 +24,10 @@
   18 條引文，其中一條掛到 36 個 entity，不足以支持 entity 級宣稱）。
   **demo 建立在這 10 條上，不是 104 條。** 細節見 `status.md`。
   **不為了 demo 保住那 253 條無法歸因的宣稱。**
-- **W5 剩餘原功能**：攪動熱點視圖、成本控制、加 Python 驗證架構。
-  issue／PR 連結解析已提前完成，不再重排一次。
+- **W5 剩餘原功能**：✅ 已完成。加 Python（逼出四個寫死的 TypeScript 假設）、
+  成本控制（重新定義為每 revision 的時間與空間，並以內容定址兌現）、
+  攪動熱點（`ostracon hotspots`，entity 層級、只算結構改動——檔案層級量過
+  之後否決，那等於重做 `git log`）。issue／PR 連結解析更早就完成了。
 - **W6 發布收斂**：README／架構文件、安裝與封裝摩擦、demo 語料重建性；
   CI、`corpus:fetch`、Node 24／FTS5 探測與 npm 封裝已提前完成，只補實測缺口。
 - **W7 release candidate**：凍結功能，以陌生人安裝與真實 repo 回饋修阻斷問題。

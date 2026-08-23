@@ -75,6 +75,7 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/index/repo-pass.ts` | 全 repo 結構索引；候選池涵蓋一次改動的所有檔案 | L5 唯一能成立的條件；水位線 `pass_name = 'declarations'` |
 | `src/cli/why.ts` | `why <path>:<symbol>` 時間軸查詢與呈現 | stated／linked 視覺分層；linked 依 provenance root 查詢時去重；`--full` 時觸發並呈現 excursion；已刪路徑走 `lineagesEverAt` fallback |
 | `src/cli/ostracised.ts` | 被推翻的做法清單 | `pnpm ostracised`；一律全 repo pass，scope 不符即拒印 |
+| `src/cli/hotspots.ts` | 攪動熱點：被重構最多次的宣告 | 只算 `shape`；entity 層級而非檔案層級（檔案級 `git log` 就有）；測試檔沿用 `isTestPath` |
 | `src/evidence/span.ts` | **純函式**：span 斷言（零寬容、零 LLM、零 IO） | 信譽架構的基石；突變測試驗證過會咬 |
 | `src/evidence/extract.ts` | **純函式**：規則式理由抽取、issue 參照抽取 | linked Markdown 模式排除 code fence／引用行，不放寬因果標記 |
 | `src/evidence/store.ts` | stated／linked 文件抽取；候選驗證後才升格 `evidence` | 零網路；兩種 tier 共用 staging 與 span 驗證 |
@@ -171,6 +172,53 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
+
+### 攪動熱點：先量過才決定要不要做（2026-08-22）
+
+W5 的最後一項。動手前先回答一個問題：**這個功能有沒有可能只是重做 `git log`。**
+
+實測 vuejs/core，兩種排法排**檔案**：
+
+| 排法 | 前三名 |
+|---|---|
+| 依全部 `revision_change` 列（含 `none`） | renderer.ts 18,349／compileScript.ts 12,828／component.ts 10,399 |
+| 只算 `shape` | renderer.ts 805／createRenderer.ts 503／compileScript.ts 498 |
+
+**top-10 重疊 8/10、top-20 重疊 16/20**——在檔案層級上，「攪動」怎麼算幾乎不影響
+答案，而檔案的 commit 次數 `git log` 直接給得出來。**所以檔案級的熱點視圖不做。**
+
+entity 層級是另一回事。同一份語料，攪動最高的 15 個宣告分佈在 **12 個檔案**，
+而且 `renderer.ts` 一個檔案裡有**三個獨立熱點**（`baseCreateRenderer` 212 次、
+`createRenderer` 193 次、`baseCreateRenderer.mountComponent` 66 次）。檔案級視圖
+把它們併成一列，於是「這個兩千行的檔案裡到底是哪一段一直在變」永遠答不出來。
+這是 git 給不出來的東西，所以值得做。
+
+#### 三個判準，都是量出來的
+
+1. **只算 `shape`。** vue 有 88.5% 的 `revision_change` 是 `none`。`createRenderer`
+   有 480 列改動、其中只有 193 次真的動到結構——**那個比值本身是資訊**，
+   所以兩個數字都印。
+2. **排序用絕對次數，不用速率。** 「結構改動／天」看起來更公平，實測是小分母
+   陷阱：`createRenderer.processSuspense` 9 次 ÷ 52 天 = 每年 63 次，會排在
+   `compileScript` 217 次之上。存活天數是屬性不是門檻，印出來讓人自己判斷
+   （與 `ostracised` 對 `duration_days` 的處理一致）。
+3. **排名不是「最老的程式碼」**——這件事會讓整支指令變成廢話，所以量過：
+   依結構次數排的前 20 名與依存活天數排的前 20 名**只重疊 3 個**。
+
+測試檔沿用 `ostracised` 那一份 `isTestPath`，不另寫。斷層密度與迂迴密度在 vue 上
+都被 `.spec.ts` 主導（`Suspense.spec.ts:setup` 被置換 4 次，那只是每個 `it()` 各寫
+一個同名 `setup`），攪動也有同樣的問題。vue 隱藏 269 條、requests 隱藏 438 條，
+標頭都會報數量。
+
+#### 一道自己造的假閘門，當場修掉
+
+「排序是絕對次數不是速率」第一版寫成對 `renderHotspots` 斷言——**而排序發生在
+SQL，純函式只是照著印**。把 `ORDER BY` 改成速率之後那條測試照樣通過。改成對
+`listHotspots` 用手寫 fixture 斷言之後才會咬。四個判準現在各自驗過會紅。
+
+同一輪還被前提檢查抓到一個測試自己的錯：把註解加在函式**外面**時，宣告的位元組
+範圍完全沒變，`change_level` 是 `none` 而不是 `raw`——那樣測試只證明了「沒動的
+不算」，證明不了「只改註解的也不算」。
 
 ### 內容定址：資料庫小三倍，索引快四成（2026-08-22，schema v2）
 

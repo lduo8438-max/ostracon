@@ -157,6 +157,12 @@ pnpm why:cli -- '<path>:<symbol>' --repo <repo-path> --db <db> [--until <sha>] [
 pnpm ostracised -- --repo <repo-path> --db <db> [--until <sha>] [--strength A|C]
                    [--include-tests]
 
+# 列出被重構最多次的宣告。**只算真的動到結構的改動**——vue 有 88.5% 的改動列
+# 是「完全沒變」。entity 層級而非檔案層級：檔案級的排名 git log 就給得出來
+# （實測 vue 依全部改動與依結構改動排檔案，top-10 重疊 8/10）
+pnpm hotspots -- --repo <repo-path> --db <db> [--until <sha>] [--limit <n>]
+                 [--include-tests]
+
 # 把索引匯出成純靜態站台（線上 demo）。--label 必填，否則會公開本機路徑
 pnpm ui:export -- --db <db> --out <dir> --label <語料名稱> [--limit <n>]
 

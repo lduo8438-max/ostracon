@@ -65,6 +65,7 @@ npx ostracon why 'src/auth.ts:validateToken' --repo /path/to/repo
 ```
 ostracon why <path>:<symbol>     印出一段程式碼的演化史
 ostracon ostracised              列出試過又被推翻的做法
+ostracon hotspots                列出被重構最多次的宣告（只算真的動到結構的）
 ostracon evidence extract        從 commit message 抽取理由並驗證 span
 ostracon evidence linked         取回被參照的 GitHub PR / issue 討論串
 ostracon ui                      三欄畫面：結構 → 演化 → 意圖（只綁 127.0.0.1）

@@ -50,7 +50,7 @@ node -e "new (require('node:sqlite').DatabaseSync)(':memory:').exec('CREATE VIRT
 原因，所以寫在這裡。實測 **v24.14.1 可用、v23.11.0 不可用**（後者 `node:sqlite`
 存在，但沒有把 FTS5 編進去）。全文檢索是 schema 的一部分，不是選配。
 
-零執行期相依是刻意的取捨（只有 tree-sitter 兩個套件），代價就是綁在 Node 內建的
+零執行期相依是刻意的取捨（只有 tree-sitter 的解析器與三份 grammar），代價就是綁在 Node 內建的
 SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `ExperimentalWarning`。
 
 ## 安裝
@@ -59,12 +59,13 @@ SQLite 上。`node:sqlite` 目前仍是實驗性 API，每次執行都會印 `Ex
 npx ostracon why 'src/auth.ts:validateToken' --repo /path/to/repo
 ```
 
-或裝起來：`npm i -g ostracon`。零執行期相依（只有 tree-sitter 兩個套件），
+或裝起來：`npm i -g ostracon`。零執行期相依（只有 tree-sitter 的解析器與三份 grammar），
 索引存在本機 SQLite，不上傳任何東西。
 
 ```
 ostracon why <path>:<symbol>     印出一段程式碼的演化史
 ostracon ostracised              列出試過又被推翻的做法
+ostracon hotspots                列出被重構最多次的宣告（只算真的動到結構的）
 ostracon evidence extract        從 commit message 抽取理由並驗證 span
 ostracon evidence linked         取回被參照的 GitHub PR / issue 討論串
 ostracon ui                      三欄畫面：結構 → 演化 → 意圖（只綁 127.0.0.1）
@@ -93,7 +94,7 @@ CI、文件與這支指令全都從它讀，沒有第二份 SHA 可以分岔。�
 
 ```bash
 pnpm typecheck   # tsc --noEmit，零錯誤是硬門檻
-pnpm test        # 先跑 typecheck，再跑單元測試（310 個）
+pnpm test        # 先跑 typecheck，再跑單元測試（430 個）
 
 # 印出一段程式碼的演化史
 pnpm why:cli -- 'src/app/page.tsx:Dashboard.fetchEndpoint' --repo /path/to/repo
@@ -103,6 +104,9 @@ pnpm why:cli -- 'src/lib/ssrf-guard.ts:isRateLimited' --repo /path/to/repo --ful
 
 # 列出試過又被推翻的做法（由短命到長命；測試檔的宣告預設排除）
 pnpm ostracised -- --repo /path/to/repo [--strength A] [--include-tests]
+
+# 列出被重構最多次的宣告（只算真的動到結構的改動）
+pnpm hotspots -- --repo /path/to/repo [--limit 20] [--include-tests]
 
 # 取回已參照的 GitHub PR / issue 文件（無 token 時安全略過）
 GITHUB_TOKEN=... pnpm evidence:linked -- --db /path/to/index.db
@@ -201,8 +205,22 @@ revert，或移除掉的內容與當初加入的逐字相同）；C 只有生命
 迂迴報在 B 消失的那一刻，也就是內容真正離開 repo 的時候。
 
 預設的快路徑只索引目標檔案的血緣，看不到跨檔案搬移；`--full` 看得到，代價是慢。
-全 repo 索引的效能已達標：`create-t3-app` 1,378 commits 實測 8.3 秒、峰值 RSS
-446 MiB，線性外推一萬 commit 約 1 分鐘（預算 10 分鐘）。
+
+**成本有兩項：commit 與 revision。** 兩者都要帶——
+
+| 語料 | commit | revision | rev/commit | 全 repo 索引 | 峰值 RSS | 索引體積 |
+|---|---:|---:|---:|---:|---:|---:|
+| create-t3-app | 1,378 | 3,606 | 2.6 | 9 秒 | 443 MiB | 4.5 MB |
+| psf/requests | 6,491 | 148,199 | 22.8 | 100 秒 | 873 MiB | 52.5 MB |
+| vuejs/core | 7,156 | 233,665 | 32.7 | 166 秒 | 1,175 MiB | 93.1 MB |
+| nestjs/nest | 21,648 | 144,746 | 6.7 | 204 秒 | 1,158 MiB | 96.0 MB |
+
+最後兩列是為什麼不能只用一個軸：**nest 與 requests 的 revision 數只差 2.4%，
+索引時間卻差一倍**——差別在 commit 數（21,648 對 6,491）。實測擬合是
+**5.86 ms/commit + 0.53 ms/revision**。
+
+一萬 commit 依密度落在 **1.5–4 分鐘**（預算 10 分鐘）。每 commit 的宣告數在這四套
+語料之間差 12.6 倍，所以**要估你自己的 repo，兩項都要帶**。
 
 ### 三欄畫面
 
@@ -232,7 +250,8 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 全部零 LLM 呼叫。詳細現況見 [`docs/status.md`](docs/status.md)，
 設計與理由見 [`docs/architecture.md`](docs/architecture.md)。
 
-只支援 TypeScript。
+產品意義上只支援 TypeScript。`.py` 也索引得動，但那是**架構驗證**不是產品支援，
+理由與已量過的缺口見下方〈Python 只到「架構驗證」的程度〉。
 
 ---
 
@@ -290,6 +309,26 @@ HTML/CSS/JS，零新相依、零建置流程、不連任何外部資源。只綁
 
 屬性名與 shorthand 屬性名永不正規化：`obj.foo` 的 `foo` 改掉就是改語意，
 `{ userId }` 的 `userId` 同時是物件的鍵。
+
+### Python 只到「架構驗證」的程度，不是產品支援
+
+`.py` 檔會被索引，四層雜湊、匹配階梯與迂迴偵測在 Python 上都實測跑得通
+（psf/requests，6,491 commits：148,199 筆 revision、3,409 個 entity，
+L1–L5 每一層都有命中）。閘門也涵蓋它：`fixtures/requests.yaml` 有四條案例，
+每一條都驗過拿掉對應機制會紅。**但它存在的理由是驗證架構沒有寫死在單一語言，
+不是宣稱 Python 支援已經完整。** 一個已量過、還沒修的缺口：
+
+- **只改 docstring 在 Python 是 `alpha` 級，同樣的動作改 JSDoc 在 TypeScript
+  只到 `raw` 級。** Python 的 docstring 是字串**字面值**不是註解節點，所以
+  token 層不會把它剝掉，差異一路傳到 alpha；JSDoc 是 `comment`，token 層就沒了。
+  同一個動作在兩個語言被分到不同的 `change_level`。
+
+裝飾器一度不在實體範圍內（`@property` 改成 `@cached_property` 看不見，而
+requests 在 HEAD 有 17.0% 的宣告帶裝飾器），已修——邊界含裝飾器之後，
+requests 有 116 次改動從「沒有改動」移到真實的變更層級。**那次移動邊界又連帶
+造成一個回歸**：包裝節點讓宣告自己的名字被當成區域繫結收走，requests 有 12,464
+筆 revision（8.4%）的 `hash_alpha` 因此等同 `hash_alpha_self`，帶裝飾器的宣告
+純改名會被報成「只改局部變數名」。也已修（剖面 1.1.1），現在是 0 筆。
 
 ### diff hunk 只是把歧義轉移，不是消滅它
 

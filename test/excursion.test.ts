@@ -20,9 +20,19 @@ function makeRepo() {
     writeFileSync(path.join(repo, rel), body);
   };
   const remove = (rel: string) => git("rm", "-q", path.join(repo, rel));
-  const commit = (msg: string) => {
+  const commit = (msg: string, dates?: { author: string; committer: string }) => {
     git("add", "-A");
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, "--no-gpg-sign");
+    if (dates === undefined) {
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, "--no-gpg-sign");
+    } else {
+      // author 與 committer 時間分開設定：長命 PR、cherry-pick 與 rebase 都會
+      // 讓兩者脫鉤，而那正是 duration 用錯時鐘會變成負數的來源。
+      execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t",
+        "commit", "-qm", msg, "--no-gpg-sign"], {
+        encoding: "utf8",
+        env: { ...process.env, GIT_AUTHOR_DATE: dates.author, GIT_COMMITTER_DATE: dates.committer },
+      });
+    }
     return git("rev-parse", "HEAD");
   };
   return { repo, git, write, remove, commit };
@@ -56,6 +66,39 @@ const HELPER = `export function experimentalCache(key: string): string {
 }`;
 
 describe("迂迴偵測（entity 層級）", () => {
+  /**
+   * `duration_days` 用 `committed_at` 不是 `authored_at`（迂迴演算法 1.2.0）。
+   *
+   * 這一條是跑 nestjs/nest 時發現的：`ostracised` 的第一條印著
+   * 「0 天　2023-02-01 → 2023-01-06」——死亡日期早於誕生日期。根因是 author
+   * 時間與 commit 進入這份歷史的時間是兩個時鐘，長命 PR／cherry-pick／rebase
+   * 都會讓它們脫鉤，於是相減可以是負的，再被 `Math.max(0, …)` 夾成 0。
+   *
+   * **而清單由短到長排序，所以那些列坐在第一個畫面的最上面**：vuejs/core 的
+   * A 級前十名有十條是這種，那正是線上 demo 顯示的東西。
+   */
+  it("**author 與 commit 時間脫鉤時，存活天數不得被夾成 0**", async () => {
+    const { repo, write, remove, commit } = makeRepo();
+    write("src/util.ts", HELPER);
+    // author 6 月、committer 1 月：一個寫了很久才合併進來的 PR。
+    commit("引入", { author: "2020-06-01T00:00:00Z", committer: "2020-01-01T00:00:00Z" });
+    remove("src/util.ts");
+    write("src/keep.ts", "export const keep = 1;\n");
+    // author 1 月中：早於引入的 author 時間。committer 2 月：晚於引入的 committer。
+    commit("移除", { author: "2020-01-15T00:00:00Z", committer: "2020-02-01T00:00:00Z" });
+
+    const { db, repoId } = await index(repo);
+    detectExcursions(db, repoId, { scope: "repo" });
+    const found = rows(db).filter((r) => r.sym === "experimentalCache");
+    assert.equal(found.length, 1, "前提：這是一條迂迴");
+    // committed_at 相差 31 天。用 authored_at 的話是 -138 天，會被夾成 0。
+    assert.ok(
+      found[0]!.days > 30 && found[0]!.days < 32,
+      `存活天數應該是 31 天上下，實際 ${found[0]!.days}`,
+    );
+    db.close();
+  });
+
   it("**同一個 commit 刪掉的相同內容不得互相抑制**", async () => {
     // 守門原本寫 `dc.topo_order >= ?`（死得不比我早），而同一個 commit 的
     // topo_order 相等——於是 N 份相同內容一起被刪時，每一份都認為其他的還活著，

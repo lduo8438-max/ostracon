@@ -68,34 +68,63 @@ export function utf8ByteRange(
 }
 
 /**
+ * 包裝節點（Python 的 `decorated_definition`）→ 它包住的那個宣告。
+ * 不是包裝就回 `undefined`。
+ *
+ * **這件事有三個地方要問，所以只能有一份答案。** 實體節點取包裝（範圍含裝飾器），
+ * 但「哪個名字是這個宣告自己的」要問被包裝的那一層——`extractDeclarations` 問過，
+ * `collectBindings` 與 `declarationName` 原本沒問，於是帶裝飾器的宣告把自己的
+ * 名字當成區域繫結收走了（實測 psf/requests HEAD 807 個宣告裡的 137 個）。
+ */
+export function unwrapDeclaration(
+  node: SynNode,
+  profile: LanguageProfile,
+): SynNode | undefined {
+  const field = profile.declarationWrappers.get(node.type);
+  if (field === undefined) return undefined;
+  return node.children.find((c) => c.fieldName === field);
+}
+
+/**
  * 從一棵檔案樹中抽出所有宣告。
  *
  * `const Foo = () => {}` 這種要特別處理：declarationTypes 含 variable_declarator，
  * 但只有 value 是函式或類別時才算一個實體，否則普通的 const 也會被當成宣告。
+ *
+ * **那條判定原本寫死在這裡**（節點型別 `variable_declarator`、欄位名 `value`、
+ * 四個 TS/JS 專屬的函式節點型別全部是字面值），而這一層照定義是語言中立的。
+ * 現在改由 `profile.valueBearingDeclarations` 描述，Python 留 undefined。
  */
 export function extractDeclarations(
   root: SynNode,
   profile: LanguageProfile,
 ): Array<{ node: SynNode; qualifiedName: string; kind: string }> {
   const out: Array<{ node: SynNode; qualifiedName: string; kind: string }> = [];
+  const valueBearing = profile.valueBearingDeclarations;
 
   const nameOf = (n: SynNode): string | undefined =>
     n.children.find((c) => c.fieldName === profile.nameField)?.text;
 
-  const isFunctionLike = (n: SynNode): boolean => {
-    const v = n.children.find((c) => c.fieldName === "value");
-    return !!v && /^(arrow_function|function|function_expression|class)$/.test(v.type);
+  const bearsFunction = (n: SynNode): boolean => {
+    if (valueBearing === undefined || !valueBearing.types.has(n.type)) return true;
+    const v = n.children.find((c) => c.fieldName === valueBearing.valueField);
+    return v !== undefined && valueBearing.functionTypes.has(v.type);
   };
 
   const walk = (n: SynNode, prefix: string) => {
-    if (profile.declarationTypes.has(n.type)) {
-      const name = nameOf(n);
-      if (name && (n.type !== "variable_declarator" || isFunctionLike(n))) {
+    // 名稱與 kind 取自被包裝的宣告，**節點本身取包裝**——實體的位元組範圍
+    // 因此含裝飾器，`@property` 換掉才看得見。
+    const inner = unwrapDeclaration(n, profile);
+    const named = inner ?? n;
+    if (profile.declarationTypes.has(named.type)) {
+      const name = nameOf(named);
+      if (name && bearsFunction(named)) {
         const qualified = prefix ? `${prefix}.${name}` : name;
-        out.push({ node: n, qualifiedName: qualified, kind: n.type });
-        // 類別成員要帶著類別名當前綴，讓 qualifiedName 與 fixture 的
-        // symbol 欄位（ClassName.method）對得上。
-        for (const c of n.children) walk(c, qualified);
+        out.push({ node: n, qualifiedName: qualified, kind: named.type });
+        // 從 `named` 的子節點往下走，不是從 `n`：否則被包裝的那個宣告會被
+        // 當成自己的子宣告再抽一次，變成 `C.size.size`。
+        // 裝飾器本身不含宣告（它是運算式），跳過它不會漏掉東西。
+        for (const c of named.children) walk(c, qualified);
         return;
       }
     }

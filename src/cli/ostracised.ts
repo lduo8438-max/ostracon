@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { grammarForPath, grammarSpecFor } from "../ast/languages.ts";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import {
   aggregateSuppressionNotice,
@@ -10,7 +11,7 @@ import {
   unboundExcursionNotice,
 } from "../claim/derive.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
-import { repoConsolidationNotice } from "../git/persist.ts";
+import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import { assertNoCrossRepoRows } from "../index/structural.ts";
 import {
@@ -57,11 +58,19 @@ export interface OstracisedRow {
  *
  * **由短到長。** 原本是由長到短，於是第一眼看到的是活了 2,676 天才被重構掉的
  * 函式——那是技術演進，不是試錯，正好是這支指令**最沒有資訊量**的一端。
- * 由短到長之後三套語料的開頭都是真的實驗：vuejs/core 是 reactivity 裡試過又
- * 丟掉的位元旗標追蹤（`hasBit` / `setBit` / `setWasTracked`），Osiris 是三個
- * 城市專用的 camera fetcher（後來換成全球資料源）。
+ * 由短到長之後開頭是真的實驗：Osiris 的頭條是一組被 `Revert` 掉的 balloon
+ * 追蹤 API，vuejs/core 是同一天加進去又拿掉的 codegen 型別。
  *
  * 排序方向不是門檻：長命的仍在名單裡，只是不再佔據第一個畫面。
+ *
+ * **但第一畫面具體是誰，不該當成穩定的事實去引用。** 這段註解原本舉的是
+ * vuejs/core 的位元旗標追蹤（`hasBit` / `setBit`）與 Osiris 的 camera fetcher；
+ * `duration_days` 改用 `committed_at` 之後（迂迴 1.2.0），「0 天」那一桶從 100 條
+ * 變成 137 條，兩個例子都被擠出前十——**排序判準沒變，例子變了**。
+ *
+ * 這也是為什麼線上 demo 的精選案例是**明示的連結**而不是靠排序浮上來的：
+ * 想講的故事就直接指名，不要用隱性的排序規則去救特定案例，否則排序規則會被
+ * 「哪一條該在最上面」綁架，而那是編輯的選擇不是資料的性質。
  */
 export function listOstracised(
   db: DatabaseSync,
@@ -72,8 +81,10 @@ export function listOstracised(
     `SELECT e.stable_key AS stableKey, x.strength AS strength, x.method AS method,
             x.duration_days AS durationDays,
             last.path AS path, last.symbol AS symbol,
-            bc.authored_at AS bornAt,
-            dc.authored_at AS diedAt, dc.sha AS diedSha,
+            -- 與 duration_days 同一個時鐘（committed_at，見 excursion.ts 的
+            -- durationDays）。混用的話畫面會出現「0 天」配上一組倒著走的日期。
+            bc.committed_at AS bornAt,
+            dc.committed_at AS diedAt, dc.sha AS diedSha,
             CASE WHEN instr(dc.message, char(10)) > 0
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
                  ELSE dc.message END AS diedSubject
@@ -106,12 +117,26 @@ export function listOstracised(
  * 判準是路徑，抽樣驗過 40 條全部命中真正的測試檔。**預設排除但不靜默**：
  * 標頭會報出被排除的數量，`--include-tests` 可以看回來。整段藏起來的話，
  * 使用者會以為這個 repo 的試錯比實際少。
+ *
+ * **判準拆成兩半是實測逼出來的。** 目錄慣例（`tests/`、`__tests__/`）跨語言通用，
+ * 但**檔名慣例不是**：原本整條規則只認得 JS/TS 的 `*.test.ts`，於是 psf/requests
+ * 根目錄的 `test_requests.py` 完全逃過過濾，整份出現在「被推翻的做法」清單裡
+ * （205 條 `.py` 路徑中命中 25 條，補上 Python 慣例後是 30 條）。
+ * 檔名那一半因此改由語言註冊表提供——**加一種語言要一起帶進來的東西，
+ * 就該放在加語言的那一個地方。**
  */
-export const TEST_PATH =
-  /(^|\/)(__tests__|__mocks__|tests?|e2e|spec)\/|\.(spec|test|bench)\.[cm]?[jt]sx?$/;
+export const TEST_DIR = /(^|\/)(__tests__|__mocks__|tests?|e2e|spec)\//;
+
+export function isTestPath(pathName: string): boolean {
+  if (TEST_DIR.test(pathName)) return true;
+  const kind = grammarForPath(pathName);
+  if (kind === undefined) return false;
+  const pattern = grammarSpecFor(kind).testFilePattern;
+  return pattern !== undefined && pattern.test(pathName);
+}
 
 export const isTestDeclaration = (row: OstracisedRow): boolean =>
-  TEST_PATH.test(row.path);
+  isTestPath(row.path);
 
 const METHOD_LABEL: Record<ExcursionMethod, string> = {
   git_revert: "revert",
@@ -203,13 +228,7 @@ export async function ostracised(
   until: string,
   filter?: { strength?: ExcursionStrength; includeTests?: boolean },
 ): Promise<string> {
-  if (!existsSync(dbPath)) {
-    mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
-    const schema = readFileSync(new URL("../../db/schema.sql", import.meta.url), "utf8");
-    const init = new DatabaseSync(dbPath);
-    init.exec(schema);
-    init.close();
-  }
+  openIndexDatabase(dbPath).close();
 
   await verifyParserAdapters();
   const gitReport = indexGit(repo, { dbPath, until });

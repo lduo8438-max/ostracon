@@ -22,6 +22,7 @@ import { exportStaticSite } from "../src/ui/export.ts";
 import { declarationScopeOf } from "../src/index/repo-pass.ts";
 import { PAGE } from "../src/ui/page.ts";
 import { sha256 } from "../src/evidence/span.ts";
+import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 /** SQLite 的字串字面量是單引號；雙引號會被當成識別子。 */
 const lit = (text: string) => `'${text.replaceAll("'", "''")}'`;
@@ -45,8 +46,7 @@ function fixtureDb(): string {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
   const rev = (id: number, commit: number) =>
-    `(${id}, 1, ${commit}, 1, 1, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-      'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`;
+    revisionValues({ id, commitId: commit });
   db.exec(
     `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
      INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
@@ -58,11 +58,8 @@ function fixtureDb(): string {
        VALUES (1, 1, 1, 'cappedFetch', 'function');
      INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
        VALUES (1, 1, '${K1}', 1);
-     INSERT INTO revision
-       (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-        byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-        hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-        node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+     ${INSERT_CONTENT_FIXTURE}
+     INSERT INTO revision ${REVISION_COLUMNS}
      VALUES ${rev(1, 1)}, ${rev(2, 2)};
      INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
        VALUES (1, 1, 1, 1, 'shape'), (2, 2, 2, 1, 'raw');
@@ -329,10 +326,7 @@ describe("整批理由要標示而不是收回", () => {
     for (let i = 1; i <= n; i++) {
       slots.push(`(${i}, 1, 1, 'sym${i}', 'function')`);
       entities.push(`(${i}, 1, 'k${i}', 1)`);
-      revs.push(
-        `(${i}, 1, 1, ${i}, ${i}, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-          'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`,
-      );
+      revs.push(revisionValues({ id: i, commitId: 1, slotId: i, entityId: i }));
       changes.push(`(${i}, ${i}, 1, ${i}, 'shape')`);
     }
     db.exec(
@@ -345,11 +339,8 @@ describe("整批理由要標示而不是收回", () => {
          VALUES ${slots.join(",")};
        INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
          VALUES ${entities.join(",")};
-       INSERT INTO revision
-         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+       ${INSERT_CONTENT_FIXTURE}
+       INSERT INTO revision ${REVISION_COLUMNS}
        VALUES ${revs.join(",")};
        INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
          VALUES ${changes.join(",")};
@@ -546,13 +537,9 @@ describe("被推翻的做法：清單、數字、時間軸必須一致", () => {
          VALUES (2, 1, 1, 'App.render', 'function');
        INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
          VALUES (2, 1, '${K2}', 1);
-       INSERT INTO revision
-         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
-       VALUES (3, 1, 1, 2, 2, 1, 'src/__tests__/a.spec.ts', 'b', 0, 1, 1, 2,
-               'r','t','a','as','sh','p', 30, 10, 'exact', x'00');
+       INSERT INTO revision ${REVISION_COLUMNS}
+       VALUES ${revisionValues({ id: 3, commitId: 1, slotId: 2, entityId: 2,
+                                 path: "src/__tests__/a.spec.ts" })};
        INSERT INTO revision_change
          (id, prev_revision, commit_id, entity_id, change_level)
          VALUES (3, 3, 2, 2, 'death');
@@ -670,6 +657,38 @@ describe("對外身分是 stable_key，不是 rowid", () => {
     assert.match(PAGE, /function clearSelection\(\)/);
     // 初始提示只有一份文字，HTML 與 clearSelection 共用同一個常數。
     assert.equal((PAGE.match(/Select a declaration from the left\./g) ?? []).length, 1);
+  });
+
+  /**
+   * 時間軸的深連結（`#<stable_key>`）。
+   *
+   * **這一組是原始碼層級的釘樁，不是行為驗證**——`page.ts` 是一段送到瀏覽器的
+   * 字串，node 這一端執行不了它。這個檔案既有的做法就是這樣：捲動同步那兩個
+   * bug 是在 Chrome 上抓到的，測試是事後補上去防止它們無聲回來。
+   *
+   * 資料那一半驗得到，而且驗過了：`Dep.ts:hasBit` 只出現在
+   * `ostracised.json`、不在 `entities.json`，所以深連結必須切到 gone tab。
+   */
+  it("**深連結用 stable_key，而且兩個入口共用同一段切換**", () => {
+    // 對外身分一律是 stable_key（不變量 1）：rowid 會隨全量重建漂移，
+    // 而舊網址在重建後可能成功回傳另一個 entity——那比 404 難發現得多。
+    assert.match(PAGE, /function openFromHash\(\)/);
+    assert.match(PAGE, /location\.hash/);
+    // 首次載入與之後改網址都要能用。
+    assert.match(PAGE, /addEventListener\("hashchange"/);
+    assert.match(PAGE, /await openFromHash\(\);/);
+    // 要找的宣告可能只在「被推翻的做法」那份名單裡，必須先切 tab。
+    assert.match(PAGE, /switchTab\("gone"\)/);
+    // 切 tab 的邏輯只有一份：按鈕與深連結共用。兩份的話遲早分岔。
+    assert.match(PAGE, /function switchTab\(which\)/);
+    assert.equal((PAGE.match(/\$\("tab-gone"\)\.setAttribute/g) ?? []).length, 1);
+  });
+
+  it("**選取會更新網址，但不得堆積上一頁**", () => {
+    // 時間軸要可分享；用 replaceState 而不是 pushState——在左欄點十條宣告
+    // 不該在上一頁堆十筆。
+    assert.match(PAGE, /history\.replaceState\(null, "", "#" \+ encodeURIComponent\(stableKey\)\)/);
+    assert.doesNotMatch(PAGE, /history\.pushState/);
   });
 });
 

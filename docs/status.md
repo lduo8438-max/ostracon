@@ -56,14 +56,16 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/git/hunks.ts` | **純函式**：unified diff parser、路徑去引號、hunk 掛回 | 嚴格狀態機，見 `plan-diff-hunk.md` |
 | `src/git/lineage.ts` | **純函式**：`CommitRecord[]` → 路徑血緣 | 不碰 git、不碰 DB |
 | `src/git/types.ts` | 走訪、檔案變更與血緣的共用型別 | |
-| `src/git/persist.ts` | 走訪層的 SQLite persistence | 含 FTS5 探測、增量水位線、血緣狀態載入、`file_hunk` 寫入 |
+| `src/git/persist.ts` | 走訪層的 SQLite persistence | 含 FTS5 探測、增量水位線、血緣狀態載入、`file_hunk` 寫入、`openIndexDatabase` 與 schema 版本守門 |
 | `src/git/index.ts` | 編排 + 增量 | force push 偵測（水位線非祖先即拒絕並要求重建） |
 | `src/ast/types.ts` | `SynNode` 介面與 `LanguageProfile` | 欄位是 `startIndex`/`endIndex`（UTF-16），另有 `utf8ByteRange` 轉換 |
 | `src/ast/hash.ts` | **純函式**：四層雜湊、S-expression、`changeLevel` 查表 | |
 | `src/ast/bindings.ts` | **純函式**：區域繫結收集 | |
-| `src/ast/profiles/typescript.ts` | 全部 grammar 相依知識 | 加語言＝加一份剖面 |
+| `src/ast/profiles/typescript.ts` | TypeScript／TSX 的全部 grammar 相依知識 | 加語言＝加一份剖面 |
+| `src/ast/profiles/python.ts` | Python 的剖面 | **存在的理由是驗證架構不寫死單一語言**，不是產品支援 |
+| `src/ast/languages.ts` | 語言註冊表：副檔名 → wasm → 剖面 | 加語言只該改這裡加一份剖面；副檔名重複登記直接拋錯 |
 | `src/ast/adapter.ts` | tree-sitter → `SynNode` + `verifyAdapter` | 已通過真實驗證 |
-| `src/ast/parser.ts` | grammar 載入、TS/TSX 路由、解析與啟動驗證 | |
+| `src/ast/parser.ts` | grammar 載入、解析與啟動驗證 | 每份登記的 grammar 都必須有探測，缺一個就啟動失敗 |
 | `src/match/ladder.ts` | **純函式**：L1–L5 匹配階梯（含 L3b、L3c）與「本檔新生」排除 | 兩者都需呼叫端提供 `hunksByLineage`，省略時皆不啟用 |
 | `src/match/position.ts` | **純函式**：hunk 位移回推、純新增 hunk 判定 | L3c 與「本檔新生」的證據來源 |
 | `src/match/signature.ts` | n-gram、MinHash、精確 Jaccard | |
@@ -73,6 +75,7 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/index/repo-pass.ts` | 全 repo 結構索引；候選池涵蓋一次改動的所有檔案 | L5 唯一能成立的條件；水位線 `pass_name = 'declarations'` |
 | `src/cli/why.ts` | `why <path>:<symbol>` 時間軸查詢與呈現 | stated／linked 視覺分層；linked 依 provenance root 查詢時去重；`--full` 時觸發並呈現 excursion；已刪路徑走 `lineagesEverAt` fallback |
 | `src/cli/ostracised.ts` | 被推翻的做法清單 | `pnpm ostracised`；一律全 repo pass，scope 不符即拒印 |
+| `src/cli/hotspots.ts` | 攪動熱點：被重構最多次的宣告 | 只算 `shape`；entity 層級而非檔案層級（檔案級 `git log` 就有）；測試檔沿用 `isTestPath` |
 | `src/evidence/span.ts` | **純函式**：span 斷言（零寬容、零 LLM、零 IO） | 信譽架構的基石；突變測試驗證過會咬 |
 | `src/evidence/extract.ts` | **純函式**：規則式理由抽取、issue 參照抽取 | linked Markdown 模式排除 code fence／引用行，不放寬因果標記 |
 | `src/evidence/store.ts` | stated／linked 文件抽取；候選驗證後才升格 `evidence` | 零網路；兩種 tier 共用 staging 與 span 驗證 |
@@ -101,6 +104,625 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 **把核心邏輯寫成純函式（不吃 git、不吃 tree-sitter、不吃 DB）是刻意的架構決定**，
 已多次兌現：npm 被封鎖時仍能完整測試雜湊層；一個跨批次血緣的嚴重 bug 只有純函式
 的單元測試踩到，整合路徑剛好繞過了它。
+
+### 加 Python：三個寫死的 TypeScript 假設 + 一個死旗標（2026-08-22）
+
+W5 的第一項。**目的不是支援 Python，是驗證「加新語言＝新增一份剖面」這句話成立。**
+它在 W1 就寫在 `types.ts` 的註解裡，但只在 TypeScript 與 TSX 上驗過——而那兩份
+共用同一個 npm 套件、同一份 grammar 設計。實際加上第三種語言之後，那句話當時
+並不成立，四個缺陷全部屬於本專案追了整個 W2–W4 的同一型：**宣稱支援兩種東西，
+只驗了其中一種。**
+
+| # | 缺陷 | 症狀 |
+|---|---|---|
+| 1 | `adapter.ts` 用字面值判斷「值是函式才算宣告」 | `variable_declarator` / `value` / `arrow_function` 四個 TS 專屬字串寫在語言中立層 |
+| 2 | `preservedIdentifierTypes` 依**型別**保護屬性名 | Python 的 `self._d` 的 `_d` 是普通 `identifier`，於是 `self._data` 改成 `self._cache` **alpha 雜湊相等**——真實改動被歸類成「沒有改動」 |
+| 3 | `parser.ts` 的 `grammar === "tsx" ? tsxProfile : typescriptProfile` | 第三種語言會被**靜默**判成 TypeScript：型別檢查過得去，雜湊用錯剖面照樣算得出數字 |
+| 4 | `BindingRule.destructuring` 是死旗標 | 註解說它會遞迴進解構模式，但 `harvest` 兩個分支都會遞迴進全部子節點。對 `src/` 437 個宣告與 create-t3-app 213 個宣告實測，開不開差異 **0** |
+
+修法：`profile.valueBearingDeclarations`、`profile.preservedFields`（依欄位保護）、
+語言註冊表 `src/ast/languages.ts`、把死旗標換成真正需要的反向軸 `directOnly`
+（Python 的 `parameters` 少了它會把型別註記收成繫結，`def f(x: int)` 與
+`def f(x: str)` 的 alpha 雜湊會相等）。
+
+**驗收是雙向的，兩邊都要成立。**
+
+- **TypeScript 逐位元不變**：四套語料合計 **5,222 筆 revision** 的
+  `hash_raw/token/alpha/alpha_self/shape` 與 `shape_profile` 指紋前後完全相同
+  （osiris 1,582 `934d9efbbba1d567`、create-t3-app 3,606 `e591acbce0d88120`、
+  vue-core 2 `e86b2c111792953a`、controlled 32 `3218f7d9312490d1`），
+  四套黃金測試集全數 pass、測試 387 → 414。
+- **新機制確實在做事**：把 `preservedFields` 與 `directOnly` 分別拿掉之後，
+  對應的語意改動立刻變成看不見。**機制若拿掉也照樣通過，它就是下一個死旗標**——
+  第 4 項就是這樣被抓到的，所以這一步不能省。
+
+Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3 分 04 秒）：
+
+| 指標 | 值 |
+|---|---|
+| revision | 148,184（`python/0.25.0/sexp-1.0.0`） |
+| entity | 3,406 |
+| 匹配階梯 | L1 143,918／L2 753／L3 2／L3b 17／L3c 11／L4 71／L5 21 |
+| change_level | none 136,056／shape 5,753／birth 3,114／death 2,254／alpha 1,618／raw 1,184／token 31 |
+| ostracised | A 確證 988／C 疑似 512（另 200 條在測試檔） |
+
+**匹配器、雜湊、圖遍歷、增量索引沒有任何一處因為換語言而改動。** `ostracon why`
+在 Python 符號上也直接跑得通（`requests/models.py:PreparedRequest.prepare_body`，
+311 次改動，且正好走到「路徑在 HEAD 已不存在，fallback 到血緣」那條路徑）。
+
+#### 三個還沒修的，都已量過
+
+1. **裝飾器不在實體邊界內**（第二刀已修，見下一節）。
+2. **docstring 進 token 層、JSDoc 不進**：同一個「只改說明文字」的動作在兩個
+   語言被分到不同的 `change_level`。`commentTypes` 是型別集合，表達不了「區塊
+   開頭的字串字面值」這種位置相依概念。**仍未修**，有測試釘住目前行為。
+3. **`ostracised` 的測試檔判準是 TS 慣例**（第二刀已修，見下一節）。
+
+#### 相依論證
+
+`tree-sitter-python@0.25.0` 是新的執行期相依，而「不增加執行期相依」是禁令，
+所以要論證：
+
+- **形狀與已接受的 `tree-sitter-typescript` 完全相同**：同樣的 `install:
+  node-gyp-build`、同樣的 `node-addon-api` / `node-gyp-build`、同樣把
+  `tree-sitter` 列為 optional peer。不引入任何新種類的安裝步驟。
+- **pnpm 實測不跑建置腳本**（`Ignored build scripts`），沒有原生編譯。
+- **裝起來 7.2 MB**，其中 wasm 458 KB；對照 `tree-sitter-typescript` 的 37 MB。
+- 解析走 `import.meta.resolve` 拿 wasm，與 TS 同一條路徑，封裝後位置照樣解得到。
+
+**這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
+移除它只要刪一份剖面與註冊表裡的一列。
+
+### 時間軸的深連結，與 demo 的精選案例（2026-08-23）
+
+`duration_days` 改用 `committed_at` 之後，vuejs/core 的第一個畫面換人了：原本
+是 reactivity 的位元旗標追蹤（`hasBit` / `setBit` …），現在是 `ast.ts` 的兩個
+codegen 型別。舊的那組說得出一個故事，新的訊噪比明顯較差——**「0 天」那一桶
+從 100 條變成 137 條，位元旗標那五條被擠到第 37–41 名。**
+
+**處理方式是明示的精選入口，不是替 0 天那一桶加 tie-break（作者裁定）。**
+理由是判準本身該保持乾淨：想講哪個故事就直接指名，用隱性的排序規則去救特定
+案例的話，排序規則會被「哪一條該在最上面」綁架——而那是編輯的選擇，不是資料
+的性質。`ostracised.ts` 的註解也一併改了：它原本把那兩個例子當成穩定事實引用。
+
+為此補上**時間軸的深連結**（`#<stable_key>`）。這不是為 demo 開的特例，是任何
+一條時間軸本來就該有的可分享網址：
+
+- 網址用 `stable_key` 不是 rowid（不變量 1）——rowid 會隨全量重建漂移，
+  而舊網址在重建後**可能成功回傳另一個 entity**，比 404 難發現得多。
+- 目標可能只在「被推翻的做法」那份名單裡（`hasBit` 正是如此），所以要先切 tab，
+  否則右邊開了時間軸、左邊沒有任何 `aria-current` 列。切 tab 的邏輯與按鈕共用
+  同一段 `switchTab`，不各寫一份。
+- 選取時用 `replaceState` 不是 `pushState`：在左欄點十條不該在上一頁堆十筆。
+
+**驗證的邊界要說清楚。** `page.ts` 是一段送到瀏覽器的字串，node 這端執行不了它，
+所以測試是原始碼層級的釘樁——這個檔案既有的做法就是這樣（捲動同步那兩個 bug
+是在 Chrome 上抓到的，測試是事後補的）。**資料那一半驗得到而且驗過了**：
+`Dep.ts:hasBit` 只出現在 `ostracised.json`、不在 `entities.json`，所以深連結
+必然要走切 tab 那條分支。
+
+**瀏覽器那一半已由作者在 Chrome 上實測通過（2026-08-23）**：冷開深連結會自動
+切到「被推翻的做法」、`hasBit` 那列反白並捲到視野中央、右邊兩列時間軸、
+意圖欄空白——與預期一致。**訪客實際會走的路徑（全新分頁冷啟動）是驗過的那一條。**
+
+一次觀察到、但不重現為缺陷：把深連結貼進**已經開著的舊分頁**接管時，左欄曾停在
+頂端而沒有捲到該列；同一個網址重新載入、以及全新分頁冷啟動都穩定置中。
+記在這裡是因為這個專案的習慣是寫下看到的東西，**不是因為它是待辦**——
+作者已裁定不改程式。
+
+精選卡上的每一句都對照過匯出的 JSON：A 級／`inverse_diff`／誕生與移除都在
+2021-07-16／時間軸剛好兩列／兩段引文逐字相符／**兩列的意圖欄都是空的**
+（這兩顆 commit 沒有因果標記，抽取器一條都沒抽到）。所以卡片明說那是 commit
+主旨的逐字引用，不是抽取出來的理由——**這條的故事由結構說完，不靠文字**，
+那反而更貼近這個工具的賣點。
+
+### 第一個沒碰過的語料：nestjs/nest（2026-08-23）
+
+前面所有量測都集中在同四套語料上，而這個專案最擅長咬自己的地方就是
+「只驗了其中一種」。所以挑一個沒碰過的中型 repo 跑完整鏈路。
+
+**選材是量出來的。** 先量四套既有語料在哪些軸上全部落在同一側：改名率
+（0.22%／4.42%／0.95%／1.78%）與 merge 率（2.0%／5.4%／24.8%／0.4%）都已經
+兩側都有，**只有規模全部 ≤ 7,156 commit**——而 README 公開宣稱的是一萬 commit。
+nestjs/nest 是 21,648 commit（3 倍）、純 TypeScript、42.8% merge（比 requests
+的 24.8% 更極端），一次測兩條軸。
+
+它抓到兩件事，**其中一件是我自己前一天犯的**。
+
+#### 一、「成本的計價單位是 revision」是錯的
+
+**nest 與 psf/requests 的 revision 數只差 2.4%（144,746 對 148,199），索引時間
+卻差一倍**（203.5 秒對 100.1 秒）。差別在 commit 數：21,648 對 6,491。
+這個反證不需要任何模型。
+
+回頭用當時手上的數字重算，錯在哪很清楚：
+
+| | ms/commit 離散度 | ms/revision 離散度 |
+|---|---:|---:|
+| 內容定址之前 | 6.4 倍 | **2.0 倍** |
+| 內容定址之後 | 3.7 倍 | **3.5 倍** |
+
+軸的判定是用**內容定址之前**的量測做的。內容定址砍掉的是每列的寫入成本
+（634 bytes、三條大索引），那全部落在 revision 那一側；每 commit 的走訪與交易
+成本幾乎沒動。於是 revision 軸原有的優勢被抹平。而 `roadmap.md` 當時寫的是
+「內容定址讓兩個常數一起降下來，**沒有改變哪個變數在驅動成本**」——
+**那句話是錯的，用當時的數字就能算出來，不需要新語料。nest 只是讓我回頭去算。**
+
+正確的模型是兩項：`5.86 ms/commit + 0.53 ms/revision`（以 nest 與 vue 解，
+對 t3 與 requests 誤差 16–17%，對 osiris 低估 66%——99 個 commit 攤不掉固定成本）。
+一萬 commit 依密度落在 1.5–4.0 分鐘。`roadmap.md` §3 與 README 都已改。
+
+#### 二、`ostracised` 的第一個畫面在印倒著走的日期
+
+nest 的第一條 A 級印著「**0 天　2023-02-01 → 2023-01-06**」——死亡日期早於誕生。
+
+根因：`duration_days` 用 `authored_at` 相減，而 author 時間與「commit 進入這份
+歷史的時間」是**兩個時鐘**。長命 PR、cherry-pick、rebase 都會讓它們脫鉤，
+相減可以是負的，再被 `Math.max(0, …)` 夾成 0。**而清單由短到長排序，所以那些列
+坐在第一個畫面的最上面。**
+
+不是 nest 獨有——**vuejs/core 的 A 級前十名有十條是這種**，那正是線上 demo
+顯示的東西。它活到現在是因為顯示被夾成「0 天」，沒有人看日期。
+
+兩個方向都量過（A 級）：
+
+| 語料 | authored 倒轉 ／ 不到半天 | committed 倒轉 ／ 不到半天 |
+|---|---|---|
+| vuejs/core（710） | **12** ／ 100 | **0** ／ 137 |
+| nestjs/nest（1,955） | **1** ／ 129 | **0** ／ 137 |
+| create-t3-app（102） | 0 ／ 5 | 0 ／ 5 |
+| osiris（94） | 0 ／ 70 | 0 ／ **70（一樣）** |
+
+**舊註解擔心的「Osiris 會變成 0 天」實測不成立**：它在兩種算法下都是 70/94 落在
+半天內。真正的代價是 vue 多 37 條進入「不到半天」那一桶，而那些本來就是短命的——
+解析度變粗，不會變成謊話。
+
+改用 `committed_at`（迂迴演算法 1.1.0 → 1.2.0），顯示日期一併改成同一個時鐘。
+**迂迴的條數與強度分佈完全不變**（vue 1,285 條、A 710／C 575），只有 duration
+與顯示日期變了。測試釘住：把它改回 `authored_at` 會紅。
+
+### 發布收斂：封裝冒煙測試與 README 的實測缺口（2026-08-23）
+
+W6 的第一刀。兩件事，都只有真的跑一次才知道。
+
+**一、封裝。** 這一輪把讀 `db/schema.sql` 的程式碼從 `cli/` 搬到 `git/persist.ts`
+（`openIndexDatabase`）。`../../db/schema.sql` 在 `dist/git/` 與 `dist/cli/` 下的
+深度剛好一樣，所以沒壞——**但那是巧合不是保證**。實際打包驗過：`pnpm build` →
+`npm pack`（267.7 KB）→ 在封裝外 `npm install` → 執行，`why` 與 `hotspots` 都跑得通
+（後者對 ostracon 自己的 repo 索引 1.76 秒）。CI 的冒煙測試因此多一條
+`hotspots`：`why` 走快路徑、`hotspots` 走全 repo pass，兩者的失敗方式不同。
+
+**二、README 的四處過期宣稱。** 其中一處是我自己的量測推翻的：
+
+| 位置 | 原本 | 現在 |
+|---|---|---|
+| 測試數 | 310 | 427 |
+| 效能 | 「線性外推一萬 commit 約 1 分鐘」 | 改為每 revision 計價的三語料表 |
+| 語言 | 「只支援 TypeScript」 | 與下方 Python 段落矛盾，改為「產品意義上」 |
+| Python revision 數 | 148,184 | 148,199（今日實測） |
+| docstring | 「算 token 級改動」 | **實際是 `alpha` 級**——黃金案例量到的 |
+
+**「一萬 commit 約一分鐘」錯的不只是數字，是形式**（見 §成本控制重新定義）。
+README 現在給的是三套語料的 commit／revision／時間／峰值 RSS／索引體積，
+並明說「要估你自己的 repo，估 revision 數不要估 commit 數」。
+
+docstring 那一條是文件與實作分岔：單元測試講的是「docstring 進 token 層」
+（意思是 token 層不剝掉它），README 把它寫成「算 token 級改動」，
+而使用者看到的 `change_level` 是 `alpha`。兩者差一級。
+
+峰值 RSS 這一輪新量（先前 README 只有 create-t3-app 一筆）：
+
+| 語料 | commit | revision | 秒 | 峰值 RSS | 索引體積 |
+|---|---:|---:|---:|---:|---:|
+| create-t3-app | 1,378 | 3,606 | 8.6 | 443 MiB | 4.5 MB |
+| psf/requests | 6,491 | 148,199 | 100.1 | 873 MiB | 52.5 MB |
+| vuejs/core | 7,156 | 233,665 | 165.8 | 1,175 MiB | 93.1 MB |
+
+**記憶體是以 revision 計價的第三個維度**（大語料 5–6 KB／revision）。
+一個七千 commit 的 repo 要 1.2 GB RSS，那是安裝前該知道的事。
+
+### 從零 clone 跑一次（2026-08-23）
+
+W6 的「陌生人安裝路徑」。**在本機重跑不算數**——本機有 `node_modules`、有語料、
+有半年份的 `.db`，任何「忘了進版控」或「只有我這台有」的東西都看不見。
+
+從 GitHub clone 分支到全部驗證通過，逐步實測：
+
+| 步驟 | 耗時 | 結果 |
+|---|---:|---|
+| `git clone`（單一分支） | 4.7 s | 工作區 2.5 MB、`.git` 940 KB |
+| `pnpm install` | 2.6 s | 三個 tree-sitter 套件，**沒有原生編譯**（`Ignored build scripts`，如設計） |
+| `pnpm corpus:fetch` | 35.3 s | 五套語料全抓齊並驗過 HEAD |
+| `pnpm test` | 19.5 s | 427/427 |
+| 五套黃金測試集 | 18.4 s | 全過，baseline 閘門 exit 0 |
+| `pnpm build` | 0.6 s | `dist/cli` 八支 |
+
+**README 只叫人跑 osiris 那一套，實測 5.4 秒。** 從 clone 到「自己確認 33/33 是
+真的」大約一分鐘，其中三分之二是抓語料。
+
+產品路徑也照 README 的範例原樣跑過：`why 'src/app/page.tsx:Dashboard.fetchEndpoint'`
+（README 寫的那個符號，在抓回來的 osiris 上真的存在，印出 4 個實體與斷層提示）、
+`ostracised`（94 條 A 級，與文件一致）、`hotspots`。
+
+**沒有找到阻斷問題。** 一個確認：`fixtures/osiris.yaml` 指向的
+`simplifaisoul/osiris` 是公開 repo，陌生人抓得到——那是整條驗證鏈裡唯一一個
+「作者自己的 repo」，如果它是私有的，README 的「不要相信它，自己跑一次」
+就是一句做不到的話。
+
+### architecture.md 的一致性掃描（2026-08-23）
+
+`README.md` 那處「docstring 算 token 級」的轉述失真**在 architecture.md 有一份
+一模一樣的**。四個組合都實測過：
+
+| 動作 | change_level |
+|---|---|
+| Python 只改 docstring | **`alpha`** |
+| Python 只改 `#` 註解 | `raw` |
+| TypeScript 只改 JSDoc 內文 | `raw` |
+| TypeScript 只改 `//` 註解 | `raw` |
+
+**差兩級，不是一級。** 來源是單元測試那句「docstring **進** token 層」
+（意思是 token 層不剝掉它）被轉述成「**算** token 級改動」——一字之差降了一級，
+然後被複製到兩份文件。說明限制的句子本身失真，比限制本身更糟。
+
+其餘四處：`revision.hash_alpha_self` 與 `revision.minhash` 的表名（schema v2
+起在 `declaration_content`）、CI 冒煙測試現在跑兩支、靜態匯出那一節的
+「284 MB 的 SQLite」（現在同一份索引是 93 MB）。最後一處**結論沒有變**，
+更新它是為了不讓過期的量測繼續替一個仍然正確的決定背書。
+
+**補上內容定址那一節。** 這是這一段最大的資料模型決定，先前只寫在
+`plan-content-addressed.md` 與這份 status，而 `architecture.md` 才是「規則背後的
+定義與理由」該去的地方。
+
+### 攪動熱點：先量過才決定要不要做（2026-08-22）
+
+W5 的最後一項。動手前先回答一個問題：**這個功能有沒有可能只是重做 `git log`。**
+
+實測 vuejs/core，兩種排法排**檔案**：
+
+| 排法 | 前三名 |
+|---|---|
+| 依全部 `revision_change` 列（含 `none`） | renderer.ts 18,349／compileScript.ts 12,828／component.ts 10,399 |
+| 只算 `shape` | renderer.ts 805／createRenderer.ts 503／compileScript.ts 498 |
+
+**top-10 重疊 8/10、top-20 重疊 16/20**——在檔案層級上，「攪動」怎麼算幾乎不影響
+答案，而檔案的 commit 次數 `git log` 直接給得出來。**所以檔案級的熱點視圖不做。**
+
+entity 層級是另一回事。同一份語料，攪動最高的 15 個宣告分佈在 **12 個檔案**，
+而且 `renderer.ts` 一個檔案裡有**三個獨立熱點**（`baseCreateRenderer` 212 次、
+`createRenderer` 193 次、`baseCreateRenderer.mountComponent` 66 次）。檔案級視圖
+把它們併成一列，於是「這個兩千行的檔案裡到底是哪一段一直在變」永遠答不出來。
+這是 git 給不出來的東西，所以值得做。
+
+#### 三個判準，都是量出來的
+
+1. **只算 `shape`。** vue 有 88.5% 的 `revision_change` 是 `none`。`createRenderer`
+   有 480 列改動、其中只有 193 次真的動到結構——**那個比值本身是資訊**，
+   所以兩個數字都印。
+2. **排序用絕對次數，不用速率。** 「結構改動／天」看起來更公平，實測是小分母
+   陷阱：`createRenderer.processSuspense` 9 次 ÷ 52 天 = 每年 63 次，會排在
+   `compileScript` 217 次之上。存活天數是屬性不是門檻，印出來讓人自己判斷
+   （與 `ostracised` 對 `duration_days` 的處理一致）。
+3. **排名不是「最老的程式碼」**——這件事會讓整支指令變成廢話，所以量過：
+   依結構次數排的前 20 名與依存活天數排的前 20 名**只重疊 3 個**。
+
+測試檔沿用 `ostracised` 那一份 `isTestPath`，不另寫。斷層密度與迂迴密度在 vue 上
+都被 `.spec.ts` 主導（`Suspense.spec.ts:setup` 被置換 4 次，那只是每個 `it()` 各寫
+一個同名 `setup`），攪動也有同樣的問題。vue 隱藏 269 條、requests 隱藏 438 條，
+標頭都會報數量。
+
+#### 一道自己造的假閘門，當場修掉
+
+「排序是絕對次數不是速率」第一版寫成對 `renderHotspots` 斷言——**而排序發生在
+SQL，純函式只是照著印**。把 `ORDER BY` 改成速率之後那條測試照樣通過。改成對
+`listHotspots` 用手寫 fixture 斷言之後才會咬。四個判準現在各自驗過會紅。
+
+同一輪還被前提檢查抓到一個測試自己的錯：把註解加在函式**外面**時，宣告的位元組
+範圍完全沒變，`change_level` 是 `none` 而不是 `raw`——那樣測試只證明了「沒動的
+不算」，證明不了「只改註解的也不算」。
+
+### 內容定址：資料庫小三倍，索引快四成（2026-08-22，schema v2）
+
+設計與取捨在 `plan-content-addressed.md`。這裡只記前後數字。
+
+**體積**（同一台機器、同一份語料、各一次全 repo pass）：
+
+| 語料 | 前 | 後 | |
+|---|---:|---:|---:|
+| psf/requests | 181.2 MiB | **52.5 MiB** | −71.0% |
+| vuejs/core | 279.0 MiB | **93.1 MiB** | −66.6% |
+
+`revision` 表加索引在 requests 上從 **157.1 MB（86.7%）降到 19.5 MB（37.1%）**，
+新增的 `declaration_content` 是 8.9 MB（11,001 列）——兩者合計 28.4 MB，
+比原本那一張表少 **82%**。現在最大的兩塊換成 `revision_change`（11.4 MB）與
+`revision_match`（7.8 MB），都不在這次的題目裡。
+
+**時間**（這是意料之外的收穫，不是目標）：
+
+| 語料 | 前 | 後 | |
+|---|---:|---:|---:|
+| psf/requests | 180.8 s | **100.7 s** | −44% |
+| vuejs/core | 293.6 s | **170.0 s** | −42% |
+
+每列少寫約 634 bytes、三條大索引少維護，寫入 I/O 直接反映在時間上。
+每 revision 的成本因此從 1.22–1.26 ms 降到 **0.68–0.73 ms**、
+從 1.24–1.25 KB 降到 **0.36–0.41 KB**。預算已在 `roadmap.md` §3 更新
+（一萬 commit 由 6.9 分鐘變 4.0 分鐘）。
+
+**驗收的重點不是變小，是沒變。**
+
+- **四套 TypeScript 語料 5,222 筆 revision 的雜湊指紋，解碼後與改動前逐位元相同**
+  （osiris 1,582 `5a32a4e9402dec0f`、controlled 32 `98428935e3a251d2`、
+  create-t3-app 3,606 `fe4cae454f2da698`、vue-core 2 `0ebd96df5d8fa257`）。
+  雜湊**值**沒有改變，改變的只是它存在哪裡、用幾個位元組存。
+- **迂迴偵測的語意不變**：requests 1,701 條（A 1,079／C 622）、vue 1,285 條
+  （A 710／C 575），前後完全相同，`stable_key` 集合也相同。這條要特別驗，
+  因為搬移守門的查詢方向被換掉了（改成從內容表出發再 join 回 revision）。
+- 五套黃金測試集全過，測試 421 全過。
+
+**踩到一個會靜默壞掉的地方**：迂迴的 A 級判準是 `firstRaw === lastRaw`，
+而 BLOB 從 SQLite 讀出來是 `Uint8Array`——`===` 在上面是**參照**比較，兩個內容
+相同的緩衝區也會不相等，整個 A 級會靜默歸零。修法是查詢端用 `hex()` 讓它仍是
+字串。**型別檢查抓不到這個**（兩邊都是 `string` 或都是 `Uint8Array` 都過得了），
+是寫的時候想到才擋下來的。
+
+**代價**：schema 換版，所有既有資料庫都要重建。`schema_migration` 那張表從 v0.5
+起就存在卻從來沒有任何程式讀寫過，這次啟用它——否則舊資料庫的失敗方式會是
+`no such column: content_id`，而那個訊息不會告訴任何人原因。建庫邏輯原本在
+`why.ts` / `ostracised.ts` / `materialize.ts` 各抄一份，一併收斂成
+`openIndexDatabase`。
+
+### 成本控制重新定義：計價單位是 revision（2026-08-22 量測）
+
+W5 排程上的「成本控制」原本指的是 LLM token。**零 LLM 之下那一項早就由四層雜湊
+階梯兌現了**（`hash.ts` 的註解就這麼寫），所以先量清楚真實成本落在哪裡，再決定
+要不要做、做什麼。四套語料在同一台機器同一輪跑完：
+
+| 語料 | commit | entity | revision | 秒 | ms/commit | ms/entity | ms/rev | KB/rev |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| osiris | 99 | 307 | 1,579 | 4.2 | 42.6 | 13.7 | 2.67 | 1.95 |
+| create-t3-app | 1,378 | 405 | 3,606 | 8.8 | 6.4 | 21.8 | 2.45 | 2.30 |
+| psf/requests | 6,491 | 3,409 | 148,199 | 180.8 | 27.8 | 53.0 | **1.22** | **1.25** |
+| vuejs/core | 7,156 | 6,561 | 233,665 | 293.6 | 41.0 | 44.7 | **1.26** | **1.24** |
+
+**時間與空間是同一個軸。** 三套真實語料的離散度：ms/commit 6.4 倍、ms/entity
+2.4 倍、ms/revision 2.0 倍；兩套大語料的 ms/rev 只差 3%、KB/rev 只差 1%。
+小語料那兩筆 2.4–2.7 ms 是固定成本攤不掉，不是單位成本較高。
+
+這同時回答了 §效能外推的變數可能挑錯了（2026-08-17）留下的問題：**方向對了
+（commit 是壞軸），但答案不是 entity 而是 revision。** 每 commit 的 revision 數
+在四套語料之間差 12.6 倍（2.6／15.9／22.8／32.7），那就是 commit 軸失準的全部原因。
+預算已在 `roadmap.md` §3 重新表述。
+
+#### 索引體積的組成：90% 的 revision 列在存重複內容
+
+`dbstat` 逐表量測（psf/requests 181.2 MB／vuejs/core 283.7 MB）：
+
+| 佔比 | requests | vue |
+|---|---:|---:|
+| `revision` 表 + 它的索引 | **86.7%** | **85.9%** |
+| `revision_change` + 索引 | 6.3% | 5.8% |
+| `revision_match` + 索引 | 4.3% | 4.4% |
+
+`revision` 每列欄位內容約 692 bytes，其中：
+
+| 欄位 | 每列 bytes | 佔內容 |
+|---|---:|---:|
+| `exact_ngram_hashes` | 205 | 28.3% |
+| 五個雜湊（各 64 字元 hex） | 320 | 44.0% |
+| `blob_sha`（40 字元 hex） | 40 | 5.5% |
+| `signature` ／ `minhash` ／ `shape_profile` | 35／30／24 | 12.3% |
+| 位置與外鍵（byte/line/id） | 約 30 | 4% |
+
+**而相異的 `hash_raw` 只有 7.4%（requests）與 9.7%（vue）。** 也就是說九成以上的
+列，那 634 bytes 的內容衍生欄位與另一列逐位元相同——差別只在 commit、路徑與位置
+（位置確實會變，同一段程式碼會因為檔案別處的改動而位移，所以不能直接刪列）。
+
+三個可能的方向，估算值都由上面的量測直接推出：
+
+1. **內容定址**：把內容衍生欄位抽到以 `hash_raw` 為鍵的表，`revision` 只留 id、
+   位置與外鍵。requests 的內容 102.6 MB → 約 18.6 MB，整個資料庫估**約 3 倍**縮減，
+   三條大索引（alpha／alpha_self／shape 合計 34 MB）也一併降到 7.4% 的列數。
+   代價是資料模型變更與全量重建，**要獨立設計與獨立 PR**。
+2. **雜湊改存 BLOB**（32 bytes 而非 64 字元 hex）＋ `blob_sha` 同理：省 180
+   bytes／列，requests 約 −13% 內容加索引鍵縮短，估整體 **−20%**。若做第 1 項，
+   這一項應該併進去做，不單獨做。
+3. **`exact_ngram_hashes` 的 200 門檻**：調低會讓更多列改用 minhash（30 bytes
+   而非 205），但那會改變召回語意——**不是免費的空間，是拿精確度換的**，不列為
+   成本控制的選項。
+
+**第 1、2 項已經做了**（2026-08-22，作者裁定這是發布前最後一個資料模型變更窗口），
+前後數字見下一節。第 3 項維持不採用。
+
+### 裝飾器把宣告自身的名稱吸進 hash_alpha（2026-08-22，已修：剖面 1.1.1）
+
+**第十四發，而且是第二刀自己留下的。** 移動實體邊界會連帶改變「誰是根節點」，
+而那一點在 1.1.0 漏掉了。
+
+`bindings.ts` 的 `walk(decl, true)` 只在**根節點**跳過 bindingRules，理由寫在
+那段註解裡：套在根上會把實體自己的名字也正規化，`hash_alpha` 就等同
+`hash_alpha_self`，兩者的區別整個消失。剖面 1.1.0 把實體節點換成包裝節點
+`decorated_definition` 之後，`function_definition` 降成**子節點**——`isRoot`
+對它是 false，於是 `{ nodeType: "function_definition", field: "name" }` 命中它。
+**註解描述的正是實際發生的狀態。**
+
+同一個包裝還讓 `declarationName` 失效：`decorated_definition` 的直屬子節點只有
+`decorator` 與 `definition`，沒有 `name` 欄位，所以它一律回 `undefined`，
+`hash_alpha_self` 退化成 `hash_alpha`。**兩個半邊都要修，缺一不可**——實測分別
+還原任一半，帶裝飾器的測試都會紅。
+
+psf/requests 全 6,491 commit 的前後對照（各一次全 repo pass）：
+
+| 指標 | 前 | 後 | 差 |
+|---|---:|---:|---:|
+| `hash_alpha = hash_alpha_self` 的 revision | **12,464** | **0** | **−12,464** |
+| change_level `token` | 32 | 31 | −1 |
+| change_level `alpha` | 1,643 | 1,644 | +1 |
+| L3 ／ L3b | 3 ／ 16 | 2 ／ 17 | −1 ／ +1 |
+| revision ／ entity | 148,199 ／ 3,409 | 148,199 ／ 3,409 | 0 ／ 0 |
+| excursion ／ 其餘 change_level ／ 其餘 tier | 不變 | | |
+
+12,464 筆是 8.4% 的 revision（HEAD 快照上是 807 個宣告裡的 137 個，17.0%）。
+**輸出層面只動了兩筆**：一次帶裝飾器的純改名從 `token`（「只改局部變數名」）
+回到 `alpha`，一條配對從 L3 回到 L3b——L3 當時之所以成立，正是因為名字被吸收掉了。
+`stable_key` 逐一比對 **3,409 個全部相同**，沒有任何身份漂移。
+
+方向本來就是安全的（L3b 不觸發就往下掉，L4/L5 有精確驗證），錯的是分級：
+帶裝飾器的宣告單純改名會被報成「只改局部變數名」。
+
+**TypeScript 逐位元不變**：四套語料 5,222 筆 revision 的
+`hash_raw/token/alpha/alpha_self/shape` 與 `shape_profile` 指紋前後完全相同
+（osiris 1,582 `5a32a4e9402dec0f`、controlled 32 `98428935e3a251d2`、
+create-t3-app 3,606 `fe4cae454f2da698`、vue-core 2 `0ebd96df5d8fa257`）。
+`declarationWrappers` 只有 Python 非空，所以這一刀在 TypeScript 上照定義是 no-op，
+但仍然量過才敢說。
+
+剖面版本 1.1.0 → **1.1.1**。雜湊值變了就得升版（不變量 7），即使這份語料的
+`stable_key` 恰好一個都沒動——混在同一個資料庫裡的話，跨水位線的 `change_level`
+比較會拿兩套規則的 alpha 值互比。**版本字串把三份剖面串在一起，所以 Python 一動，
+TypeScript 的既有資料庫也一併不得續跑**，那是刻意的保守。
+
+抓到它的是「幫 Python 找黃金測試集案例」的過程，不是測試——
+`python-profile.test.ts` 的「宣告自身改名由 hash_alpha_self 吸收」用的是**沒有
+裝飾器**的 `def f`。現在那條測試改成帶／不帶裝飾器各跑一次。
+
+### Python 進黃金測試集（2026-08-22）
+
+**在這之前，整道閘門只有 TypeScript 語料。** W5 加 Python 的論點是「加新語言＝
+新增一份剖面，匹配器／雜湊／圖遍歷／增量索引一處都不動」，而那個論點原本只有
+一次手跑 psf/requests 6,491 commit 的量測撐著——不可重跑、不進 CI。剖面被改壞的
+話，四套 TypeScript 語料逐位元不變，閘門一聲不響。
+
+語料選 psf/requests，`index_until` 釘在 `4d6871d917`（1,744 個 commit）。這份
+fixture 沒有 excursion 案例，所以 `golden:index` 不跑全 repo pass——**實測
+clone 16 MB／6.9 秒、materialize 2.8 秒**，是整道閘門裡最便宜的一步。
+
+四條案例，每一條都先驗過會咬：
+
+| 案例 | 釘什麼 | 拿掉什麼機制會紅 |
+|---|---|---|
+| `py-docstring-edit-is-alpha` | 只改 docstring 是 `alpha`（字串字面值不是註解） | `string` 加進 `commentTypes` → `raw` |
+| `py-comment-edit-is-raw` | 只改 `#` 註解是 `raw` | `comment` 移出 `commentTypes` → `shape` |
+| `py-declaration-rename-only` | 純改名走 L3b（`hash_alpha_self`） | 拿掉自身名稱正規化 → L4 |
+| `py-method-move-across-files` | 帶類別名前綴的方法跨檔案搬移走 L5 | 拿掉 `class_definition` → 兩條 missing |
+
+**前兩條是一對，缺一不可。** 單獨的 docstring 案例只證明「這顆 commit 是 alpha」，
+證明不了「docstring 與註解不同」；註解那條是對照組，兩條一起才鎖得住那條分界線。
+實測也確認它們互不重疊：破壞 `commentTypes` 的兩個方向各自只讓其中一條紅。
+
+**刻意沒收進來的兩件事，理由寫在 fixture 裡而不是假裝有覆蓋**：裝飾器編輯
+（整個 requests 歷史只有三顆「只改裝飾器」的 commit，最早在 2016 年、要多索引
+4,000 多個 commit）與屬性名的 alpha 保護（早期歷史沒有單純改 `self.<attr>` 的
+commit，硬找一顆夾雜其他改動的來當錨點，失敗時分不出是哪裡壞了）。兩者都由
+`test/python-profile.test.ts` 直接釘住。
+
+fixture 沒有負例，驗證器會警告——與 vue-core 相同。現有的案例類型表達不了
+「這個符號不得被當成宣告」（模組層級賦值那類），而唯一想得到的迂迴負例
+（搬移的方法不得判為迂迴）在 lineage 案例通過時必然通過，**不會失敗的案例
+什麼都沒守到**，所以不收。
+
+### 版本守門只裝在兩條路徑裡的一條（2026-08-22，已修）
+
+**第十三發。** 而且是上一刀自己留下的：剖面版本進水位線那一節寫的「水位線那條
+路徑早就有版本不符就拒絕的處理」只對全 repo pass 成立。`resolveResumePoint` 有
+守門，`indexLineage` 一道都沒有——**而 `ostracon why` 預設走的是快路徑**。
+
+實測（Osiris 前 50 個 commit 建一份索引，再把 declarations 版本字串裡的剖面段落
+拿掉，模擬「加 Python 之前建的資料庫」，然後續跑到 HEAD）：
+
+| 執行方式 | 修正前 | 修正後 |
+|---|---|---|
+| `why --full` | 拋錯，訊息說要刪檔重建 | 不變 |
+| `why`（預設） | **靜默續跑，revision 208 → 371** | 拋同一則錯誤，208 列原封不動 |
+
+修正前那 371 列裡，208 列用舊剖面算、163 列用新剖面算，混在同一個資料庫。
+**更糟的是第二層**：收尾的 `recordDeclarationScope` 把水位線覆寫成新版本字串，
+混合的證據當場消失——下一趟 `--full` 看到版本相符，判定為增量，永遠不會重建。
+所以測試除了斷言拋錯，也斷言**水位線不得被改寫**；只驗前者的話，這一層會漏掉。
+
+修法：`assertDeclarationsResumable`（`repo-pass.ts`）裝在 `indexLineage` 進場處，
+兩個 pass 共用同一段比對與同一則錯誤訊息。比對的是版本字串**去掉 `+scope:` 之後**
+的部分，所以既有的兩種行為都保留：`lineage` → `repo` 照樣自動作廢重建，repo scope
+的資料庫照樣可以跑快路徑而不觸發無謂重建。
+
+**代價**：這道守門在讀的路徑上也會咬。舊版本的資料庫即使索引完整、`why` 一列都
+不會寫，一樣拋錯——它印出來的 `stable_key` 與改動層級就是用另一套規則算的，
+與「降級過的索引不得被靜默讀出去」同一條線。`reports/` 底下的五個資料庫全部在
+這個狀態，要用就得重建。
+
+驗收：測試 418 → 419，四套黃金測試集全過（osiris 33/33、controlled 8/8、
+create-t3-app 3/3、vue-core 3/3，四支 baseline 閘門 exit 0）。**把
+`assertDeclarationsResumable` 的呼叫註解掉，新測試立刻紅**——機制拿掉還過的
+就是下一個死旗標，這一步照舊不省。
+
+### 裝飾器進實體邊界、剖面版本進水位線（2026-08-22）
+
+W5 的第二刀。兩個都是 Python 專屬、都不動 TypeScript 的雜湊，所以合成一刀。
+
+#### 1. 實體邊界含裝飾器
+
+`decorated_definition` 是包裝節點，實體原本落在裡面的 `function_definition` 上，
+於是 `@property` 換成 `@cached_property` 四層雜湊全部看不見。剖面因此多一個欄位
+`declarationWrappers`（包裝節點型別 → 被包裝宣告的欄位名），TypeScript 留空
+（那份 grammar 的 `decorator` 是子節點不是包裝，本來就在邊界內）。
+
+前後對照（psf/requests，6,491 commits，各一次全 repo pass）：
+
+| 指標 | 前 | 後 | 差 |
+|---|---:|---:|---:|
+| revision | 148,184 | 148,184 | 0 |
+| entity | 3,406 | 3,409 | +3 |
+| `change_level = none` | 136,056 | **135,940** | **−116** |
+| shape | 5,753 | 5,811 | +58 |
+| alpha | 1,618 | 1,643 | +25 |
+| raw | 1,184 | 1,213 | +29 |
+| token | 31 | 32 | +1 |
+| L1／L2／L3／L3b／L3c／L4／L5 | 143,918／753／2／17／11／71／21 | 143,918／753／3／16／11／69／20 | |
+
+**116 次改動從「沒有改動」移到真實的變更層級**，那些正是原本看不見的裝飾器編輯。
+`revision` 筆數不變是預期的——同一批宣告，只是位元組範圍變寬。
+
+單一實例眼檢：`2ccecf6dbd`（只加了一行 `@pytest.mark.skip`）在舊邊界下
+`change_level = none`、新邊界下 `shape`；`ostracon why
+'tests/test_testserver.py:TestTestServer.test_request_recovery'` 的那一列也從
+「無變更」變成「結構重構」。
+
+#### 2. 剖面版本進 declarations pass 的水位線
+
+**這是加 Python 那一刀當下就漏掉的。** 剖面決定「哪個節點是宣告」與「哪個名字是
+繫結」，兩者都是雜湊的輸入，不變量 7 適用，但它原本不在任何版本字串裡。兩個
+靜默錯誤：
+
+- 加一種語言之後，含該語言檔案的舊資料庫會**續跑**，只有水位線之後的 commit
+  拿得到新語言的宣告——一份一半有、一半沒有的索引，不報錯。
+- 移動實體邊界之後續跑，新舊 `stable_key` 混在同一個資料庫裡。
+
+**`shape_profile` 擋不住這兩件事**——同一趟 pass 的兩側都是用當下的剖面現場觀察
+出來的，本來就一致，它偵測不到版本改變。能擋的是水位線。版本字串由註冊表推導，
+新增語言會自動改變它。實測拿舊資料庫重跑會直接拒絕：
+
+```
+資料庫的 declarations indexer_version 是 …+scope:lineage，
+目前版本是 …+profiles:tsx@profile-1.0.0,typescript@profile-1.0.0,python@profile-1.1.0+scope:repo。
+演算法改變後既有的索引不可續跑（不變量 7）。請刪除 --db 指向的檔案後重跑。
+```
+
+**代價要說清楚**：這個字串一變，所有既有資料庫都不得續跑。錯誤訊息會明確說出
+怎麼辦，而且刪掉重建是安全的——但這是一次真實的中斷，不是零成本的守門。
+
+#### 3. 測試檔判準拆成目錄慣例與檔名慣例
+
+目錄慣例（`tests/`、`__tests__/`、`e2e/`）跨語言通用，**檔名慣例不是**。原本整條
+規則只認得 `*.test.ts`，於是 requests 根目錄的 `test_requests.py` 完全逃過過濾。
+檔名那一半移進語言註冊表（`GrammarSpec.testFilePattern`）——**加一種語言要一起
+帶進來的東西，就該放在加語言的那一個地方**。`conftest.py` 刻意不收：它是設定不是
+測試，裡面的 fixture 被推翻是值得看見的決定。
+
+requests 的 `ostracised` 因此從「A 988／C 512、隱藏 200」變成
+「**A 973／C 503、隱藏 225**」。
+
+TypeScript 一如既往逐位元不變（四套語料 5,222 筆指紋相同、四套 golden 全過），
+測試 414 → 418。
 
 ### 意圖層與 Chrome 算繪驗證（2026-08-17）
 
@@ -384,7 +1006,11 @@ remix 的移除 commit 常常一則訊息裡有好幾個因果標記，全部掛
 同一句裡的第二個標記收了進去，claim 隨之 829 → 826、3,077 → 3,013。Osiris 與
 create-t3-app **完全沒有任何 span 改變**——再一次說明它們驗不出這一類缺陷。
 
-### 效能外推的變數可能挑錯了（2026-08-17 觀察）
+### 效能外推的變數可能挑錯了（2026-08-17 觀察，2026-08-22 已定案）
+
+> **已定案：軸是 revision，不是 entity 也不是 commit。** 四套語料的量測見
+> §成本控制重新定義，預算已在 `roadmap.md` §3 重新表述。下面保留當時的推論記錄。
+
 
 vuejs/core 7,156 commit 的全 repo pass 實測 **5 分 05 秒**，外推一萬 commit 約
 **7.1 分鐘**，而 §效能那節記的是 **1.07／1.21 分鐘**。預算是 10 分鐘，還沒破，
@@ -1449,11 +2075,16 @@ materializer、runner 與 evaluator 目前會為建料／查詢直接使用 `nod
 
 ---
 
-## 3. Schema v0.5 重點
+## 3. Schema 重點
+
+**目前是 v2**（`schema_migration` 記錄它，`openIndexDatabase` 比對它）。
+v1 → v2 的唯一差別是內容定址：內容衍生欄位移到 `declaration_content`，
+`revision` 只留身分與位置，雜湊與 `blob_sha` 改存 BLOB。見上方對照與
+`plan-content-addressed.md`。以下是 v0.5 當時記的其餘重點，仍然成立。
 
 表：`repo` / `git_commit` / `git_commit_parent` / `path_lineage` /
 `path_lineage_segment` / `file_change` / `file_hunk` / `slot` / `entity` / `entity_link` /
-`slot_discontinuity` / `revision` / `revision_match` / `revision_change` /
+`slot_discontinuity` / `declaration_content` / `revision` / `revision_match` / `revision_change` /
 `construct` / `construct_span` / `source_doc` / `reference_link` /
 `evidence_candidate` / `evidence` / `claim` / `claim_evidence` / `excursion` /
 `llm_cache` / `pass_state`，加上 FTS5 虛擬表與同步 trigger。

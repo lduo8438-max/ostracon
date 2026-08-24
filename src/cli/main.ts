@@ -24,6 +24,11 @@ const USAGE = `ostracon — 從 git history 重建程式碼的決策演化史
         列出試過又被推翻的做法。一律跑全 repo pass——搬移守門在單一血緣下是瞎的。
         由短命到長命排序；測試檔的宣告預設排除（標頭會報數量）。
 
+  ostracon hotspots [--repo <path>] [--db <file>] [--until <sha>] [--limit <n>]
+                    [--include-tests]
+        列出被重構最多次的宣告。只算真的動到結構的改動——vuejs/core 有 88.5%
+        的改動列是「完全沒變」。entity 層級，不是檔案層級：那個 git log 就有了。
+
   ostracon ui [--db <file>] [--port <n>] [--repo-id <n>]
         三欄畫面：結構 → 演化 → 意圖。只讀不建索引，只綁 127.0.0.1。
 
@@ -49,6 +54,9 @@ async function dispatch(argv: string[]): Promise<void> {
 
     case "ostracised":
       return (await import("./ostracised.ts")).main(rest);
+
+    case "hotspots":
+      return (await import("./hotspots.ts")).main(rest);
 
     case "ui":
       return (await import("./ui.ts")).main(rest);

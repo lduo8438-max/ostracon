@@ -23,6 +23,7 @@
     "ui": "node --experimental-strip-types src/cli/ui.ts",
     "why:cli": "node --experimental-strip-types src/cli/why.ts",
     "ostracised": "node --experimental-strip-types src/cli/ostracised.ts",
+    "hotspots": "node --experimental-strip-types src/cli/hotspots.ts",
     "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
     "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts",
     "prepublishOnly": "pnpm run build && pnpm test",
@@ -38,6 +39,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "tree-sitter-python": "0.25.0",
     "tree-sitter-typescript": "0.23.2",
     "web-tree-sitter": "0.26.11"
   },

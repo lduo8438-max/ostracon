@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { DiffHunk } from "../git/types.ts";
-import { grammarForPath } from "../ast/parser.ts";
+import { GRAMMARS, grammarForPath } from "../ast/parser.ts";
 import { SIGNATURE_VERSION } from "../match/signature.ts";
 import {
   buildPool,
@@ -140,12 +140,90 @@ const keyOf = (lineageId: number, o: ObservedDeclaration) =>
  * `minhash_version` 欄位，沒有進水位線——結果是改了簽章演算法之後續跑不會報錯，
  * 資料庫裡會靜默混進兩族互不可比的簽章。註解裡寫「換了就要重算」但系統不強制，
  * 那不是規則，是願望。
+ *
+ * **語言剖面同理，而且是加 Python 那一刀當下就漏掉的。** 剖面決定「哪個節點是
+ * 宣告」與「哪個名字是繫結」，兩者都是雜湊的輸入。少了它：
+ *
+ *  - 加一種語言之後，含該語言檔案的舊資料庫會**續跑**，只有水位線之後的
+ *    commit 拿得到新語言的宣告——一份一半有、一半沒有的索引，而且不報錯。
+ *  - 移動實體邊界（Python 的裝飾器）之後續跑，新舊 `stable_key` 混在同一個
+ *    資料庫裡，同一段程式碼會被算成兩個實體。
+ *
+ * 兩個都是靜默錯誤。`shape_profile` 擋不住它們——同一趟 pass 的兩側都是用當下
+ * 的剖面現場觀察的，本來就一致，它偵測不到版本改變。**能擋的是水位線。**
+ *
+ * 版本字串由註冊表推導，所以新增語言會自動改變它，不必記得手動加一筆。
  */
+const profilesVersion = (): string =>
+  GRAMMARS.map((g) => `${g.profile.family}@${g.profile.profileVersion}`).join(",");
+
 export const declarationIndexerVersion = (
   structuralVersion: string,
   scope: DeclarationScope,
 ): string =>
-  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}+scope:${scope}`;
+  `${structuralVersion}+${DISCONTINUITY_VERSION}+${SIGNATURE_VERSION}`
+  + `+profiles:${profilesVersion()}+scope:${scope}`;
+
+/**
+ * 版本字串裡「演算法」的那一段，也就是拿掉 scope 之後剩下的部分。
+ *
+ * scope 與其餘欄位的性質不同：scope 描述的是**候選池有多大**，兩種 scope 的
+ * 產出都是用同一套規則算的，所以 `lineage` → `repo` 可以自動作廢重建。其餘
+ * 每一欄都直接決定雜湊、`stable_key` 或匹配門檻——那些一變，既有的列就是用
+ * 另一套規則算出來的，系統無權替使用者丟掉。
+ */
+const algorithmOf = (version: string): string => version.replace(/\+scope:[^+]*$/, "");
+
+/**
+ * 演算法變了卻想續跑時該說的話。
+ *
+ * **一份文字，兩個 pass 共用。** 訊息必須說出「怎麼辦」——只說「請重建」的話，
+ * 讀的人得先讀原始碼才知道重建的動作就是刪掉檔案。
+ */
+const versionMismatchError = (actual: string, expected: string): Error =>
+  new Error(
+    `資料庫的 declarations indexer_version 是 ${actual}，`
+    + `目前版本是 ${expected}。\n`
+    + "演算法改變後既有的索引不可續跑（不變量 7）。"
+    + "請刪除 --db 指向的檔案後重跑，索引會自動重建。",
+  );
+
+/**
+ * 快路徑（`indexLineage`）續跑前的版本守門。
+ *
+ * **這道守門原本只裝在全 repo pass 上，而 `why` 預設走的是快路徑。** 剖面版本
+ * 進水位線的那一刀因此只擋住了兩條路徑裡的一條——正是這個專案追了整個 W2–W5
+ * 的那一型缺陷：宣稱守住某件事，只驗了其中一種執行方式。
+ *
+ * 實測（Osiris 前 50 個 commit 建索引，把版本字串裡的剖面段落拿掉以模擬「加
+ * Python 之前建的資料庫」，再續跑到 HEAD）：`why --full` 如設計拋錯，`why`
+ * 卻靜默續跑，revision 208 → 371——208 列用舊剖面算、163 列用新剖面算，
+ * 混在同一個資料庫裡。而且收尾時
+ * `recordDeclarationScope` 會把水位線覆寫成**新**版本字串，於是混合的證據被
+ * 自己抹掉：下一趟 `--full` 看到版本相符，判定為增量，永遠不會重建。
+ *
+ * 為什麼是拋錯而不是像 scope 降級那樣自動重建：快路徑只看得到一條血緣，它
+ * 「重建」不出正確的答案；而且演算法改變時該不該丟掉既有索引本來就不是系統
+ * 有權替使用者決定的事（見 `resolveResumePoint`）。
+ *
+ * **代價要說清楚**：這道守門在**讀**的路徑上也會咬。一個舊版本的資料庫即使
+ * 已經索引完整、`why` 一列都不會寫，也一樣拋錯——因為它印出來的
+ * `stable_key` 與改動層級就是用另一套規則算的。這與「降級過的索引不得被靜默
+ * 讀出去」是同一條線。
+ */
+export function assertDeclarationsResumable(
+  db: DatabaseSync,
+  repoId: number,
+  structuralVersion: string,
+): void {
+  const state = declarationState(db, repoId);
+  if (state === undefined) return;
+  // 比對演算法段落而非整個字串：快路徑對一個 repo scope 的資料庫本來就可以
+  // 續跑（它插不進任何列），那是既有且正確的行為，不該被這道守門擋下來。
+  const expected = declarationIndexerVersion(structuralVersion, "lineage");
+  if (algorithmOf(state.version) === algorithmOf(expected)) return;
+  throw versionMismatchError(state.version, expected);
+}
 
 /**
  * 作廢整個 repo 的結構層產出。
@@ -263,15 +341,8 @@ function resolveResumePoint(
     return { after: undefined, mode: "rebuilt" };
   }
   // 版本字串不符只有兩種可能：scope 不同（上面已自動處理），或演算法變了。
-  // 後者代表既有的每一列都是用另一套規則算的，系統無權替使用者決定要不要
-  // 丟掉。訊息必須說出「怎麼辦」——只說「請重建」的話，讀的人得先讀原始碼
-  // 才知道重建的動作就是刪掉檔案。
-  throw new Error(
-    `資料庫的 declarations indexer_version 是 ${state.version}，`
-    + `目前版本是 ${expected}。\n`
-    + "演算法改變後既有的索引不可續跑（不變量 7）。"
-    + "請刪除 --db 指向的檔案後重跑，索引會自動重建。",
-  );
+  // 後者代表既有的每一列都是用另一套規則算的，系統無權替使用者決定要不要丟掉。
+  throw versionMismatchError(state.version, expected);
 }
 
 /**

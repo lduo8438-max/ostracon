@@ -38,8 +38,12 @@ export type MoveGuardScope = "repo" | "lineage";
  * `1.0.0` → `1.1.0`：搬移守門的判準由「死得不比我早」（`>=`）改成
  * 「嚴格活得比我久」（`>`）。同一個 commit 刪除的相同內容原本會互相抑制，
  * 實測那是 84% 的排除。判準變了產出就變了，水位線必須要求重算（不變量 7）。
+ *
+ * `1.1.0` → `1.2.0`：`duration_days` 改由 `committed_at` 計算（見 `durationDays`）。
+ * 它不影響誰進得了名單，也不影響強度分級——但它是存進 `excursion` 的衍生欄位，
+ * 而且決定清單順序，所以既有產出必須重算。
  */
-const EXCURSION_ALGORITHM = "excursion-1.1.0+inverse-raw+move-guard-outlives";
+const EXCURSION_ALGORITHM = "excursion-1.2.0+inverse-raw+move-guard-outlives";
 
 export const excursionVersion = (scope: MoveGuardScope): string =>
   `${EXCURSION_ALGORITHM}+scope:${scope}`;
@@ -92,16 +96,25 @@ function candidates(db: DatabaseSync, repoId: number): EntityRow[] {
   return db.prepare(
     `SELECT e.id AS id,
             bc.sha AS birthSha, dc.sha AS deathSha,
-            bc.authored_at AS birthAt, dc.authored_at AS deathAt,
+            bc.committed_at AS birthAt, dc.committed_at AS deathAt,
             dc.topo_order AS deathTopo,
             CASE WHEN instr(dc.message, char(10)) > 0
                  THEN substr(dc.message, 1, instr(dc.message, char(10)) - 1)
                  ELSE dc.message END AS deathSubject,
-            (SELECT r.hash_raw FROM revision r
+            -- 雜湊住在 declaration_content，不再逐列複製在 revision 上。
+            --
+            -- **hex() 不是為了好看，是為了讓嚴格相等還能用。** 這幾個值下游會拿去
+            -- 直接比較（firstRaw 等於 lastRaw 就是 A 級 inverse_diff 的判準），
+            -- 而 BLOB 讀出來是 Uint8Array，=== 在上面是**參照**比較，兩個內容
+            -- 相同的緩衝區也會不相等——那會讓整個 A 級靜默歸零。
+            (SELECT hex(dcn.hash_raw) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id LIMIT 1) AS firstRaw,
-            (SELECT r.hash_raw FROM revision r
+            (SELECT hex(dcn.hash_raw) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id DESC LIMIT 1) AS lastRaw,
-            (SELECT r.hash_alpha FROM revision r
+            (SELECT hex(dcn.hash_alpha) FROM revision r
+               JOIN declaration_content dcn ON dcn.id = r.content_id
               WHERE r.entity_id = e.id ORDER BY r.id DESC LIMIT 1) AS lastAlpha,
             (SELECT COUNT(*) FROM revision r WHERE r.entity_id = e.id) AS revisions
        FROM entity e
@@ -159,17 +172,22 @@ function stillExistsElsewhere(
   db: DatabaseSync,
   entity: EntityRow,
 ): boolean {
-  const query = (column: "hash_raw" | "hash_alpha", value: string) =>
+  // 從內容表出發再 join 回 revision，不是反過來：相異內容只有全部列的 7.4%
+  // （requests 實測），而 `hash_raw` 那一路原本完全沒有索引，是 148,199 列的
+  // 全表掃描。方向換過來之後兩條路都走索引。**語意完全不變**——條件仍然是
+  // 「有另一個 entity 帶著同一份內容，而且活得比我久」。
+  const query = (column: "hash_raw" | "hash_alpha", hex: string) =>
     db.prepare(
       `SELECT 1 AS ok
-         FROM entity o
-         JOIN revision r ON r.entity_id = o.id
+         FROM declaration_content dcn
+         JOIN revision r ON r.content_id = dcn.id
+         JOIN entity o ON o.id = r.entity_id
          LEFT JOIN git_commit dc ON dc.id = o.death_commit_id
-        WHERE r.${column} = ?
+        WHERE dcn.${column} = ?
           AND o.id <> ?
           AND (o.death_commit_id IS NULL OR dc.topo_order > ?)
         LIMIT 1`,
-    ).get(value, entity.id, entity.deathTopo) !== undefined;
+    ).get(Buffer.from(hex, "hex"), entity.id, entity.deathTopo) !== undefined;
 
   return query("hash_raw", entity.lastRaw) || query("hash_alpha", entity.lastAlpha);
 }
@@ -212,11 +230,33 @@ function classify(entity: EntityRow): {
  * `duration_days` 是**屬性不是門檻**：三週後撤掉是試錯，三年後撤掉是技術演進，
  * 兩者都有價值但意義不同，讓使用者自己過濾。
  *
- * **用 `authored_at` 而不是 `committed_at`。** committer 時間會被 rebase、
- * cherry-pick 與 amend 重寫：Osiris 的 99 個 commit 只有 88 個相異的 committer
- * 時間，而引入與移除這個 fixture 案例的兩個 commit 的 committer 時間**完全相同**，
- * 算出來的存活時間會是 0 天。author 時間是程式碼實際被寫下的時刻，
- * 那才是「這個做法活了多久」的誠實答案。
+ * **用 `committed_at`，不是 `authored_at`——這是 1.2.0 反轉的決定。**
+ *
+ * 原本的理由是「author 時間是程式碼實際被寫下的時刻」。那句話沒錯，但它回答的
+ * 是另一個問題。這個欄位要答的是「這個做法**在這份 repo 裡**活了多久」，而它的
+ * 兩個端點是「引入的 commit 進入這份歷史」與「移除的 commit 進入這份歷史」——
+ * 那兩個時刻就是 `committed_at`。用 author 時間等於把兩個時鐘混在一起量一段
+ * 距離，**於是它可以是負的**：長命 PR、cherry-pick 與 rebase 都會讓移除的
+ * author 時間早於引入的 author 時間。
+ *
+ * 兩個方向都量過（A 級迂迴）：
+ *
+ * | 語料 | authored 倒轉 ／ 不到半天 | committed 倒轉 ／ 不到半天 |
+ * |---|---|---|
+ * | vuejs/core（710） | **12** ／ 100 | **0** ／ 137 |
+ * | nestjs/nest（1,955） | **1** ／ 129 | **0** ／ 137 |
+ * | create-t3-app（102） | 0 ／ 5 | 0 ／ 5 |
+ * | osiris（94） | 0 ／ 70 | 0 ／ **70（一樣）** |
+ *
+ * 倒轉的列被 `Math.max(0, …)` 夾成 0 天，而清單由短到長排序——**於是它們坐在
+ * 第一個畫面的最上面**，印出「0 天　2023-02-01 → 2023-01-06」這種自相矛盾的列。
+ * vuejs/core 的前十名有十條是這種，而那正是線上 demo 顯示的東西。
+ *
+ * 舊註解擔心的「Osiris 會變成 0 天」**實測不成立**：它在兩種算法下都是 94 條裡
+ * 有 70 條落在半天內。真正的代價是 vue 多 37 條進入「不到半天」那一桶，
+ * 而那些本來就是短命的——解析度變粗，不會變成謊話。
+ *
+ * 夾在 0 的那道 `Math.max` 留著當防禦，但在五套語料上它現在一次都不會觸發。
  */
 function durationDays(birthAt: string, deathAt: string): number {
   const ms = Date.parse(deathAt) - Date.parse(birthAt);

@@ -1,0 +1,150 @@
+fixture_version: 1
+
+repo:
+  name: requests
+  clone_url: https://github.com/psf/requests.git
+  index_until: 4d6871d9176c13affe625b1885278d396a39f21d
+  language: python
+
+labeled_by: lcy
+labeled_at: 2026-08-22
+
+# 這份 fixture 存在的理由：**閘門原本完全是 TypeScript 的。**
+#
+# W5 加 Python 的整個論點是「加新語言＝新增一份剖面，匹配器、雜湊、圖遍歷、
+# 增量索引一處都不動」。那個論點交出去的時候，靠的是一次手跑 psf/requests 6,491 個
+# commit 的量測——**不可重跑、不進 CI、沒有任何東西擋著它退步**。剖面一旦被改壞，
+# 四套 golden 全是 TypeScript 語料，逐位元不變，閘門一聲不響。
+#
+# 單元測試（`test/python-profile.test.ts`）已經守住剖面層本身：grammar 版本、
+# 副檔名路由、繫結清單、裝飾器邊界、docstring 的已知不對稱。**那些都是對合成
+# 原始碼直接呼叫雜湊層**，走不到 git walk → 結構 pass → 匹配階梯 → change_level
+# 這條真實管線。這份 fixture 守的是後者，所以刻意不重複前者驗過的東西。
+#
+# `index_until` 釘在 `4d6871d917`（1,744 個 commit）。要釘的現象全部發生在
+# 2011–2012 的早期歷史，而全部 6,491 顆跑全 repo pass 要三分鐘。閘門的價值來自
+# 它擋不擋得下退步，不是來自它索引了多少歷史——這與 vue-core 的取捨相同。
+#
+# 這份 fixture 沒有 excursion 案例，所以 `golden:index` 不跑全 repo pass：
+# lineage 與 change_level 案例只需要錨點檔案的宣告池。**實測 clone 16 MB／6.9 秒、
+# materialize 2.8 秒**，是整道閘門裡最便宜的一步。
+#
+# **沒有收進來的兩件事，理由寫在這裡而不是假裝有覆蓋：**
+#
+#   - **裝飾器編輯**（剖面 1.1.0 移動實體邊界的那一刀）。整個 requests 歷史只有
+#     三顆「只改裝飾器」的 commit，最早一顆在 2016 年、要索引 4,000 多個 commit
+#     才碰得到。單元測試「裝飾器的改動看得見」與「實體範圍從裝飾器開始」已經
+#     直接釘住它，為了它把 CI 的索引量翻三倍不划算。
+#   - **屬性名的 alpha 保護**（`preservedFields`）。早期 requests 沒有任何一顆
+#     commit 是單純改 `self.<attr>` 的名字；硬找一顆夾雜其他改動的來當錨點，
+#     案例失敗時分不出是保護壞了還是別的東西壞了。同樣由單元測試釘住。
+
+cases:
+  # ── Python 的「只改說明文字」與 TypeScript 不同級 ──────────────────────────
+  #
+  # 這一對案例（alpha 與 raw）是這份 fixture 最不可替代的部分：**它們釘的是
+  # 兩種語言在同一個動作上的分界線本身**，而分界線只有在兩邊都被驗過時才存在。
+  #
+  # docstring 是 `expression_statement > string`，是字串**字面值**不是註解節點，
+  # 所以它進得了 token 與 alpha 層——只改說明文字會被判成 `alpha`。TypeScript 的
+  # JSDoc 是 `comment`，會在 token 層被剝掉，同一個動作只到 `raw`。
+  #
+  # 這條不對稱是已知限制、刻意還沒修（`commentTypes` 是型別集合，表達不了
+  # 「區塊開頭的字串字面值」這種位置相依的概念）。釘住它的目的是**讓它在被修掉
+  # 的那一刻變成紅燈**，而不是默默地變成「應該已經修好了吧」。
+  - id: py-docstring-edit-is-alpha
+    kind: change_level
+    difficulty: hard
+    entity: {path: requests/utils.py, symbol: cookiejar_from_dict}
+    at_commit: ec33ce9d29d591e18ded52018501942d3eb02776
+    expect: alpha
+    rationale: >
+      這顆 commit 只改了一個字：docstring 裡的 dictoinary 改成 dictionary，
+      函式本體一個 token 都沒動。docstring 是字串字面值不是註解，所以它
+      不只是 raw——alpha 層看得到它。同樣的動作打在 JSDoc 上只會是 raw。
+
+  # 對照組：真正的註解（`#`）確實只到 raw。**沒有這一條，上一條證明不了
+  # 「docstring 與註解不同」**——只證明了「這個 commit 是 alpha」，而那可能是
+  # 任何原因造成的。兩條一起看才鎖得住那條分界線。
+  - id: py-comment-edit-is-raw
+    kind: change_level
+    difficulty: hard
+    entity: {path: requests/sessions.py, symbol: Session.__init__}
+    at_commit: 5b73f2ea6100277f6400f399f585117b47068b4a
+    expect: raw
+    rationale: >
+      這顆 commit 在 Session.__init__ 裡加了一行 `# Add passed cookies in.`，
+      其餘一字未改。`#` 是 comment 節點，token 層會剝掉它，所以只到 raw。
+      這一條若掉到 alpha，代表 Python 剖面的 commentTypes 壞了。
+
+  # ── 帶類別名前綴的方法跨檔案搬移 ──────────────────────────────────────────
+  #
+  # `requests/packages/oreos` 這個自家 cookie 套件整包被收進 `requests/cookies.py`。
+  # 方法的限定名稱是 `MockRequest.has_header`——**那個類別名前綴是 Python 剖面
+  # 算出來的**，搬到另一個檔案之後必須還對得上，否則 entity 血緣會在這裡斷成
+  # 兩截，而 slot 早就跟著舊路徑消失了。
+  #
+  # 這條同時證明匹配階梯本身沒有因為換語言而改動：跨檔案候選池、L5、精確驗證，
+  # 走的是 TypeScript 語料上完全相同的那段程式碼。
+  - id: py-method-move-across-files
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      oreos 套件併進 cookies.py。has_header 連同 MockRequest 一起搬過去，
+      body 同時多了 `or name in self._new_headers`——搬移加編輯，
+      所以接得住它的只有跨檔案的相似度層。
+    chain:
+      - anchor:
+          commit: c4ab96b63800f04511aada9b5899540a7937967a
+          path: requests/packages/oreos/cookiejar.py
+          symbol: MockRequest.has_header
+          occurrence: 0
+          line_hint: 35
+          snippet_head: "    def has_header(self, name):"
+      - anchor:
+          commit: 4d6871d9176c13affe625b1885278d396a39f21d
+          path: requests/cookies.py
+          symbol: MockRequest.has_header
+          occurrence: 0
+          line_hint: 53
+          snippet_head: "    def has_header(self, name):"
+        transition:
+          type: move
+          # 內容改了一行，所以雜湊層接不住，只剩相似度。允許退到 L5，
+          # 但不得再更弱——沒有比 L5 更弱的層，掉下去就是斷。
+          expect_tier_at_most: L5
+
+  # ── 只改宣告自身名稱 ──────────────────────────────────────────────────────
+  #
+  # `dispatch_hooks` → `dispatch_hook`，body 一字未改。這是 L3b 的定義情境：
+  # 同檔、`hash_alpha_self` 相等、前後候選唯一。
+  #
+  # 受控的 TypeScript fixture 已經釘過 L3b，這一條釘的是**同一段程式碼在
+  # Python 剖面下也算得出 `hash_alpha_self`**——那個雜湊要把宣告自身的名稱與
+  # 指向自己的參照正規化成 `$SELF`，而「哪些名字算繫結」正是剖面決定的。
+  - id: py-declaration-rename-only
+    kind: lineage
+    difficulty: hard
+    label_confidence: certain
+    rationale: >
+      複數改單數，body 完全相同。名稱以外沒有任何資訊改變，
+      所以這條必須被 L3b 接住；掉到 L4 代表 alpha_self 在 Python 上沒算對。
+    chain:
+      - anchor:
+          commit: 20c930e48e31916481d6d45bcbb079f7c4670b18
+          path: requests/hooks.py
+          symbol: dispatch_hooks
+          occurrence: 0
+          line_hint: 29
+          snippet_head: "def dispatch_hooks(key, hooks, hook_data):"
+      - anchor:
+          commit: c4f013a6f999c2e945e00b1f052074b9c9377842
+          path: requests/hooks.py
+          symbol: dispatch_hook
+          occurrence: 0
+          line_hint: 29
+          snippet_head: "def dispatch_hook(key, hooks, hook_data):"
+        transition:
+          type: rename
+          expect_tier_at_most: L3b

@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -13,6 +9,7 @@ import { parse as parseYaml } from "yaml";
 import { changeLevel } from "../ast/hash.ts";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { openIndexDatabase } from "../git/persist.ts";
 import { detectExcursions } from "../index/excursion.ts";
 import { indexRepoStructure } from "../index/repo-pass.ts";
 import { matchLadder, type Candidate } from "../match/ladder.ts";
@@ -89,14 +86,7 @@ export async function materializeGoldenCoordinates(
   if (existsSync(dbPath)) {
     throw new Error(`資料庫已存在：${dbPath}；請換新路徑，避免混入舊索引`);
   }
-  mkdirSync(path.dirname(dbPath), { recursive: true });
-  const schema = readFileSync(
-    new URL("../../db/schema.sql", import.meta.url),
-    "utf8",
-  );
-  const init = new DatabaseSync(dbPath);
-  init.exec(schema);
-  init.close();
+  openIndexDatabase(dbPath).close();
 
   await verifyParserAdapters();
   const gitReport = indexGit(repo, {

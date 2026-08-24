@@ -20,6 +20,7 @@ import {
   type OstracisedRow,
 } from "../src/cli/ostracised.ts";
 import { why } from "../src/cli/why.ts";
+import { openIndexDatabase } from "../src/git/persist.ts";
 
 function makeRepo() {
   const repo = mkdtempSync(path.join(tmpdir(), "ostracon-gone-"));
@@ -41,9 +42,7 @@ function makeRepo() {
 
 async function indexAll(repo: string) {
   const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-gone-db-")), "i.db");
-  const init = new DatabaseSync(dbPath);
-  init.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
-  init.close();
+  openIndexDatabase(dbPath).close();
   await verifyParserAdapters();
   const report = indexGit(repo, { dbPath });
   const db = new DatabaseSync(dbPath);

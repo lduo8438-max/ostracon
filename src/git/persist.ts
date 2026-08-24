@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { CommitRecord, LineageResult, LineageState } from "./types.ts";
 
@@ -50,6 +52,68 @@ export function openDb(path: string): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   return db;
+}
+
+/**
+ * 目前的 schema 版本。**改動 `db/schema.sql` 的結構就要加一。**
+ *
+ * 2 = `declaration_content`：內容與位置分離、雜湊改存 BLOB。
+ */
+export const SCHEMA_VERSION = 2;
+
+/**
+ * 開一個索引資料庫：不存在就依 schema 建立，存在就確認版本相符。
+ *
+ * **原本這段邏輯在 `why.ts` / `ostracised.ts` / `materialize.ts` 各抄一份。**
+ * 三份平行實作遲早分岔，而這次正好要在裡面加一道檢查——那正是不該有三份的時候。
+ *
+ * 版本檢查解決的是一個訊息品質問題：舊 schema 的資料庫拿來跑，失敗方式是
+ * `no such column: content_id`，而那個訊息不會告訴任何人原因。與剖面版本守門
+ * 同一種說法——說出「怎麼辦」，不只說「不行」。
+ */
+export function openIndexDatabase(dbPath: string): DatabaseSync {
+  if (!existsSync(dbPath)) {
+    mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
+    const schema = readFileSync(new URL("../../db/schema.sql", import.meta.url), "utf8");
+    const init = openDb(dbPath);
+    try {
+      init.exec(schema);
+      init.prepare("INSERT INTO schema_migration (version, applied_at) VALUES (?, ?)")
+        .run(SCHEMA_VERSION, new Date().toISOString());
+    } finally {
+      init.close();
+    }
+  }
+  const db = openDb(dbPath);
+  try {
+    assertSchemaVersion(db, dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return db;
+}
+
+/**
+ * 版本不符就拒絕。
+ *
+ * 讀不到 `schema_migration` 的列不是「沒關係」——那正是**本次改動之前**建的
+ * 資料庫的樣子（那張表從 v0.5 起就存在，但從來沒有任何程式寫過它）。
+ */
+export function assertSchemaVersion(db: DatabaseSync, dbPath: string): void {
+  let found: number | undefined;
+  try {
+    found = (db.prepare("SELECT MAX(version) AS v FROM schema_migration").get() as
+      { v: number | null } | undefined)?.v ?? undefined;
+  } catch {
+    found = undefined;
+  }
+  if (found === SCHEMA_VERSION) return;
+  throw new Error(
+    `${dbPath} 的 schema 版本是 ${found ?? "更早（沒有記錄版本）"}，`
+    + `目前是 ${SCHEMA_VERSION}。\n`
+    + "schema 變更後既有的索引不可續用。請刪除該檔案後重跑，索引會自動重建。",
+  );
 }
 
 /** 取得某 repo 已索引到的最後一個 commit 的 sha。沒有就回 undefined。 */

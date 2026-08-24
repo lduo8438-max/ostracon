@@ -11,6 +11,7 @@ import {
   presentableClaimsFor,
 } from "../src/claim/derive.ts";
 import { sha256 } from "../src/evidence/span.ts";
+import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 /**
  * 意圖層。**這一整組測試的前提是零 LLM**：型別由抽取器命中的標記確定式導出，
@@ -32,8 +33,7 @@ function fixture(): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
   const rev = (id: number, entity: number) =>
-    `(${id}, 1, 1, ${id}, ${entity}, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-      'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`;
+    revisionValues({ id, commitId: 1, slotId: id, entityId: entity });
   db.exec(
     `INSERT INTO repo (id, root_path, created_at) VALUES (1, '/r', '2026-01-01');
      INSERT INTO path_lineage (id, repo_id) VALUES (1, 1);
@@ -44,11 +44,8 @@ function fixture(): DatabaseSync {
        (1, 1, 1, 'alpha', 'function'), (2, 1, 1, 'beta', 'function');
      INSERT INTO entity (id, repo_id, stable_key, birth_commit_id) VALUES
        (1, 1, 'k1', 1), (2, 1, 'k2', 1);
-     INSERT INTO revision
-       (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-        byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-        hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-        node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+     ${INSERT_CONTENT_FIXTURE}
+     INSERT INTO revision ${REVISION_COLUMNS}
      VALUES ${rev(1, 1)}, ${rev(2, 2)};
      INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
      VALUES (1, 1, 1, 1, 'shape'), (2, 2, 1, 2, 'none');
@@ -322,13 +319,9 @@ function squashFixture(): DatabaseSync {
        VALUES (1, 1, 1, 'alpha', 'function');
      INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
        VALUES (1, 1, 'k1', 1);
-     INSERT INTO revision
-       (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-        byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-        hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-        node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
-     VALUES (1, 1, 1, 1, 1, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-             'r','t','a','as','sh','p', 30, 10, 'exact', x'00');
+     ${INSERT_CONTENT_FIXTURE}
+     INSERT INTO revision ${REVISION_COLUMNS}
+     VALUES ${revisionValues({ id: 1, commitId: 1 })};
      -- death 必然沒有後繼（schema 的 CHECK），所以掛在 prev_revision 上。
      INSERT INTO revision_change (id, prev_revision, commit_id, entity_id, change_level)
        VALUES (1, 1, 2, 1, 'death');
@@ -451,10 +444,7 @@ describe("意圖層：綁不到單一 entity 的放棄理由要留白", () => {
     for (let i = 1; i <= n; i++) {
       slots.push(`(${i}, 1, 1, 'sym${i}', 'function')`);
       entities.push(`(${i}, 1, 'k${i}', 1)`);
-      revs.push(
-        `(${i}, 1, 1, ${i}, ${i}, 1, 'src/a.ts', 'b', 0, 1, 1, 2,
-          'r','t','a','as','sh','p', 30, 10, 'exact', x'00')`,
-      );
+      revs.push(revisionValues({ id: i, commitId: 1, slotId: i, entityId: i }));
       changes.push(`(${i}, ${i}, 2, ${i}, 'death')`);
     }
     db.exec(
@@ -468,11 +458,8 @@ describe("意圖層：綁不到單一 entity 的放棄理由要留白", () => {
          VALUES ${slots.join(",")};
        INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
          VALUES ${entities.join(",")};
-       INSERT INTO revision
-         (id, repo_id, commit_id, slot_id, entity_id, lineage_id, path, blob_sha,
-          byte_start, byte_end, line_start, line_end, hash_raw, hash_token,
-          hash_alpha, hash_alpha_self, hash_shape, shape_profile,
-          node_count, token_count, similarity_recall_mode, exact_ngram_hashes)
+       ${INSERT_CONTENT_FIXTURE}
+       INSERT INTO revision ${REVISION_COLUMNS}
        VALUES ${revs.join(",")};
        INSERT INTO revision_change
          (id, prev_revision, commit_id, entity_id, change_level)

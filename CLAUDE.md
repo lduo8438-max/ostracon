@@ -172,6 +172,11 @@ pnpm evidence:extract -- --db <db>
 # linked 文件：live 需 token；測試／golden 使用 --replay-dir，永遠不需網路或 token
 pnpm evidence:linked -- --db <db> [--record-dir fixtures/http | --replay-dir fixtures/http]
 
+# 分段量測大語料：每 N 顆 commit 記一次耗時／RSS／該區間最慢的 commit
+# --abort-after 用來驗續跑：在指定的 commit 數之後刻意中止，水位線必須留下來
+pnpm profile:angular -- --repo <repo-path> --db <db> [--until <sha>]
+                        [--progress-every <n>] [--abort-after <n>]
+
 # 審計完整歷史中 matcher 實際產生的非 L1 配對（人工裁決負例）
 pnpm golden:audit -- --repo <repo-path> --until <sha> --output reports/audit.json
 

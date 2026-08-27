@@ -173,6 +173,56 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### angular/angular：預算破表，而且四小時的工作無法續跑（2026-08-24）
+
+W7 的第一個壓力語料。選它是因為它與 nest 落在 merge 軸的**相反極端**
+（4 個 merge，0.01%；nest 是 42.8%），而且規模 1.8 倍——**第一個真正超過
+README 宣稱的「一萬 commit」的語料**。
+
+**實跑前先寫下預測**，這樣這一輪同時是壓力測試與模型驗證。兩項模型
+（`5.86 ms/commit + 0.53 ms/revision`，用 nest 與 vue 解）預測 18.7 分鐘。
+
+| | 預測 | 實測 |
+|---|---:|---:|
+| 時間 | 18.7 分鐘 | **239.3 分鐘（低估 12.8 倍）** |
+| revision | — | 1,697,002（44.3 rev/commit） |
+| 峰值 RSS | — | **3,479 MiB** |
+| 索引體積 | — | 768 MB |
+| ms/revision | 0.53 | **8.46** |
+
+**成本在這個規模上不是線性的。** ms/revision 從 0.68–1.41 跳到 8.46，
+而成因還沒定位——記憶體壓力（24.5M page reclaims、188 萬次非自願 context
+switch）是最可疑的，但也可能是索引深度或匹配器候選池。**沒查清楚之前不寫成因。**
+
+`KB/revision` 反而是穩的（0.46，其餘語料 0.36–0.68）——**空間是線性的，時間不是。**
+
+#### 第二個發現比效能更重要：四小時的工作無法續跑
+
+那一趟**沒跑完**：結構層寫完 170 萬筆 revision 之後被訊號中止（`time` 報
+`terminated abnormally`，沒有 JS 例外），迂迴偵測一條都沒跑。所以 239 分鐘是
+下界，其餘四套語料的秒數都含迂迴，兩者不可直接相比。
+
+而檢查資料庫發現更嚴重的事：**`declarations` 的水位線從來沒有被寫入**，
+`pass_state` 裡只有 `structural` 一列。
+
+```
+for (const commit of commits) { … inTransaction(db, () => { … }); }   // 資料逐 commit 提交
+recordDeclarationScope(db, repoId, indexerVersion, "repo", last.id);   // 水位線，整趟一次
+```
+
+**資料是逐 commit 提交的，水位線卻只在最後一行落地。** 於是中斷之後
+`declarationState` 回 undefined、`resolveResumePoint` 判成 `mode: "full"`，
+下一趟從第一顆 commit 重來。資料列因為 `UNIQUE (commit_id, slot_id)` 是冪等的，
+所以不會重複，但**每個 blob 都要重新解析、每一趟匹配都要重跑**——四小時全部作廢。
+
+這直接牴觸不變量 12 的「可獨立、**可恢復**地重跑」。它活到現在的原因與這個專案
+其他缺陷同源：**只在不會被中斷的輸入上驗過**。九秒跑完的語料，沒有人會在中途
+按 Ctrl-C，也就沒有人會發現水位線其實沒有前進。
+
+**這一輪不修**，先記錄。修法看起來是每 N 顆 commit 推進一次水位線，但要先確認
+續跑路徑真的能從任意 commit 邊界接上（`entityAt` / `revisionAt` 兩張記憶體對照表
+在續跑時的重建行為，見 §續跑時記憶體對照表必然落空）。那是獨立的一刀。
+
 ### 時間軸的深連結，與 demo 的精選案例（2026-08-23）
 
 `duration_days` 改用 `committed_at` 之後，vuejs/core 的第一個畫面換人了：原本

@@ -520,6 +520,21 @@ export async function indexRepoStructure(
     // SQLite 每一句都是自己的隱含 transaction。邊界取在單一 commit 而不是整趟：
     // 整趟包成一個的話，一萬個 commit 的 WAL 會膨脹到不可接受，中途失敗也會
     // 把已完成的工作全部丟掉。
+    //
+    // **水位線也要在這個 transaction 裡前進，否則上面那句話只兌現了一半。**
+    // 原本它只在整趟迴圈跑完的最後一行寫入：資料的確逐 commit 落地了，但
+    // `pass_state` 沒有記錄進度，中斷之後 `resolveResumePoint` 看不到
+    // declarations 那一列、判成 `full`，下一趟從第一顆 commit 重來。資料列因為
+    // `UNIQUE (commit_id, slot_id)` 是冪等的不會重複，但每個 blob 都要重新解析、
+    // 每一趟匹配都要重跑。實測 angular/angular（38,278 commit）被中止時，
+    // 170 萬筆 revision 已經寫進資料庫，四小時的工作卻一秒都接不回來。
+    //
+    // 這牴觸不變量 12 的「可獨立、**可恢復**地重跑」。它活到現在是因為只在
+    // 九秒跑完的語料上驗過——沒有人會在中途按 Ctrl-C，也就沒有人發現水位線
+    // 其實沒有前進。
+    //
+    // 放在 transaction 內而不是外：水位線與它宣稱已處理的資料必須同生同死。
+    // 寫在外面的話，程序死在兩者之間會讓水位線超前資料，那比不前進更糟。
     inTransaction(db, () => {
       // ── 存活與變更 ──────────────────────────────────────────────────────
       const touchedKeys = new Set<string>();
@@ -695,6 +710,16 @@ export async function indexRepoStructure(
           revisionAt.delete(prevKey);
         }
       }
+
+      // 檢查點：這顆 commit 的資料與「已處理到這顆」在同一次提交裡落地。
+      //
+      // 每顆都寫而不是每 N 顆：它是一次 UPSERT，而這個 transaction 本來就要
+      // 提交。實測開銷見 status.md——沒有可調的門檻就沒有調錯的門檻。
+      //
+      // 被跳過的 commit（合併、沒有相關檔案、前後都沒有宣告）不會走到這裡，
+      // 所以水位線停在最後一顆**真的處理過**的 commit。續跑時那些會被重掃，
+      // 但它們本來就是幾乎零成本的路徑。
+      recordDeclarationScope(db, repoId, indexerVersion, "repo", commit.id);
     });
   }
 

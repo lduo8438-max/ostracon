@@ -1,0 +1,20 @@
+(node:49927) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"at":"2026-08-27T05:47:21.740Z","pid":49927,"event":"started","repo":"/Users/lcy/Documents/ostracon/corpora/angular","dbPath":"/Users/lcy/Documents/ostracon/reports/angular-profile-20260827/main.db","until":"HEAD","progressEvery":5000,"indexerVersion":"walk-0.3.0+M30C40+histogram"}
+{"at":"2026-08-27T05:47:21.848Z","pid":49927,"event":"failed","message":"database is locked","elapsedMs":108,"dbBytes":803704832,"walBytes":70530312,"rssBytes":122617856,"maxRssKiB":119776}
+file:///Users/lcy/Documents/ostracon/src/git/persist.ts:458
+  ).run(repoId, commitId, watermark.indexerVersion, new Date().toISOString());
+    ^
+
+Error: database is locked
+    at updateStructuralWatermark (file:///Users/lcy/Documents/ostracon/src/git/persist.ts:458:5)
+    at persistWalk (file:///Users/lcy/Documents/ostracon/src/git/persist.ts:280:7)
+    at indexGit (file:///Users/lcy/Documents/ostracon/src/git/index.ts:147:34)
+    at main (file:///Users/lcy/Documents/ostracon/src/golden/profile-angular.ts:84:23)
+    at async file:///Users/lcy/Documents/ostracon/src/golden/profile-angular.ts:167:3 {
+  code: 'ERR_SQLITE_ERROR',
+  errcode: 5,
+  errstr: 'database is locked'
+}
+
+Node.js v24.14.1

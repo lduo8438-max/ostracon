@@ -1,0 +1,20 @@
+{"at":"2026-08-27T05:02:12.057Z","event":"supervisor-started","pid":23830,"waitPid":82594}
+{"at":"2026-08-27T05:02:12.058Z","event":"intentional-abort-verified","checkpoint":{"lastCommitId":5000,"sha":"0b54e3cf0abe061646d71178901cdf75819b1314","topoOrder":4999,"indexerVersion":"walk-0.3.0+M30C40+histogram+discontinuity-1.0.0+jaccard0.25+ngram3/exact<=200/minhash128/mh-2.0.0+profiles:tsx@profile-1.0.0,typescript@profile-1.0.0,python@profile-1.1.1+scope:repo"}}
+{"at":"2026-08-27T05:02:12.059Z","event":"phase-started","phase":"gate-resume","pid":23832}
+{"at":"2026-08-27T05:07:24.747Z","event":"phase-exited","phase":"gate-resume","code":0,"signal":null}
+{"at":"2026-08-27T05:07:24.747Z","event":"gate-passed","checkpoint":{"lastCommitId":10001,"sha":"9c7805be2f701ceb04796dbeec2ba4c088f83046","topoOrder":10000,"indexerVersion":"walk-0.3.0+M30C40+histogram+discontinuity-1.0.0+jaccard0.25+ngram3/exact<=200/minhash128/mh-2.0.0+profiles:tsx@profile-1.0.0,typescript@profile-1.0.0,python@profile-1.1.1+scope:repo"},"commitsScanned":5001,"revisions":432519}
+{"at":"2026-08-27T05:07:24.748Z","event":"phase-started","phase":"main","pid":48391}
+{"at":"2026-08-27T05:47:21.641Z","event":"detached-launched","pid":49924}
+{"at":"2026-08-27T05:47:21.683Z","event":"resume-supervisor-started","pid":49924}
+{"at":"2026-08-27T05:47:21.685Z","event":"phase-started","phase":"main-resume","pid":49927}
+{"at":"2026-08-27T05:47:21.852Z","event":"phase-exited","phase":"main-resume","code":1,"signal":null}
+{"at":"2026-08-27T05:47:21.852Z","event":"failed","phase":"main-resume","message":"正式長跑續跑失敗：code=1 signal=null"}
+{"at":"2026-08-27T05:48:17.000Z","event":"original-run-confirmed-active","pid":48391,"cpuPercent":99.4,"note":"resume attempt was safely rejected by SQLite because the original writer is still active; continue monitoring pid 48391"}
+{"at":"2026-08-27T07:55:24.590Z","event":"phase-exited","phase":"main","code":null,"signal":"SIGTERM"}
+{"at":"2026-08-27T07:55:24.591Z","event":"failed","message":"正式長跑失敗：code=null signal=SIGTERM"}
+{"at":"2026-08-27T07:55:28.000Z","event":"paused-by-user","signal":"SIGTERM","checkpointTopoOrder":30701,"checkpointSha":"7436d3180ea5ad2c0b58d920bd45f8641a14cc8d","databaseQuickCheck":"ok"}
+{"at":"2026-08-27T10:09:29.656Z","event":"detached-launched","pid":96951}
+{"at":"2026-08-27T10:09:29.699Z","event":"resume-supervisor-started","pid":96951}
+{"at":"2026-08-27T10:09:29.701Z","event":"phase-started","phase":"main-resume","pid":96954}
+{"at":"2026-08-27T10:28:40.168Z","event":"phase-exited","phase":"main-resume","code":0,"signal":null}
+{"at":"2026-08-27T10:28:40.170Z","event":"completed"}

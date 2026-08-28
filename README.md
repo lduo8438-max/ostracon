@@ -255,8 +255,39 @@ revert，或移除掉的內容與當初加入的逐字相同）；C 只有生命
 在 25 萬以內可以用上面那個兩項擬合；超過之後擬合會低估，而**真正該檢查的是
 歷史上有沒有一次動到上千個檔案的 commit**。
 
-大跑之前值得知道：**索引是可中斷的**。水位線逐 commit 前進，中斷後再跑一次會
-從上次的位置接下去（angular 這一輪就經歷了一次刻意的 SIGTERM 暫停與一次續跑）。
+### 分段索引：用 `--until` 限制單次工作量
+
+索引**可中斷、可恢復**：水位線逐 commit 前進並與該 commit 的資料在同一個
+transaction 裡落地，所以中斷之後再跑一次會從上次的位置接下去，不會重來。
+
+在此之上，`--until <sha>` 讓你自己決定每一趟做到哪裡：
+
+```bash
+# 先取得等距的分段點（每 5,000 個 commit 一個）
+git -C <repo> rev-list --topo-order --reverse HEAD | awk 'NR % 5000 == 0'
+
+# 一段一段來。每一趟結束都是一個乾淨的中止點，可以關機、可以排程
+ostracon ostracised --repo <repo> --db index.db --until <第 5,000 顆>
+ostracon ostracised --repo <repo> --db index.db --until <第 10,000 顆>
+...
+ostracon ostracised --repo <repo> --db index.db      # 不給 --until 就跑到 HEAD
+```
+
+**產出與一次跑完完全相同。** 實測 create-t3-app 分兩段對一次跑完：
+3,606 revision、405 entity、170 條迂迴、`stable_key` 集合逐一相同。
+
+它解決的是三件事：
+
+| | |
+|---|---|
+| **可恢復** | 中斷、當機、關筆電之後不必從頭來 |
+| **可排程** | 一天跑一段，或塞進 CI 的時間預算裡 |
+| **限制單次工作量** | 一趟只佔用可預期的時間與記憶體 |
+
+**它不解決效能。** 分段本身有小額固定開銷（create-t3-app 9.2 → 9.7 秒），
+而且**對巨型 commit 完全無效**——檢查點落在 commit 邊界上，一顆碰到三千個檔案
+的 commit 不會因為你把範圍切小就變便宜，它只是落在某一段裡，那一段就會很久。
+angular 的 25k–30k 那一段花了 75 分鐘，其中 69 分鐘是**單獨一顆** commit。
 
 ### 三欄畫面
 

@@ -175,6 +175,10 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 
 ### angular 全量分段量測：非線性定位在兩顆 commit（2026-08-27）
 
+> **原始量測留在 `docs/benchmarks/angular-20260827/`**（48 KB 的 jsonl 與 log）。
+> 下面每一個數字都出自那裡；重跑一次要三小時，所以紀錄本身進版控，
+> 資料庫（可重建的衍生物）不進。
+
 檢查點修好之後才做得成的量測——分段索引需要能中途停下來再接回去。
 
 #### 一、先更正我自己發布過的數字

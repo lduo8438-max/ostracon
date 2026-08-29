@@ -1,0 +1,21 @@
+(node:94953) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+time: command terminated abnormally
+    14357.17 real      2871.49 user      1641.41 sys
+          3647602688  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+            24567377  page reclaims
+              140236  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+              832332  messages sent
+              538150  messages received
+                   2  signals received
+             2420153  voluntary context switches
+             1880038  involuntary context switches
+          1909631608  instructions retired
+           639142540  cycles elapsed
+            86907768  peak memory footprint

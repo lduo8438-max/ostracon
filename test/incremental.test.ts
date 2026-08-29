@@ -7,7 +7,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 import { verifyParserAdapters } from "../src/ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../src/git/index.ts";
-import { indexRepoStructure } from "../src/index/repo-pass.ts";
+import {
+  DECLARATIONS_PASS_NAME,
+  indexRepoStructure,
+} from "../src/index/repo-pass.ts";
 
 /**
  * **增量索引的產出必須與全量索引到同一個終點完全相同。**
@@ -121,6 +124,120 @@ describe("增量索引與全量索引必須產出相同結果", () => {
     assert.equal(a.matches, b.matches);
     assert.equal(a.deaths, b.deaths, "死亡必須記在原本的 entity 上，不是新生的");
     assert.equal(a.changes, b.changes);
+  });
+
+  /**
+   * **中途被打斷之後，已完成的工作要接得回來。**
+   *
+   * 資料本來就是逐 commit 提交的（每顆一個 transaction），但水位線原本只在整趟
+   * 迴圈跑完的最後一行才寫入。於是中斷之後 `resolveResumePoint` 看不到
+   * declarations 那一列、判成 `full`，下一趟從第一顆 commit 重來——資料列因為
+   * `UNIQUE (commit_id, slot_id)` 冪等不會重複，但每個 blob 都要重新解析。
+   *
+   * 實測 angular/angular（38,278 commit）被訊號中止時，170 萬筆 revision 已經
+   * 寫進資料庫，四小時的工作卻一秒都接不回來。牴觸不變量 12 的「可恢復地重跑」。
+   *
+   * **這條測試不模擬中斷，它直接檢查水位線有沒有跟著資料前進**——中斷發生在
+   * 哪一顆 commit 是隨機的，而「水位線落後於已提交的資料」才是缺陷本身。
+   */
+  it("**中途炸掉之後，已完成的 commit 要接得回來**", async () => {
+    await verifyParserAdapters();
+    const repo = makeRepo(8);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+    const shas = git("rev-list", "--topo-order", "--reverse", "HEAD").split("\n");
+    const tip = shas[shas.length - 1]!;
+
+    const dbPath = freshDb();
+    const report = indexGit(repo, { dbPath, until: tip });
+    const real = new DatabaseSync(dbPath);
+    real.exec("PRAGMA foreign_keys = ON");
+
+    // **在 db 這個既有的接縫上注入失敗，不動產品程式碼。** `prep` 對每個 SQL
+    // 只呼叫一次 `db.prepare` 並快取語句，所以包一層 Proxy 就能數 `run` 的次數
+    // 並在第 N 次丟例外——那是一次發生在迴圈中途、transaction 內的中斷，
+    // 與 angular 上被訊號砍掉的形狀相同。
+    let inserts = 0;
+    const BOOM_AT = 4;
+    const db = new Proxy(real, {
+      get(target, prop) {
+        // 原生方法要綁回真實物件：`Reflect.get` 回傳的是未綁定的函式，
+        // 用 Proxy 當 `this` 呼叫 `exec` 會得到 Illegal invocation。
+        if (prop !== "prepare") {
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.includes("INSERT INTO revision (")) return statement;
+          return new Proxy(statement, {
+            get(st, p) {
+              if (p !== "run") {
+                const value = Reflect.get(st, p);
+                return typeof value === "function" ? value.bind(st) : value;
+              }
+              return (...args: unknown[]) => {
+                if (++inserts === BOOM_AT) throw new Error("注入的中斷");
+                return (st.run as (...a: unknown[]) => unknown)(...args);
+              };
+            },
+          });
+        };
+      },
+    }) as DatabaseSync;
+
+    await assert.rejects(
+      () => indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION),
+      /注入的中斷/,
+      "前提：注入的失敗必須真的把 pass 打斷",
+    );
+
+    // **這才是缺陷本身**：資料是逐 commit 提交的，水位線卻只在整趟跑完的最後
+    // 一行寫入。中斷之後沒有那一列 → `resolveResumePoint` 判成 full → 下一趟
+    // 從第一顆重來。angular 上那是四小時的工作。
+    const mark = real.prepare(
+      `SELECT c.id AS id, c.topo_order AS topo
+         FROM pass_state p JOIN git_commit c ON c.id = p.last_commit_id
+        WHERE p.repo_id = ? AND p.pass_name = ?`,
+    ).get(report.repoId, DECLARATIONS_PASS_NAME) as
+      { id: number; topo: number } | undefined;
+    assert.ok(mark, "中斷之後仍須留下 declarations 水位線，否則下一趟從頭再來");
+
+    // 水位線指的那顆必須真的寫過 revision，而且不是 tip——它得停在中斷之前。
+    const written = (real.prepare(
+      "SELECT COUNT(*) AS n FROM revision WHERE commit_id = ?",
+    ).get(mark.id) as { n: number }).n;
+    assert.ok(written > 0, "水位線指的 commit 必須真的有資料");
+    const tipTopo = (real.prepare(
+      "SELECT MAX(topo_order) AS n FROM git_commit WHERE repo_id = ?",
+    ).get(report.repoId) as { n: number }).n;
+    assert.ok(mark.topo < tipTopo, `水位線該停在中斷之前，實際 ${mark.topo}/${tipTopo}`);
+
+    // 炸掉的那一顆整個 transaction 回滾：水位線不得超前它自己的資料。
+    const orphan = (real.prepare(
+      `SELECT COUNT(*) AS n FROM git_commit c
+        WHERE c.repo_id = ? AND c.topo_order > ?
+          AND EXISTS (SELECT 1 FROM revision r WHERE r.commit_id = c.id)`,
+    ).get(report.repoId, mark.topo) as { n: number }).n;
+    assert.equal(orphan, 0, "水位線之後不得有已寫入的 revision");
+
+    // **接回去的結果必須與一次跑完的相同。** 水位線留下來只是必要條件；
+    // 使用者要的是「中斷之後再跑一次，拿到的東西跟沒中斷過一樣」。
+    const resumed = await indexRepoStructure(real, repo, report.repoId, INDEXER_VERSION);
+    assert.equal(resumed.mode, "incremental", "接得回來的話這一趟是增量，不是重頭");
+    assert.ok(
+      resumed.commitsScanned < shas.length,
+      `增量只該掃剩下的，實際掃了 ${resumed.commitsScanned}/${shas.length}`,
+    );
+    real.close();
+
+    const full = freshDb();
+    await indexTo(full, repo, tip);
+    assert.deepEqual(
+      snapshot(dbPath),
+      snapshot(full),
+      "中斷後續跑的產出必須與一次跑完逐項相同",
+    );
   });
 
   it("分成很多小批次續跑，結果仍與一次全量相同", async () => {

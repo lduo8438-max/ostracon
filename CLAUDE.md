@@ -14,6 +14,7 @@
 | 排程、效能預算、已知限制 | `docs/roadmap.md` |
 | 黃金測試集規格 | `docs/golden-fixtures-spec.md` |
 | 進行中工作的細部設計 | `docs/plan-*.md` |
+| 大語料量測的原始紀錄 | `docs/benchmarks/<語料>-<日期>/` |
 | 現在該做什麼、不該碰什麼 | `CLAUDE.local.md` |
 
 **先讀實際檔案，不要依文件重建程式碼。** 動 `src/git/persist.ts`、`src/git/index.ts`、
@@ -171,6 +172,17 @@ pnpm evidence:extract -- --db <db>
 
 # linked 文件：live 需 token；測試／golden 使用 --replay-dir，永遠不需網路或 token
 pnpm evidence:linked -- --db <db> [--record-dir fixtures/http | --replay-dir fixtures/http]
+
+# 分段索引：--until 限制單次工作量。三支指令（why / ostracised / hotspots）都收。
+# **產出與一次跑完相同**（實測 t3 分兩段：rev/entity/迂迴/stable_key 全部一致）。
+# 它是可恢復、可排程、限制單次工作量的操作方式，**不是效能解法**——檢查點落在
+# commit 邊界，一顆碰到三千個檔案的 commit 切不開，只會落在某一段裡拖垮那一段。
+git -C <repo> rev-list --topo-order --reverse HEAD | awk 'NR % 5000 == 0'   # 取分段點
+
+# 分段量測大語料：每 N 顆 commit 記一次耗時／RSS／該區間最慢的 commit
+# --abort-after 用來驗續跑：在指定的 commit 數之後刻意中止，水位線必須留下來
+pnpm profile:angular -- --repo <repo-path> --db <db> [--until <sha>]
+                        [--progress-every <n>] [--abort-after <n>]
 
 # 審計完整歷史中 matcher 實際產生的非 L1 配對（人工裁決負例）
 pnpm golden:audit -- --repo <repo-path> --until <sha> --output reports/audit.json

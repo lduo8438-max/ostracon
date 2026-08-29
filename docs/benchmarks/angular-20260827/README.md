@@ -14,6 +14,7 @@
 | `main-resume*.out` | 兩次續跑 |
 | `gate.jsonl` / `gate-resume.out` | 續跑閘門：刻意在 topo 4,999 中止，再續跑到 10,000 |
 | `state.jsonl` | supervisor 的視角：中斷、拒絕、續跑、完成 |
+| `first-run.time` / `first-run.out` | **第一趟（2026-08-26，被訊號中止）的 `/usr/bin/time -l` 計量。** 索引本身的數字已被上面那趟取代，但這裡是唯一的資源計量紀錄——`status.md` §「成因未定位」引用的 24.5M page reclaims、188 萬次非自願 context switch、239.3 分鐘、峰值 3,479 MiB 都只出自這個檔案，profile 工具不記這些 |
 
 ## 三件值得記住的事
 
@@ -37,3 +38,7 @@ pnpm profile:angular -- --repo <angular> --db <fresh.db> --progress-every 5000
 ```
 
 資料庫是可重建的衍生物，所以不留；這些 log 不可重建，所以留。
+
+`first-run.*` 是同一條規則的延伸：那一趟的資料庫已刪、語料副本已刪，但它的資源
+計量支撐著 `status.md` 裡一個**尚未定位的成因假說**（記憶體壓力）。假說被推翻或
+證實之前，證據不能只存在於暫存目錄。

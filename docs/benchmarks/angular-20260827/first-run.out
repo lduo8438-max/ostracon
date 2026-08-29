@@ -1,0 +1,5 @@
+
+> ostracon@0.1.0 ostracised /Users/lcy/Documents/ostracon
+> node --experimental-strip-types src/cli/ostracised.ts -- --repo /private/tmp/claude-501/-Users-lcy-Documents-ostracon/471b5254-4e8c-496d-bbd3-d76b0d71c29d/scratchpad/corpora/angular --db reports/angular.db
+
+ ELIFECYCLE  Command failed.

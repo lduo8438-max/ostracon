@@ -176,7 +176,8 @@ pnpm evidence:linked -- --db <db> [--record-dir fixtures/http | --replay-dir fix
 # 分段索引：--until 限制單次工作量。三支指令（why / ostracised / hotspots）都收。
 # **產出與一次跑完相同**（實測 t3 分兩段：rev/entity/迂迴/stable_key 全部一致）。
 # 它是可恢復、可排程、限制單次工作量的操作方式，**不是效能解法**——檢查點落在
-# commit 邊界，一顆碰到三千個檔案的 commit 切不開，只會落在某一段裡拖垮那一段。
+# commit 邊界，一顆碰到三千個檔案的 commit 切不開，只會落在某一段裡。
+# （那顆 commit 曾經要 69 分鐘；idx_revision_path 之後是 45 秒。限制沒變，代價變小。）
 git -C <repo> rev-list --topo-order --reverse HEAD | awk 'NR % 5000 == 0'   # 取分段點
 
 # 分段量測大語料：每 N 顆 commit 記一次耗時／RSS／該區間最慢的 commit

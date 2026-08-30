@@ -1,0 +1,36 @@
+受控空間量測：idx_revision_path 佔多少空間
+量法：同一份資料，唯一差別是有沒有這條索引。
+日期：2026-08-30T06:19:46Z   機器：Darwin arm64   v24.14.1
+
+$ ls -l reports/angular-profile-20260827/main.db | awk "{print \$5\" bytes\"}"
+1289707520 bytes
+
+$ cp reports/angular-profile-20260827/main.db /private/tmp/claude-501/-Users-lcy-Documents-ostracon/930b7052-6ae1-49a9-a9ed-70ece31ff99d/scratchpad/space-probe.db && echo copied
+copied
+
+$ node --experimental-strip-types -e "
+const { DatabaseSync } = require(\"node:sqlite\");
+const db = new DatabaseSync(process.argv[1]);
+console.log(\"索引前:\", db.prepare(\"select count(*) c from sqlite_master where name=?\").get(\"idx_revision_path\").c === 1 ? \"已存在\" : \"不存在\");
+console.log(\"revision 列數:\", db.prepare(\"select count(*) c from revision\").get().c);
+const t = process.hrtime.bigint();
+db.exec(\"CREATE INDEX idx_revision_path ON revision(repo_id, lineage_id, path)\");
+console.log(\"建立耗時:\", (Number(process.hrtime.bigint()-t)/1e9).toFixed(1), \"s\");
+db.close();
+" /private/tmp/claude-501/-Users-lcy-Documents-ostracon/930b7052-6ae1-49a9-a9ed-70ece31ff99d/scratchpad/space-probe.db 2>&1 | grep -v Warning
+索引前: 不存在
+revision 列數: 2919032
+建立耗時: 4.6 s
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+$ ls -l /private/tmp/claude-501/-Users-lcy-Documents-ostracon/930b7052-6ae1-49a9-a9ed-70ece31ff99d/scratchpad/space-probe.db | awk "{print \$5\" bytes\"}"
+1477107712 bytes
+
+$ node -e "
+const a=1289707520, b=1477107712;
+console.log(\`前 \${(a/1048576).toFixed(1)} MiB  後 \${(b/1048576).toFixed(1)} MiB\`);
+console.log(\`增加 \${((b-a)/1048576).toFixed(1)} MiB = +\${((b/a-1)*100).toFixed(1)}%  每列 \${((b-a)/2919032).toFixed(1)} bytes\`);
+"
+前 1230.0 MiB  後 1408.7 MiB
+增加 178.7 MiB = +14.5%  每列 64.2 bytes
+

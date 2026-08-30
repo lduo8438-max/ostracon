@@ -518,6 +518,14 @@ export function isParentOf(
  *
  * 成本實測：demo 語料 7,212 列 revision，三道檢查合計 29.8 ms。每次指令呼叫
  * 跑一次（不是每次查詢），相對於索引本身的秒級耗時可以忽略。
+ *
+ * 加 `idx_revision_path` 之後這裡的計畫從循序掃描變成走索引。一度以為那是退步
+ * 並加了 `NOT INDEXED`——**那是量錯的**：兩個數字來自不同檔案、不同快取狀態，
+ * 於是把快取差異讀成計畫差異。同檔交錯重測（兩種順序各五輪）的結論相反：
+ * 吃索引 1,471 ms、`NOT INDEXED` 2,416 ms，**新計畫比較快**，所以撤回。
+ *
+ * 留下這段註解是因為前半仍然成立：**加索引會改變其他查詢的計畫**，
+ * 而**跨檔案比較效能等於在量快取狀態**。
  */
 export function assertNoCrossRepoRows(db: DatabaseSync, repoId: number): void {
   const checks: Array<[string, string]> = [
@@ -695,6 +703,35 @@ export function previousSlotEntity(
 }
 
 /**
+ * `previousPathEntity` 的查詢。**匯出是為了讓測試對它本身跑 EXPLAIN QUERY PLAN。**
+ *
+ * 這條查詢是「每一次誕生呼叫一次」，而 `revision` 上原本沒有 `(repo_id,
+ * lineage_id, path)` 的索引，於是它全表掃描——angular 實測 290 萬列、
+ * 1,316 ms/次，兩顆大規模 revert（1,637 與 3,015 個檔的 revert，全部是新增，
+ * 所以每一筆都是誕生）各因此花掉數十分鐘。加上 `idx_revision_path` 之後
+ * 0.027 ms/次。
+ *
+ * **測試檔一度自己抄了一份**，然後在「拿掉機制看會不會紅」時發現抄本在尾端
+ * 追加條件時不會咬。與其把比對寫得更嚴，不如讓副本不存在。
+ */
+export const PREVIOUS_PATH_ENTITY_SQL = `WITH latest AS (
+     SELECT MAX(c.topo_order) AS topoOrder
+       FROM revision r
+       JOIN git_commit c ON c.id = r.commit_id
+      WHERE r.repo_id = ? AND r.lineage_id = ? AND r.path = ?
+        AND c.topo_order < (
+          SELECT topo_order FROM git_commit WHERE repo_id = ? AND sha = ?
+        )
+   )
+   SELECT DISTINCT r.entity_id AS entityId
+     FROM revision r
+     JOIN slot s ON s.id = r.slot_id
+     JOIN git_commit c ON c.id = r.commit_id
+     JOIN latest l ON l.topoOrder = c.topo_order
+    WHERE r.repo_id = ? AND r.lineage_id = ? AND r.path = ?
+      AND s.qualified_name = ?`;
+
+/**
  * 舊路徑最後一個版本裡的同名 entity。若同一版本有多個不同 entity 就放棄：
  * 路徑重現是硬事實，但「前一位是誰」仍不可任選，誤接會製造假斷層。
  */
@@ -706,24 +743,7 @@ export function previousPathEntity(
   symbol: string,
   beforeSha: string,
 ): number | undefined {
-  const rows = prep(db,
-    `WITH latest AS (
-       SELECT MAX(c.topo_order) AS topoOrder
-         FROM revision r
-         JOIN git_commit c ON c.id = r.commit_id
-        WHERE r.repo_id = ? AND r.lineage_id = ? AND r.path = ?
-          AND c.topo_order < (
-            SELECT topo_order FROM git_commit WHERE repo_id = ? AND sha = ?
-          )
-     )
-     SELECT DISTINCT r.entity_id AS entityId
-       FROM revision r
-       JOIN slot s ON s.id = r.slot_id
-       JOIN git_commit c ON c.id = r.commit_id
-       JOIN latest l ON l.topoOrder = c.topo_order
-      WHERE r.repo_id = ? AND r.lineage_id = ? AND r.path = ?
-        AND s.qualified_name = ?`,
-  ).all(
+  const rows = prep(db, PREVIOUS_PATH_ENTITY_SQL).all(
     repoId, lineageId, pathName, repoId, beforeSha,
     repoId, lineageId, pathName, symbol,
   ) as unknown as Array<{ entityId: number }>;

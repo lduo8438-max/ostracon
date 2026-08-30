@@ -58,8 +58,44 @@ export function openDb(path: string): DatabaseSync {
  * 目前的 schema 版本。**改動 `db/schema.sql` 的結構就要加一。**
  *
  * 2 = `declaration_content`：內容與位置分離、雜湊改存 BLOB。
+ * 3 = `idx_revision_path`：純索引，不動任何資料。
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/**
+ * 可就地套用的遷移：**只有不改變任何產出的變更才准列在這裡。**
+ *
+ * v1→v2 改了資料的存法，舊資料庫真的不可續用，所以它不在這張表上——
+ * 拒絕並要求重建才是對的。v2→v3 只加一條索引：查詢結果逐位元不變，
+ * 而要求重建的代價是 angular 三小時。**判準是「產出會不會變」，
+ * 不是「版本號有沒有變」**，所以這張表是白名單而不是通則。
+ */
+const MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
+  [3, (db: DatabaseSync) => {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_revision_path ON revision(repo_id, lineage_id, path)");
+  }],
+]);
+
+/**
+ * 把資料庫從 `from` 逐版推到 `SCHEMA_VERSION`，中途缺任何一步就放棄。
+ *
+ * 回傳 `false` 代表「這段落差沒有就地遷移的路徑」，由呼叫端沿用原本的拒絕訊息。
+ * 每一步各自一個 transaction 並各記一列，中斷後續得下去。
+ */
+function migrate(db: DatabaseSync, from: number): boolean {
+  const steps: Array<[number, (db: DatabaseSync) => void]> = [];
+  for (let v = from + 1; v <= SCHEMA_VERSION; v++) {
+    const step = MIGRATIONS.get(v);
+    if (step === undefined) return false;
+    steps.push([v, step]);
+  }
+  for (const [version, step] of steps) {
+    step(db);
+    db.prepare("INSERT INTO schema_migration (version, applied_at) VALUES (?, ?)")
+      .run(version, new Date().toISOString());
+  }
+  return true;
+}
 
 /**
  * 開一個索引資料庫：不存在就依 schema 建立，存在就確認版本相符。
@@ -109,6 +145,8 @@ export function assertSchemaVersion(db: DatabaseSync, dbPath: string): void {
     found = undefined;
   }
   if (found === SCHEMA_VERSION) return;
+  // 沒有記錄版本的資料庫是內容定址之前的產物，資料的存法就不同，不可就地遷移。
+  if (found !== undefined && found < SCHEMA_VERSION && migrate(db, found)) return;
   throw new Error(
     `${dbPath} 的 schema 版本是 ${found ?? "更早（沒有記錄版本）"}，`
     + `目前是 ${SCHEMA_VERSION}。\n`

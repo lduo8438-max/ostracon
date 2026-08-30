@@ -30,6 +30,11 @@ PRAGMA foreign_keys = ON;
 --
 --   1 = 內容定址之前的 v0.5 系列（回溯編號，實際上從沒被寫進去過）
 --   2 = declaration_content：內容與位置分離、雜湊改存 BLOB
+--   3 = idx_revision_path：純索引，**不動任何資料**，所以是第一個可就地遷移的版本
+--
+-- **不是每一次版本提升都該要求重建。** v1→v2 改了資料的存法，舊資料庫確實不可
+-- 續用；v2→v3 只加一條索引，輸出逐位元不變，而要求重建的代價是 angular 三小時。
+-- 判準是「產出會不會變」，不是「版本號有沒有變」。
 CREATE TABLE schema_migration (
   version     INTEGER PRIMARY KEY,
   applied_at  TEXT NOT NULL
@@ -329,6 +334,12 @@ CREATE INDEX idx_revision_entity  ON revision(entity_id, commit_id);
 CREATE INDEX idx_revision_slot    ON revision(slot_id, commit_id);
 -- 迂迴的搬移守門從內容表 join 回 revision 要用它。
 CREATE INDEX idx_revision_content ON revision(content_id);
+-- `previousPathEntity`（路徑被刪除後又重建時，找回前一位佔用者）用這一條。
+-- **原本沒有索引，於是它全表掃描 revision，而它是「每一次誕生呼叫一次」。**
+-- angular 實測（290 萬列）：1,316 ms/次 → 0.027 ms/次。
+-- 對照組就在上面兩行：`previousSlotEntity` 是同一張表、同一種形狀的查詢，
+-- 有 idx_revision_slot，實測 0.002 ms/次。差別只在有沒有索引。
+CREATE INDEX idx_revision_path    ON revision(repo_id, lineage_id, path);
 
 -- 搬移守門用這兩條回答「有沒有一份相同的內容活得比它久」。
 -- **hash_raw 那一路原本完全沒有索引**（148,199 列全表掃描）；搬到內容表之後

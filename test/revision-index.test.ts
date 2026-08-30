@@ -70,6 +70,36 @@ describe("revision 的路徑索引", () => {
     }
   });
 
+  it("遷移中途被中斷（索引已建、版本列未寫）仍接得回來", () => {
+    const dir = scratch();
+    try {
+      const file = path.join(dir, "half.db");
+      openIndexDatabase(file).close();
+      // 遷移是兩步：建索引、寫版本列，而它們不在同一個 transaction 裡。
+      // 死在兩步之間的資料庫長這樣——索引在，版本還是 2。
+      //
+      // **全新建的庫只有版本 3 那一列**，把它刪掉會變成「沒有版本紀錄」，
+      // 那是另一條路徑（下一個案例）。要造出這裡要的狀態，得把版本改寫成 2
+      // 而不是刪掉——這一步寫錯過一次，是這條測試自己咬出來的。
+      const seed = new DatabaseSync(file);
+      seed.exec("DELETE FROM schema_migration");
+      seed.prepare("INSERT INTO schema_migration (version, applied_at) VALUES (2, ?)")
+        .run(new Date().toISOString());
+      seed.close();
+
+      // 接得回來靠的是 CREATE INDEX **IF NOT EXISTS**：重跑第一步是 no-op。
+      // 沒有那三個字的話，續開會炸在「索引已存在」，而使用者手上是一個
+      // 開不起來、又不該重建的資料庫。
+      const db = openIndexDatabase(file);
+      const version = (db.prepare("SELECT MAX(version) AS v FROM schema_migration")
+        .get() as { v: number }).v;
+      db.close();
+      assert.equal(version, SCHEMA_VERSION);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("沒有記錄版本的舊資料庫仍然被拒絕（資料存法不同，遷移不了）", () => {
     const dir = scratch();
     try {

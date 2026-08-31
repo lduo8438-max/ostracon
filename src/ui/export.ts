@@ -2,15 +2,19 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  discontinuitiesFor,
   entityIdForStableKey,
   evolutionOf,
+  ladderStats,
   listEntities,
   ostracisedFor,
   repoSummary,
 } from "./data.ts";
 import { PAGE } from "./page.ts";
 import {
+  DISCONTINUITIES_PATH,
   ENTITIES_PATH,
+  LADDER_PATH,
   OSTRACISED_PATH,
   SUMMARY_PATH,
   evolutionPath,
@@ -94,6 +98,11 @@ export function exportStaticSite(
   const ostracised = ostracisedFor(db, repoId);
   write(OSTRACISED_PATH, JSON.stringify(ostracised));
   write(ENTITIES_PATH, JSON.stringify(entities));
+
+  // 這兩份是**全 repo 的彙總**，不隨 `--limit` 裁切：階梯的分母就是整個 repo
+  // 的配對數，裁掉之後那個比例會說謊。實測 vuejs/core 兩份合計 100 KB 出頭。
+  write(LADDER_PATH, JSON.stringify(ladderStats(db, repoId)));
+  write(DISCONTINUITIES_PATH, JSON.stringify(discontinuitiesFor(db, repoId)));
 
   // 兩份名單的 entity 聯集才是「訪客點得到的一切」。
   // **檔名用 `stable_key`**：rowid 會隨全量重建漂移，而漂移最壞的後果不是 404，

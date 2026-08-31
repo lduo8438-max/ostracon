@@ -1,8 +1,10 @@
 import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import {
+  discontinuitiesFor,
   entityIdForStableKey,
   evolutionOf,
+  ladderStats,
   listEntities,
   ostracisedFor,
   repoSummary,
@@ -42,6 +44,10 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as co
 export const SUMMARY_PATH = "/api/summary.json";
 export const ENTITIES_PATH = "/api/entities.json";
 export const OSTRACISED_PATH = "/api/ostracised.json";
+/** 匹配階梯的分佈與跨檔案搬移清單。 */
+export const LADDER_PATH = "/api/ladder.json";
+/** 身份斷層：slot 延續、entity 血緣斷開的那些位置。 */
+export const DISCONTINUITIES_PATH = "/api/discontinuities.json";
 export const evolutionPath = (stableKey: string) =>
   `/api/evolution/${stableKey}.json`;
 
@@ -87,6 +93,16 @@ export function createUiServer(options: UiOptions): Server {
       if (url.pathname === OSTRACISED_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(ostracisedFor(db, repoId)));
+        return;
+      }
+      if (url.pathname === LADDER_PATH) {
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify(ladderStats(db, repoId)));
+        return;
+      }
+      if (url.pathname === DISCONTINUITIES_PATH) {
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify(discontinuitiesFor(db, repoId)));
         return;
       }
       const key = stableKeyFromPath(url.pathname);

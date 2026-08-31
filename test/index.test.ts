@@ -12,6 +12,7 @@ import "./hotspots.test.ts";
 import "./hunks.test.ts";
 import "./incremental.test.ts";
 import "./ladder.test.ts";
+import "./ladder-view.test.ts";
 import "./lineage.test.ts";
 import "./linked.test.ts";
 import "./minhash-arithmetic.test.ts";

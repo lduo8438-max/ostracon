@@ -363,3 +363,221 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
     },
   };
 }
+
+/**
+ * `ambiguity_size > 1` 在不同層代表**不同的事**，所以 payload 自己帶語意。
+ *
+ * - `unique-by-construction`（L1–L3b）：那幾層的前提就是雙端 bucket 唯一，
+ *   不唯一時根本不會接受，所以這個數字必定是 0。
+ * - `content-class-size`（L3c）：**內容等價類的大小，不是「曖昧」。**
+ *   走到 L3c 恰恰是因為內容 bucket 不唯一，而唯一的是位置——位置錨定把它解掉了。
+ * - `tied-candidates`（L4／L5）：接受當下同分且仍可用的前像數，這才是真的曖昧。
+ *
+ * **一個欄位三種意思，統一叫「ambiguous」會逐字為真而意思相反。** 這個專案
+ * 被同型的東西咬過：`版本字串沒有理由改變` 抽出 `理由改變。`——span 斷言通過、
+ * 逐字為真、意思相反。
+ */
+export type AmbiguityMeaning =
+  | "unique-by-construction"
+  | "content-class-size"
+  | "tied-candidates";
+
+/**
+ * 匹配階梯的一層。
+ *
+ * `verified` 只對 L4／L5 有意義，其餘層是 `null` **而不是 0**——L1–L3c 是雜湊
+ * 相等或位置錨定，「精確驗證過幾次」對它們不成立，填 0 會被讀成「一次都沒驗證」。
+ * 這與 `slot_discontinuity.similarity` 的 NULL／0 是同一條規則：
+ * **沒有證據不是最強的負證據。**
+ */
+export interface LadderTier {
+  tier: string;
+  accepted: number;
+  /** `ambiguity_size > 1` 的筆數。**讀它之前先看 `ambiguityMeaning`。** */
+  multiCandidate: number;
+  ambiguityMeaning: AmbiguityMeaning;
+  /** 靠相似度召回並完成精確驗證的筆數；L1–L3c 不適用。 */
+  verified: number | null;
+}
+
+/** 一次跨檔案搬移：同一段程式碼在這顆 commit 換了檔案。 */
+export interface CrossFileMove {
+  stableKey: string;
+  symbol: string;
+  fromPath: string;
+  toPath: string;
+  shortSha: string;
+  committedAt: string;
+  subject: string;
+  tier: string;
+  exactJaccard: number | null;
+}
+
+export interface LadderView {
+  tiers: LadderTier[];
+  totalAccepted: number;
+  /** 跨檔案搬移的總數；`moves` 可能因為上限而較少。 */
+  crossFileTotal: number;
+  moves: CrossFileMove[];
+}
+
+/**
+ * 匹配階梯的分佈，以及跨檔案搬移的實際清單。
+ *
+ * **這是整個工具最無法被取代的一頁。** 實測 vuejs/core：22.7 萬次配對裡
+ * L1 17.8 萬、L5 只有 **128**——而那 128 條正是「問答工具描述現況、這個工具
+ * 描述演化」的具體證據。它先前只存在資料庫裡，畫面上一個字都沒有。
+ *
+ * 這是全 repo 的彙總，所以掃全表是對的計畫，不是缺索引
+ * （對照 `previousPathEntity`：那條是每次誕生呼叫一次，全表掃描就是缺陷）。
+ */
+/** 見 `AmbiguityMeaning`：判準寫在 `src/match/ladder.ts` 的 `Match.ambiguitySize`。 */
+function ambiguityMeaningOf(tier: string): AmbiguityMeaning {
+  if (tier === "L3c") return "content-class-size";
+  if (tier === "L4" || tier === "L5") return "tied-candidates";
+  return "unique-by-construction";
+}
+
+export function ladderStats(
+  db: DatabaseSync,
+  repoId: number,
+  moveLimit = 500,
+): LadderView {
+  const tiers = db.prepare(
+    `SELECT m.tier AS tier,
+            COUNT(*) AS accepted,
+            SUM(CASE WHEN m.ambiguity_size > 1 THEN 1 ELSE 0 END) AS multiCandidate,
+            SUM(m.exact_verified) AS verified
+       FROM revision_match m
+       JOIN revision r ON r.id = m.next_revision
+      WHERE r.repo_id = ? AND m.accepted = 1
+      GROUP BY m.tier
+      ORDER BY m.tier`,
+  ).all(repoId) as unknown as Array<
+    { tier: string; accepted: number; multiCandidate: number; verified: number }
+  >;
+
+  const moves = db.prepare(
+    `SELECT e.stable_key AS stableKey, s.qualified_name AS symbol,
+            pr.path AS fromPath, nr.path AS toPath,
+            SUBSTR(c.sha, 1, 10) AS shortSha, c.committed_at AS committedAt,
+            c.message AS message, m.tier AS tier, m.exact_jaccard AS exactJaccard
+       FROM revision_match m
+       JOIN revision pr ON pr.id = m.prev_revision
+       JOIN revision nr ON nr.id = m.next_revision
+       JOIN entity e ON e.id = nr.entity_id
+       JOIN slot s ON s.id = nr.slot_id
+       JOIN git_commit c ON c.id = nr.commit_id
+      WHERE nr.repo_id = ? AND m.accepted = 1 AND m.tier = 'L5'
+        AND pr.path <> nr.path
+      ORDER BY c.topo_order DESC
+      LIMIT ?`,
+  ).all(repoId, moveLimit) as unknown as Array<
+    Omit<CrossFileMove, "subject"> & { message: string }
+  >;
+
+  const crossFileTotal = (db.prepare(
+    `SELECT COUNT(*) AS n
+       FROM revision_match m
+       JOIN revision pr ON pr.id = m.prev_revision
+       JOIN revision nr ON nr.id = m.next_revision
+      WHERE nr.repo_id = ? AND m.accepted = 1 AND m.tier = 'L5'
+        AND pr.path <> nr.path`,
+  ).get(repoId) as { n: number }).n;
+
+  return {
+    tiers: tiers.map((t) => ({
+      tier: t.tier,
+      accepted: t.accepted,
+      multiCandidate: t.multiCandidate,
+      ambiguityMeaning: ambiguityMeaningOf(t.tier),
+      // L1–L3c 沒有「驗證過幾次」這回事，見 LadderTier 的註解。
+      verified: t.tier === "L4" || t.tier === "L5" ? t.verified : null,
+    })),
+    totalAccepted: tiers.reduce((sum, t) => sum + t.accepted, 0),
+    crossFileTotal,
+    moves: moves.map(({ message, ...rest }) => ({
+      ...rest,
+      subject: message.split("\n", 1)[0] ?? "",
+    })),
+  };
+}
+
+/**
+ * 一次身份斷層：同一個 slot，前後兩個 revision 屬於不同的 entity。
+ *
+ * `similarity` 的 **NULL 與 0 不可混為一談**（schema 的 CHECK 就是為此而寫）：
+ * NULL 是「舊內容無法解析，沒有可比較的 token 集合」，0 是「確實比較過、
+ * 完全無交集」。前者是沒有證據，後者是最強的負證據。
+ */
+export interface DiscontinuityRow {
+  path: string;
+  symbol: string;
+  shortSha: string;
+  committedAt: string;
+  subject: string;
+  similarity: number | null;
+  prevStableKey: string;
+  nextStableKey: string;
+}
+
+export interface DiscontinuityView {
+  total: number;
+  /** 其中 `similarity` 為 NULL（無法比較）的筆數。**抑制不能靜默。** */
+  incomparable: number;
+  rows: DiscontinuityRow[];
+}
+
+/**
+ * 身份斷層清單。
+ *
+ * schema 把它稱作「專案最有價值的輸出之一」：**它告訴使用者「斷層以前的討論
+ * 與現在無關」**。slot 是「這個位置」的職責連續性，entity 是「這段程式碼」的
+ * 血緣，兩者分歧處就是這裡（不變量 2）。
+ *
+ * 實測 vuejs/core 有 421 條，而畫面上先前一條都沒有。
+ */
+export function discontinuitiesFor(
+  db: DatabaseSync,
+  repoId: number,
+  limit = 500,
+): DiscontinuityView {
+  const totals = db.prepare(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN d.similarity IS NULL THEN 1 ELSE 0 END) AS incomparable
+       FROM slot_discontinuity d
+       JOIN entity e ON e.id = d.next_entity
+      WHERE e.repo_id = ?`,
+  ).get(repoId) as { total: number; incomparable: number };
+
+  const rows = db.prepare(
+    // 路徑不在 slot 上（slot 只有 lineage 與限定名稱），而在該 commit 當下的
+    // revision 上。`revision` 的 UNIQUE (commit_id, slot_id) 保證這一接恰好一列，
+    // 而且拿到的是**斷層發生當下**的路徑，不是現在的路徑——檔案後來再搬走也不會
+    // 讓這條紀錄改口。
+    `SELECT nr.path AS path, s.qualified_name AS symbol,
+            SUBSTR(c.sha, 1, 10) AS shortSha, c.committed_at AS committedAt,
+            c.message AS message, d.similarity AS similarity,
+            pe.stable_key AS prevStableKey, ne.stable_key AS nextStableKey
+       FROM slot_discontinuity d
+       JOIN slot s ON s.id = d.slot_id
+       JOIN git_commit c ON c.id = d.commit_id
+       JOIN revision nr ON nr.commit_id = d.commit_id AND nr.slot_id = d.slot_id
+       JOIN entity pe ON pe.id = d.prev_entity
+       JOIN entity ne ON ne.id = d.next_entity
+      WHERE ne.repo_id = ?
+      ORDER BY c.topo_order DESC
+      LIMIT ?`,
+  ).all(repoId, limit) as unknown as Array<
+    Omit<DiscontinuityRow, "subject"> & { message: string }
+  >;
+
+  return {
+    total: totals.total,
+    incomparable: totals.incomparable ?? 0,
+    rows: rows.map(({ message, ...rest }) => ({
+      ...rest,
+      subject: message.split("\n", 1)[0] ?? "",
+    })),
+  };
+}

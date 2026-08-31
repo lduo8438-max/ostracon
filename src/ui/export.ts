@@ -11,9 +11,11 @@ import {
   repoSummary,
 } from "./data.ts";
 import { PAGE } from "./page.ts";
+import { hotspotsView } from "./hotspots-view.ts";
 import {
   DISCONTINUITIES_PATH,
   ENTITIES_PATH,
+  HOTSPOTS_PATH,
   LADDER_PATH,
   OSTRACISED_PATH,
   SUMMARY_PATH,
@@ -103,6 +105,7 @@ export function exportStaticSite(
   // 的配對數，裁掉之後那個比例會說謊。實測 vuejs/core 兩份合計 100 KB 出頭。
   write(LADDER_PATH, JSON.stringify(ladderStats(db, repoId)));
   write(DISCONTINUITIES_PATH, JSON.stringify(discontinuitiesFor(db, repoId)));
+  write(HOTSPOTS_PATH, JSON.stringify(hotspotsView(db, repoId)));
 
   // 兩份名單的 entity 聯集才是「訪客點得到的一切」。
   // **檔名用 `stable_key`**：rowid 會隨全量重建漂移，而漂移最壞的後果不是 404，

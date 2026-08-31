@@ -301,6 +301,19 @@ export interface RepoSummary {
    * landing 的頭條數字與清單必須是同一個母體。
    */
   ostracised: { shown: number; hiddenTests: number; suspected: number };
+  /**
+   * 這份索引的規模。**畫面標頭一定要能標出自己在看哪一套語料**——先前的
+   * mock 標題寫 vuejs/core、數字卻是 angular 的，而那種錯只有把數字接回
+   * 資料庫才不會再發生。
+   */
+  counts: { commits: number; revisions: number; entities: number };
+  /** `schema_migration` 記的版本。是這個資料庫的實況，不是編譯時的常數。 */
+  schemaVersion: number | null;
+  /**
+   * 改動層級的分佈。`none` 佔 88.5%（vuejs/core 實測）是熱點排序**只算
+   * `shape`** 的理由，畫面要講得出這件事就需要分母。
+   */
+  changeLevels: Record<string, number>;
 }
 
 export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
@@ -351,10 +364,45 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
     }
     | undefined;
   if (row === undefined) throw new Error(`資料庫裡沒有 repo ${repoId}`);
+
+  // 規模與層級分佈另外查：它們與上面那段 claim 的 CTE 無關，混進去只會讓
+  // 一個本來就要 300 ms 的查詢更難讀，也更難單獨量。
+  const rawCounts = db.prepare(
+    `SELECT (SELECT COUNT(*) FROM git_commit WHERE repo_id = ?) AS commits,
+            (SELECT COUNT(*) FROM revision   WHERE repo_id = ?) AS revisions,
+            (SELECT COUNT(*) FROM entity     WHERE repo_id = ?) AS entities`,
+  ).get(repoId, repoId, repoId) as
+    { commits: number; revisions: number; entities: number };
+  // node:sqlite 回的是 null-prototype 物件。JSON 序列化沒差，但直接交出去會讓
+  // 呼叫端的 deepEqual 與 instanceof 行為出乎意料，所以在邊界攤成一般物件。
+  const counts = {
+    commits: rawCounts.commits,
+    revisions: rawCounts.revisions,
+    entities: rawCounts.entities,
+  };
+
+  const changeLevels: Record<string, number> = {};
+  for (
+    const level of db.prepare(
+      `SELECT rc.change_level AS level, COUNT(*) AS n
+         FROM revision_change rc
+         JOIN entity e ON e.id = rc.entity_id
+        WHERE e.repo_id = ?
+        GROUP BY rc.change_level`,
+    ).all(repoId) as unknown as Array<{ level: string; n: number }>
+  ) changeLevels[level.level] = level.n;
+
+  const schemaVersion = (db.prepare(
+    "SELECT MAX(version) AS v FROM schema_migration",
+  ).get() as { v: number | null } | undefined)?.v ?? null;
+
   const ostracised = ostracisedFor(db, repoId);
   return {
     repoId,
     ...row,
+    counts,
+    schemaVersion,
+    changeLevels,
     aggregate: unattributableEvidence(db, repoId),
     ostracised: {
       shown: ostracised.rows.length,
@@ -411,6 +459,8 @@ export interface CrossFileMove {
   subject: string;
   tier: string;
   exactJaccard: number | null;
+  /** 接受這條配對時同分且仍可用的前像數。1 = 唯一。 */
+  ambiguitySize: number | null;
 }
 
 export interface LadderView {
@@ -461,7 +511,8 @@ export function ladderStats(
     `SELECT e.stable_key AS stableKey, s.qualified_name AS symbol,
             pr.path AS fromPath, nr.path AS toPath,
             SUBSTR(c.sha, 1, 10) AS shortSha, c.committed_at AS committedAt,
-            c.message AS message, m.tier AS tier, m.exact_jaccard AS exactJaccard
+            c.message AS message, m.tier AS tier, m.exact_jaccard AS exactJaccard,
+            m.ambiguity_size AS ambiguitySize
        FROM revision_match m
        JOIN revision pr ON pr.id = m.prev_revision
        JOIN revision nr ON nr.id = m.next_revision

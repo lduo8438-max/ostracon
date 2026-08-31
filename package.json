@@ -65,6 +65,7 @@
     "dist",
     "db/schema.sql",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "bugs": {

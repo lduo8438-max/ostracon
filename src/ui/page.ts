@@ -28,6 +28,12 @@
  * 要在頁面內的註解提到識別字就直接寫名字，不要加反引號；真的需要輸出反引號時
  * 用 `\``。同理，頁面 JS 裡的樣板字串要寫成 `\`…\``。
  */
+import {
+  formatTimelineHash,
+  parseTimelineHash,
+  rationaleTargets,
+} from "./page-logic.ts";
+
 export const PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -180,6 +186,20 @@ h2 #list-title { float: none; }
   border-radius: 2px; letter-spacing: 0; text-transform: none; font-size: 10px;
 }
 
+/* 標頭上的計數本身就是控制項：affordance 與事實是同一個物件，
+   不需要再解釋一個新模式。 */
+.jump {
+  font: inherit; color: inherit; background: none; padding: 0;
+  border: 0; border-bottom: 1px dashed var(--rule-strong); cursor: pointer;
+}
+.jump:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.jump:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* 跳到的那一列。**用 inset box-shadow 而不是邊框或內距**——那兩者會改變
+   列高，而列高一變意圖欄與演化欄的逐列對齊就散了。
+   也**不用暖色**：版面上唯一的暖色留給引文，拿它標「你在這裡」會讓
+   導覽看起來像證據。 */
+.rev.hit, .slot.hit { box-shadow: inset 0 0 0 2px var(--ink); }
+
 .hint { padding: 14px; color: var(--muted); }
 .hint b { color: var(--ink); }
 @media (max-width: 900px) {
@@ -219,6 +239,12 @@ h2 #list-title { float: none; }
 </main>
 
 <script>
+// 這三個函式的本體在 src/ui/page-logic.ts，用 toString() 注入。
+// **不在這裡抄一份**：抄本會分岔，而測試只測得到有名字的那一份。
+const parseTimelineHash = ${parseTimelineHash.toString()};
+const formatTimelineHash = ${formatTimelineHash.toString()};
+const rationaleTargets = ${rationaleTargets.toString()};
+
 const $ = (id) => document.getElementById(id);
 const text = (value) => {
   const node = document.createElement("span");
@@ -246,6 +272,12 @@ let entities = [];
 let ostracised = { rows: [], hiddenTests: 0 };
 let tab = "live";
 let current = null;
+// 目前這條時間軸：列本身、有理由的列索引、以及各自的巡覽位置。
+let timelineRows = [];
+let targets = { entity: [], batch: [] };
+let cursor = { entity: -1, batch: -1 };
+// 深連結指名了某一列時，要等到對齊做完才跳。renderTimeline 收尾時消費它。
+let pendingSha = "";
 
 async function boot() {
   const summary = await (await fetch("./api/summary.json")).json();
@@ -292,15 +324,21 @@ async function boot() {
  * 要找的宣告可能在「被推翻的做法」那份名單而不是「全部宣告」——兩份名單不是
  * 互斥的，但左欄一次只顯示一份。所以先決定該站在哪一個 tab，否則右邊開了
  * 時間軸、左邊卻沒有任何 aria-current 的列，看起來像資料失去來源。
+ *
+ * 片段可以再帶一段 short sha（井號、stable_key、斜線、shortSha）指名某一列，
+ * 那是理由稀有時唯一能把訊號直接指出來的方式。**舊的純 key 形式必須繼續有效**
+ * ——它已經公開在 demo 的 landing 上，而網址是使用者存起來、貼給別人的東西。
  */
 async function openFromHash() {
-  const key = decodeURIComponent(location.hash.replace(/^#/, "")).trim();
+  const { key, sha } = parseTimelineHash(location.hash);
   if (key === "") return;
   const inLive = entities.some((e) => e.stableKey === key);
   if (!inLive && ostracised.rows.some((r) => r.stableKey === key)) {
     switchTab("gone");
   }
   if (!inLive && !ostracised.rows.some((r) => r.stableKey === key)) return;
+  // renderTimeline 對齊完才跳，否則會落在別列上。
+  pendingSha = sha;
   await select(key);
   document.querySelector('.entity[aria-current="true"]')
     ?.scrollIntoView({ block: "center" });
@@ -374,7 +412,7 @@ async function select(stableKey) {
   current = stableKey;
   // 讓網址跟著選取走，時間軸因此是可分享的。用 replaceState 不是 pushState：
   // 在左欄點十條宣告不該在上一頁堆十筆。
-  history.replaceState(null, "", "#" + encodeURIComponent(stableKey));
+  history.replaceState(null, "", formatTimelineHash(stableKey, ""));
   renderEntities($("filter").value);
   // 對外身分一律是 stable_key：rowid 會隨全量重建漂移，而舊網址在重建後
   // 可能**成功回傳另一個 entity**——那比 404 難發現得多。
@@ -383,14 +421,21 @@ async function select(stableKey) {
   const changed = rows.filter((r) => r.changeLevel !== "none").length;
   $("evolution-count").textContent = count(changed, "change")
     + (rows.length > changed ? " · " + count(rows.length, "row") : "");
-  const entityLevel = rows.filter(
-    (r) => r.intent.some((c) => c.scope === "entity"),
-  ).length;
-  const batchOnly = rows.filter(
-    (r) => r.intent.length > 0 && r.intent.every((c) => c.scope === "batch"),
-  ).length;
-  $("intent-count").textContent = entityLevel + " / " + rows.length
-    + (batchOnly > 0 ? " (" + batchOnly + " batch-only)" : "");
+  // 計數與跳轉清單來自**同一次計算**。分開算的話標頭會說 2、按鈕卻跳三個地方。
+  timelineRows = rows;
+  targets = rationaleTargets(rows);
+  cursor = { entity: -1, batch: -1 };
+  // 只有真的有得跳時才是按鈕；0 是事實不是控制項。
+  // **這裡刻意用字串串接而不是巢狀樣板字串**：整份頁面本身就是一個樣板字串，
+  // 巢狀的反引號與插值起頭都要逐一逸出，而這個專案已經被那個陷阱咬過三次。
+  const jump = (kind, label) => targets[kind].length === 0
+    ? targets[kind].length + label
+    : '<button class="jump" data-kind="' + kind
+      + '" title="Jump to the next '
+      + (kind === "entity" ? "entity-specific" : "batch-only")
+      + ' rationale">' + targets[kind].length + "</button>" + label;
+  $("intent-count").innerHTML = jump("entity", "") + " / " + rows.length
+    + (targets.batch.length > 0 ? " (" + jump("batch", " batch-only") + ")" : "");
 
   $("evolution").innerHTML = rows.map((r) => \`
     <div class="rev" data-level="\${text(r.changeLevel)}">
@@ -427,7 +472,43 @@ async function select(stableKey) {
         </div>\`).join("")}</div>\`).join("");
 
   // 兩欄的列高必須相同，否則對齊就是假的。逐列量測後補齊。
-  requestAnimationFrame(alignRows);
+  // **跳轉必須排在對齊之後**：對齊會改變每一列的高度，先捲再對齊會落在別列上。
+  requestAnimationFrame(() => {
+    alignRows();
+    if (pendingSha !== "") {
+      const index = timelineRows.findIndex((r) => r.shortSha === pendingSha);
+      pendingSha = "";
+      if (index >= 0) highlightRow(index);
+    }
+  });
+}
+
+/**
+ * 捲到第 n 列並標出來。**不填滿也不摺疊任何空白**——只是把稀有的訊號找出來。
+ *
+ * 兩欄是雙向捲動同步的，所以捲一欄另一欄會跟上；這裡只動演化欄。
+ */
+function highlightRow(index) {
+  const revs = $("evolution").children;
+  const slots = $("intent").children;
+  if (index < 0 || index >= revs.length) return;
+  for (const node of [...revs, ...slots]) node.classList.remove("hit");
+  revs[index].classList.add("hit");
+  slots[index]?.classList.add("hit");
+  revs[index].scrollIntoView({ block: "center" });
+  // 網址跟著走，所以「我看到的這一條理由」是可以貼給別人的。
+  const row = timelineRows[index];
+  if (current !== null && row) {
+    history.replaceState(null, "", formatTimelineHash(current, row.shortSha));
+  }
+}
+
+/** 巡覽下一條理由，循環。清單為空時什麼都不做。 */
+function jumpToNext(kind) {
+  const list = targets[kind];
+  if (list.length === 0) return;
+  cursor[kind] = (cursor[kind] + 1) % list.length;
+  highlightRow(list[cursor[kind]]);
 }
 
 /**
@@ -462,6 +543,10 @@ $("entities").addEventListener("click", (event) => {
   if (button) select(button.dataset.id);
 });
 $("filter").addEventListener("input", (event) => renderEntities(event.target.value));
+$("intent-count").addEventListener("click", (event) => {
+  const button = event.target.closest(".jump");
+  if (button) jumpToNext(button.dataset.kind);
+});
 /** 切到哪一份名單。按鈕與深連結共用同一段，不各寫一份。 */
 function switchTab(which) {
   tab = which;

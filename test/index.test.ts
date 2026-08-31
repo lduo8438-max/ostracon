@@ -17,6 +17,7 @@ import "./linked.test.ts";
 import "./minhash-arithmetic.test.ts";
 import "./ostracised.test.ts";
 import "./pass-scope.test.ts";
+import "./page-logic.test.ts";
 import "./paths.test.ts";
 import "./position.test.ts";
 import "./python-profile.test.ts";

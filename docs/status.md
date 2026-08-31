@@ -173,6 +173,36 @@ Python 實測（psf/requests，6,491 commits，`pnpm ostracised` 全 repo pass 3
 **這筆相依是為了驗證架構而付的，不是為了產品支援 Python。** 若哪天判定不值得，
 移除它只要刪一份剖面與註冊表裡的一列。
 
+### 發布後才驗得到的三條路徑（2026-08-30）
+
+`ostracon@0.1.0` 發布之前，「安裝並執行」只在**一種**方式上驗過：CI 的封裝冒煙
+測試走 `npm pack` → 封裝外 `npm install` 本地 tarball → 實跑。那條路徑
+**從頭到尾不碰登錄檔**，所以發布相關的東西一項都沒被驗到。
+
+發布之後補齊，三條各自不同：
+
+| 路徑 | 與已驗過的差別 | 結果 |
+|---|---|---|
+| `npm publish --dry-run` | 第一次讀到登錄檔設定 | **抓到錯配**（見下） |
+| 從 npmjs `npm install` | 走真實的下載與解壓，不是本地 tarball | `why`／`hotspots`／`ostracised` 三支都通 |
+| `npx ostracon` | 自己解析版本、抓進快取再執行 bin | 通，冷抓 13 秒 |
+
+**dry-run 抓到的錯配**：本機 `~/.npmrc` 設了
+`registry=https://registry.npmmirror.com`，而 `package.json` 沒有 `publishConfig`
+——直接 `npm publish` 會把套件送到鏡像站。修法是把 `publishConfig.registry`
+進版控，不是靠記得下 `--registry`：**發布不可逆、同版號不能重發，沒有第二次
+機會靠測試補救。**
+
+`npx` 那條特別值得驗，因為**它是 README 的第一行指令**——陌生人的第一個動作。
+測的時候用全新的 npm 快取與空目錄，並且分三種形式：帶 `--db`、README 的原形
+（不帶 `--db`，預設落在 `./.ostracon/index.db`，會自己建）、以及連 `--repo`
+都不給（預設 cwd）。三種都通。
+
+**發布這件事本身就是「同一個功能，兩種執行方式」的第十五發**，而這一次是被
+dry-run 抓到的，不是被測試抓到的——因為根本沒有測試涵蓋得到它。
+
+---
+
 ### 巨型 commit 的成因：不是候選池，是一條缺索引的查詢（2026-08-30）
 
 W7 收尾時把「非線性的成因是候選池隨池子大小超線性成長」寫進了 `README`、

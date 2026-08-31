@@ -687,8 +687,17 @@ describe("對外身分是 stable_key，不是 rowid", () => {
   it("**選取會更新網址，但不得堆積上一頁**", () => {
     // 時間軸要可分享；用 replaceState 而不是 pushState——在左欄點十條宣告
     // 不該在上一頁堆十筆。
-    assert.match(PAGE, /history\.replaceState\(null, "", "#" \+ encodeURIComponent\(stableKey\)\)/);
     assert.doesNotMatch(PAGE, /history\.pushState/);
+    // 網址一律經由 formatTimelineHash 組出來，**不在頁面裡自己拼**。
+    // 原本這裡釘的是那一行的字面寫法，加上「跳到某一列」之後寫法改了而行為沒變，
+    // 於是它咬的是拼法不是不變量。改成釘「有沒有走那個唯一的入口」——
+    // 而 encodeURIComponent 與 stable_key 由 page-logic.test.ts 直接測那個函式。
+    assert.match(PAGE, /history\.replaceState\(null, "", formatTimelineHash\(/);
+    assert.doesNotMatch(
+      PAGE,
+      /history\.replaceState\(null, "", "#"/,
+      "頁面自己拼網址了——編碼規則會與 formatTimelineHash 分岔",
+    );
   });
 });
 

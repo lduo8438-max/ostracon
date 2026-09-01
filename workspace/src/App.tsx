@@ -5,13 +5,21 @@ import {
   fetchDiscontinuities,
   fetchHotspots,
   fetchLadder,
+  fetchEntities,
+  fetchEvolution,
   fetchOstracised,
+  fetchOstracisedTargets,
   fetchSummary,
-  fetchTimeline,
+  featuredKey,
 } from './api'
+// **直接用後端那一份，不抄。** page-logic.ts 是零相依的純函式，Vite 只會把
+// 用到的那兩個打包進來，不會把後端拖進前端的建置圖。舊頁面與新前端共用同一組
+// 網址，任何一邊改了編碼規則另一邊的連結就失效——所以它必須只有一份。
+import { formatTimelineHash, parseTimelineHash } from '../../src/ui/page-logic'
 import type {
   Discontinuity,
   DiscontinuityView,
+  EntityListItem,
   Hotspot,
   HotspotView,
   LadderTier,
@@ -62,8 +70,17 @@ const navItems: Array<{ id: ViewId; index: string; label: string }> = [
 const format = (value: number) => value.toLocaleString('en-US')
 const shortSha = (value: string) => value.slice(0, 10)
 const percentage = (value: number) => `${(value * 100).toFixed(1)}%`
+/**
+ * 語料識別。匯出時 `--label` 已經把本機路徑換成語料名（`vuejs/core`），本機跑
+ * `ostracon ui` 時則是絕對路徑——**那讀起來像開發診斷資訊，不該塞進 breadcrumb**。
+ * 所以主標題用 basename，這裡只補最後兩段，完整值留在 title 屬性。
+ */
+const shortenPath = (value: string) => {
+  const parts = value.split('/').filter(Boolean)
+  return parts.length <= 2 ? value : `…/${parts.slice(-2).join('/')}`
+}
 
-function PageIntro({ eyebrow, title, body, aside }: { eyebrow: string; title: React.ReactNode; body: string; aside?: React.ReactNode }) {
+function PageIntro({ eyebrow, title, body, aside }: { eyebrow: React.ReactNode; title: React.ReactNode; body: string; aside?: React.ReactNode }) {
   return (
     <header className="page-intro">
       <div>
@@ -146,7 +163,7 @@ function TierEvidence({ tier, move, moveIndex, moveCount, onNext }: {
       ) : (
         <>
           <h2 className="evidence-symbol">{format(tier.count)} accepted</h2>
-          <p className="quiet">No per-link listing is exported for this tier. Only cross-file moves are enumerated, because only they name two different files.</p>
+          <p className="quiet">Aggregate tier · per-link evidence not exported.</p>
         </>
       )}
       <div className="verification-grid">
@@ -259,17 +276,154 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
   )
 }
 
-function TimelineView() {
-  const query = useQuery({ queryKey: ['timeline'], queryFn: fetchTimeline })
-  return <ViewQuery query={query}>{data => <TimelineBody data={data} />}</ViewQuery>
+/**
+ * 宣告 picker。**這是新前端補回舊介面最有價值的能力**：五個畫面本來都是策展
+ * 好的故事，但這個工具的核心問題是「**我那個宣告**發生了什麼」，而那需要能
+ * 任選一個。
+ *
+ * 每一列顯示改動數與**專屬理由數**——理由是稀有的，所以「值不值得點進去」
+ * 這件事必須在點進去之前就看得到。
+ */
+function DeclarationPicker({ entities, current, onPick, onClose }: {
+  entities: EntityListItem[]
+  current?: string
+  onPick: (entity: EntityListItem) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const needle = query.trim().toLowerCase()
+  const matches = useMemo(() => {
+    const scored = needle === ''
+      ? entities
+      : entities.filter(e => `${e.symbol} ${e.path}`.toLowerCase().includes(needle))
+    // 有專屬理由的排前面：那是這個工具唯一稀有的東西，藏在第 300 名沒有意義。
+    return [...scored].sort((a, b) =>
+      (b.withEntityIntent > 0 ? 1 : 0) - (a.withEntityIntent > 0 ? 1 : 0)
+      || b.revisions - a.revisions).slice(0, 60)
+  }, [entities, needle])
+
+  return (
+    <div className="picker-backdrop" onClick={onClose} role="presentation">
+      <div className="picker" onClick={event => event.stopPropagation()} role="dialog" aria-label="Choose a declaration">
+        <input
+          ref={inputRef}
+          className="picker-input"
+          type="search"
+          value={query}
+          placeholder="Filter by symbol or path"
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Escape') onClose()
+            if (event.key === 'Enter' && matches[0]) onPick(matches[0])
+          }}
+        />
+        <div className="picker-list">
+          {matches.length === 0
+            ? <p className="honest-blank">Nothing matches. {format(entities.length)} declarations are exported.</p>
+            : matches.map(entity => (
+              <button
+                key={entity.stableKey}
+                className={entity.stableKey === current ? 'picker-row current' : 'picker-row'}
+                onClick={() => onPick(entity)}
+              >
+                <span>
+                  <strong className="mono">{entity.symbol}</strong>
+                  {entity.dead ? <i className="tag-dead">removed</i> : null}
+                  <code>{entity.path}</code>
+                </span>
+                <span className="picker-meta">
+                  <b>{format(entity.revisions)}</b> changes
+                  {entity.withEntityIntent > 0
+                    ? <em className="has-rationale">{entity.withEntityIntent} rationale{entity.withEntityIntent === 1 ? '' : 's'}</em>
+                    : entity.withBatchIntent > 0
+                      ? <em>{entity.withBatchIntent} batch-only</em>
+                      : <em className="quiet">no rationale</em>}
+                </span>
+              </button>
+            ))}
+        </div>
+        <p className="picker-foot">
+          Showing {matches.length} of {format(entities.length)} · declarations with an entity-specific rationale come first
+        </p>
+      </div>
+    </div>
+  )
 }
 
-function TimelineBody({ data }: { data: TimelineView }) {
+function TimelineView({ stableKey, onSelect }: {
+  stableKey?: string
+  onSelect: (key: string) => void
+}) {
+  const list = useQuery({ queryKey: ['entities'], queryFn: fetchEntities })
+  const entities = list.data
+  const key = stableKey ?? (entities ? featuredKey(entities) : undefined)
+  const inEntities = entities?.find(item => item.stableKey === key)
+  // **被推翻的做法不在 entities.json 裡，但它們的時間軸一定被匯出。**
+  // 只在第一份名單裡找，會讓 Ostracised 的「Open its timeline」指向錯誤頁。
+  // 只有找不到時才抓第二份——那份 50.9 KB，沒必要每次都付。
+  const fallback = useQuery({
+    queryKey: ['ostracised-targets'],
+    queryFn: fetchOstracisedTargets,
+    enabled: entities !== undefined && key !== undefined && inEntities === undefined,
+  })
+  const entity = inEntities ?? fallback.data?.find(item => item.stableKey === key)
+  const stillLooking = entities !== undefined && inEntities === undefined
+    && key !== undefined && fallback.isPending
+  const evolution = useQuery({
+    queryKey: ['evolution', entity?.stableKey],
+    queryFn: () => fetchEvolution(entity!),
+    enabled: entity !== undefined,
+  })
+  const query = {
+    isPending: list.isPending || stillLooking || (entity !== undefined && evolution.isPending),
+    error: list.error ?? fallback.error ?? evolution.error,
+    data: entities && evolution.data
+      ? { entities, timeline: evolution.data }
+      : undefined,
+  }
+  // 兩份名單都找過了還是沒有——網址寫錯或匯出範圍不含它。**要說出來，不要
+  // 靜默退回精選**，否則使用者以為自己看的是他要的那一個。
+  if (entities && stableKey !== undefined && entity === undefined && !stillLooking) {
+    return (
+      <div className="view-state error" role="alert">
+        <strong>That declaration is not in this export.</strong>
+        <code>{stableKey}</code>
+        <p>Neither the declaration list nor the ostracised list contains it.</p>
+      </div>
+    )
+  }
+  return (
+    <ViewQuery query={query}>
+      {data => <TimelineBody data={data.timeline} entities={data.entities} onSelect={onSelect} />}
+    </ViewQuery>
+  )
+}
+
+function TimelineBody({ data, entities, onSelect }: {
+  data: TimelineView
+  entities: EntityListItem[]
+  onSelect: (key: string) => void
+}) {
+  const [picking, setPicking] = useState(false)
   const hits = data.rows.filter(row => row.rationale)
   const initialHit = Math.max(0, hits.findIndex(row => window.location.hash.endsWith(row.sha)))
   const [hitIndex, setHitIndex] = useState(initialHit)
   const selected = hits[hitIndex] ?? hits[0]
   const rowRef = useRef<HTMLDivElement>(null)
+
+  // 「/」開 picker：命令列的慣例，而且不與瀏覽器既有快捷鍵衝突。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+      if (event.key === '/') { event.preventDefault(); setPicking(true) }
+    }
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [])
 
   const jump = () => {
     const next = (hitIndex + 1) % hits.length
@@ -285,7 +439,18 @@ function TimelineBody({ data }: { data: TimelineView }) {
 
   return (
     <div className="view" ref={rowRef}>
-      <PageIntro eyebrow="Timeline" title={<span className="mono">{data.symbol}</span>} body={data.path} aside={<button className="jump-control" onClick={jump}><b>{data.entityRationales}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {data.total}</code></button>} />
+      {picking ? (
+        <DeclarationPicker
+          entities={entities}
+          current={data.stableKey}
+          onPick={entity => { setPicking(false); onSelect(entity.stableKey) }}
+          onClose={() => setPicking(false)}
+        />
+      ) : null}
+      <PageIntro
+        eyebrow={<button className="picker-open" onClick={() => setPicking(true)}>Timeline · <b>change declaration</b> <kbd>/</kbd></button>}
+        title={<span className="mono">{data.symbol}{data.dead ? <i className="tag-dead">removed</i> : null}</span>}
+        body={data.path} aside={<button className="jump-control" onClick={jump}><b>{data.entityRationales}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {data.total}</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
         <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === selected.sha} />)}</div>
@@ -298,7 +463,7 @@ function TimelineBody({ data }: { data: TimelineView }) {
 
 function annualRate(row: Hotspot) { return row.structural / (row.days / 365) }
 
-function HotspotsView() {
+function HotspotsView({ onOpen }: { onOpen: (key: string) => void }) {
   // 熱點的分母（`none` 佔多少）在 summary 裡，而 summary 是外殼一定會抓的，
   // 所以這裡是快取命中，不是第二次請求。
   const hotspots = useQuery({ queryKey: ['hotspots'], queryFn: fetchHotspots })
@@ -310,11 +475,12 @@ function HotspotsView() {
       ? { ...hotspots.data, changeDistribution: summary.data.changeDistribution }
       : undefined,
   }
-  return <ViewQuery query={query}>{data => <HotspotsBody data={data} />}</ViewQuery>
+  return <ViewQuery query={query}>{data => <HotspotsBody data={data} onOpen={onOpen} />}</ViewQuery>
 }
 
-function HotspotsBody({ data }: {
+function HotspotsBody({ data, onOpen }: {
   data: HotspotView & { changeDistribution: WorkspaceData['changeDistribution'] }
+  onOpen: (key: string) => void
 }) {
   const [mode, setMode] = useState<'absolute' | 'rate'>('absolute')
   const rows = useMemo(() => [...data.rows].sort((a, b) => mode === 'absolute' ? b.structural - a.structural : annualRate(b) - annualRate(a)), [data.rows, mode])
@@ -332,7 +498,7 @@ function HotspotsBody({ data }: {
           <div className="hotspot-head"><span># · Entity</span><span>{mode === 'absolute' ? 'Structural / observed' : 'Structural / year'}</span><span>Span</span></div>
           {rows.map((row, index) => {
             const value = mode === 'absolute' ? row.structural : annualRate(row)
-            return <article className={index === 0 ? 'hotspot-row selected' : 'hotspot-row'} key={row.stableKey}><b>{String(index + 1).padStart(2, '0')}</b><div><strong className="mono">{row.symbol}</strong><code>{row.path}</code></div><div><strong>{mode === 'absolute' ? `${row.structural} / ${row.observed}` : value.toFixed(1)}</strong><i style={{ '--bar': `${(value / max) * 100}%` } as React.CSSProperties} /></div><span>{format(Math.round(row.days))}d</span></article>
+            return <article className={index === 0 ? 'hotspot-row selected' : 'hotspot-row'} key={row.stableKey} onClick={() => onOpen(row.stableKey)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') onOpen(row.stableKey) }} title="Open this timeline"><b>{String(index + 1).padStart(2, '0')}</b><div><strong className="mono">{row.symbol}</strong><code>{row.path}</code></div><div><strong>{mode === 'absolute' ? `${row.structural} / ${row.observed}` : value.toFixed(1)}</strong><i style={{ '--bar': `${(value / max) * 100}%` } as React.CSSProperties} /></div><span>{format(Math.round(row.days))}d</span></article>
           })}
           <p className="panel-foot">{data.rows.length} of {format(data.total)} entities with structural change · {data.hiddenTests} in test files excluded · <code>change_level = shape</code></p>
         </section>
@@ -350,12 +516,12 @@ function OstracisedRow({ row, selected, onClick }: { row: OstracisedEntity; sele
   return <button className={selected ? 'ostracised-row selected' : 'ostracised-row'} onClick={onClick}><span><strong className="mono">{row.symbol}</strong><code>{row.path}</code></span><b>{row.durationDays.toFixed(0)}d</b><i>{row.strength}</i></button>
 }
 
-function OstracisedView() {
+function OstracisedView({ onOpen }: { onOpen: (key: string) => void }) {
   const query = useQuery({ queryKey: ['ostracised'], queryFn: fetchOstracised })
-  return <ViewQuery query={query}>{data => <OstracisedBody data={data} />}</ViewQuery>
+  return <ViewQuery query={query}>{data => <OstracisedBody data={data} onOpen={onOpen} />}</ViewQuery>
 }
 
-function OstracisedBody({ data }: { data: OstracisedView }) {
+function OstracisedBody({ data, onOpen }: { data: OstracisedView; onOpen: (key: string) => void }) {
   const [selectedKey, setSelectedKey] = useState(data.rows[0].stableKey)
   const selected = data.rows.find(row => row.stableKey === selectedKey) ?? data.rows[0]
   return (
@@ -370,6 +536,7 @@ function OstracisedBody({ data }: { data: OstracisedView }) {
         <motion.aside key={selected.stableKey} className="panel ostracised-detail" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}>
           <p className="eyebrow">Strength {selected.strength} · {selected.method}</p><h2 className="mono detail-title">{selected.symbol}</h2><code>{selected.path}</code>
           <div className="lifetime"><div><span>Introduced</span><b>{selected.bornAt.slice(0, 10)}</b></div><div><span>Removed</span><b>{selected.diedAt.slice(0, 10)}</b></div><code>duration_days = {selected.durationDays.toFixed(2)}</code></div>
+          <button className="action-button" onClick={() => onOpen(selected.stableKey)}>Open its timeline <span className="mono">{selected.symbol}</span></button>
           <LiteralEvidence note="Verbatim subject — it explains the removal commit, not necessarily this symbol alone.">{selected.diedSubject}</LiteralEvidence>
           <div className="sparse-note"><span>Intent layer</span><p>No entity-level rationale. The commit subject is shown with its scope made explicit; the blank is not backfilled by inference.</p></div>
           <MethodNote><p>An inverse diff finds a declaration introduced after one parent and absent at the removal commit. Strength A means the removal is directly witnessed.</p></MethodNote>
@@ -381,12 +548,28 @@ function OstracisedBody({ data }: { data: OstracisedView }) {
 }
 
 function Workspace({ repository }: { repository: Repository }) {
-  const [view, setView] = useState<ViewId>(() => window.location.hash.includes('/') ? 'timeline' : 'ladder')
+  // **網址是唯一真相。** 深連結、picker 選取、從熱點／被推翻清單跳過來，
+  // 三條路徑都經由這裡，所以「我看到的東西」永遠貼得出去。
+  const [hash, setHash] = useState(() => window.location.hash)
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash)
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [])
+  const timelineKey = parseTimelineHash(hash).key || undefined
+  const [view, setView] = useState<ViewId>(() => timelineKey ? 'timeline' : 'ladder')
+
+  /** 從任何畫面跳進某一條時間軸。 */
+  const openTimeline = (stableKey: string) => {
+    history.replaceState(null, '', formatTimelineHash(stableKey, ''))
+    setHash(formatTimelineHash(stableKey, ''))
+    setView('timeline')
+  }
   return (
     <div className="app-shell">
       <aside className="app-rail">
         <div className="brand"><i aria-hidden="true" /><strong>ostracon</strong></div>
-        <div className="repo-block"><span>Repository</span><button title={repository.name}><b className="mono">{repository.name.split('/').pop()}</b><small>{format(repository.commits)} commits indexed</small></button></div>
+        <div className="repo-block"><span>Repository</span><button title={repository.name}><b className="mono">{repository.name.split('/').pop()}</b><small className="repo-path">{shortenPath(repository.name)}</small><small>{format(repository.commits)} commits indexed</small></button></div>
         <nav aria-label="Workspace views">{navItems.map(item => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><span>{item.index}</span><b>{item.label}</b></button>)}</nav>
         <div className="rail-foot"><span>Schema {repository.schema}</span><b>{format(repository.revisions)} revisions · {format(repository.entities)} entities</b></div>
       </aside>
@@ -397,9 +580,9 @@ function Workspace({ repository }: { repository: Repository }) {
           <motion.div key={view} className="view-wrap" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}>
             {view === 'ladder' ? <LadderView /> : null}
             {view === 'discontinuities' ? <DiscontinuitiesView /> : null}
-            {view === 'timeline' ? <TimelineView /> : null}
-            {view === 'hotspots' ? <HotspotsView /> : null}
-            {view === 'ostracised' ? <OstracisedView /> : null}
+            {view === 'timeline' ? <TimelineView stableKey={timelineKey} onSelect={openTimeline} /> : null}
+            {view === 'hotspots' ? <HotspotsView onOpen={openTimeline} /> : null}
+            {view === 'ostracised' ? <OstracisedView onOpen={openTimeline} /> : null}
           </motion.div>
         </AnimatePresence>
       </main>

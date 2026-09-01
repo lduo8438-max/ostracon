@@ -107,6 +107,32 @@ describe("頁面確實用的是這一份實作", () => {
     // 字串（給瀏覽器求值的），成品裡的字面插值是對的。寫過那條，當場紅。
   });
 
+  it("**前端不得自己抄一份網址邏輯**", async () => {
+    // 舊頁面與新前端共用同一組網址（#<stable_key> 與 #<key>/<sha>）。任何一邊
+    // 改了編碼規則，另一邊產生的連結就失效，而那種錯只會在使用者貼連結給別人
+    // 時才發現。做這個功能時我差一點就把兩個函式抄進 workspace/src——所以改成
+    // 讓抄本不存在，並在這裡釘住。
+    const fs = await import("node:fs/promises");
+    const dir = "workspace/src";
+    let files: string[];
+    try {
+      files = await fs.readdir(dir);
+    } catch {
+      return; // workspace/ 不在（例如只 clone 了子集）時不強制
+    }
+    for (const file of files) {
+      if (!/\.tsx?$/.test(file)) continue;
+      const source = await fs.readFile(`${dir}/${file}`, "utf8");
+      for (const name of ["parseTimelineHash", "formatTimelineHash"]) {
+        assert.doesNotMatch(
+          source,
+          new RegExp(`(function|const)\\s+${name}\\b`),
+          `${file} 自己定義了 ${name}——那是抄本，必須改成從 src/ui/page-logic.ts 匯入`,
+        );
+      }
+    }
+  });
+
   it("跳轉不改變列高——**改了對齊就散了**", () => {
     // 命中列用 inset box-shadow 標示。邊框或內距都會改高度，而意圖欄與演化欄
     // 是逐列量測對齊的：高度一變，理由就印在別人的改動底下。

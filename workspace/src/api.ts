@@ -1,6 +1,7 @@
 import type {
   Discontinuity,
   DiscontinuityView,
+  EntityListItem,
   Hotspot,
   HotspotView,
   LadderTier,
@@ -46,6 +47,8 @@ interface ApiEntity {
   symbol: string
   revisions: number
   withEntityIntent: number
+  withBatchIntent: number
+  dead: boolean
 }
 
 interface ApiLadder {
@@ -164,17 +167,6 @@ const changeSummary = (changeLevel: string) =>
       : `change level · ${changeLevel}`
 
 /**
- * 時間軸要展示哪一個宣告：**有專屬理由、而且時間軸最長的那一個**。
- *
- * 不寫死 stable_key——換一套語料就會指到不存在的東西，而那正是稀疏訊號
- * 最需要被找到的場景（實測 vuejs/core 的 compileScript 是 306 列裡藏 2 條）。
- */
-const featuredEntity = (entities: ApiEntity[]): ApiEntity | undefined =>
-  entities
-    .filter((entity) => entity.withEntityIntent > 0)
-    .sort((a, b) => b.revisions - a.revisions)[0] ?? entities[0]
-
-/**
  * **每個畫面只抓自己要的。**
  *
  * 一次抓齊六個端點是量出來被否決的：對 `ostracon ui` 而言 `node:sqlite` 是
@@ -275,20 +267,70 @@ export async function fetchOstracised(): Promise<OstracisedView> {
 }
 
 /**
- * 時間軸要兩趟：先看清單挑一個，再抓它的演化。
+ * 宣告清單。**picker 的資料來源**，也是挑「精選」那一條時的依據。
  *
- * **這是唯一有順序相依的一組**，其餘五個都彼此獨立。
+ * 匯出時是聯集：有意圖的一律收，再用改動量補滿（實測 vuejs/core 752 筆）。
+ * 752 筆在瀏覽器裡篩選是零成本的，不需要伺服器端搜尋。
  */
-export async function fetchTimeline(): Promise<TimelineView> {
+export async function fetchEntities(): Promise<EntityListItem[]> {
   const entities = await get<ApiEntity[]>('/api/entities.json')
-  const featured = featuredEntity(entities)
-  const rows = featured
-    ? await get<ApiEvolutionRow[]>(`/api/evolution/${featured.stableKey}.json`)
-    : []
+  return entities.map((entity) => ({
+    stableKey: entity.stableKey,
+    symbol: entity.symbol,
+    path: entity.path,
+    revisions: entity.revisions,
+    withEntityIntent: entity.withEntityIntent,
+    withBatchIntent: entity.withBatchIntent,
+    dead: entity.dead,
+  }))
+}
+
+/**
+ * 沒有指定要看哪一個時的預設：**有專屬理由、而且時間軸最長的那一個**。
+ *
+ * 不寫死 stable_key——換一套語料就會指到不存在的東西，而那正是稀疏訊號最需要
+ * 被找到的場景（實測 vuejs/core 的 compileScript 是 306 列裡藏 2 條）。
+ */
+export const featuredKey = (entities: EntityListItem[]): string | undefined =>
+  (entities.filter((entity) => entity.withEntityIntent > 0)
+    .sort((a, b) => b.revisions - a.revisions)[0] ?? entities[0])?.stableKey
+
+/**
+ * 被推翻的做法也可以開時間軸。
+ *
+ * **它們的時間軸一定會被匯出**（`export.ts`：「清單看得到、點進去沒有資料，
+ * 就是把一個落差換成另一個落差」），但它們**不一定在 `entities.json` 裡**——
+ * 那份是策展過的（有意圖的一律收，再用改動量補滿）。實測 vuejs/core：
+ * 537 條被推翻的做法有 493 條不在那 752 筆裡，而 1,245 個時間軸檔案正好是
+ * 兩份名單的聯集。
+ *
+ * 只在 `entities.json` 裡找，就會讓產品自己產生的按鈕指向「不在匯出範圍」的
+ * 錯誤頁。舊的三欄頁面兩份名單都查，這裡漏了。
+ */
+export async function fetchOstracisedTargets(): Promise<EntityListItem[]> {
+  const view = await get<ApiOstracised>('/api/ostracised.json')
+  return view.rows.map((row) => ({
+    stableKey: row.stableKey,
+    symbol: row.symbol,
+    path: row.path,
+    // 這份名單沒有改動數與理由數——**留 0 而不是猜**，畫面用 `dead` 分辨。
+    revisions: 0,
+    withEntityIntent: 0,
+    withBatchIntent: 0,
+    dead: true,
+  }))
+}
+
+/** 一個宣告的完整時間軸。 */
+export async function fetchEvolution(
+  entity: EntityListItem,
+): Promise<TimelineView> {
+  const rows = await get<ApiEvolutionRow[]>(`/api/evolution/${entity.stableKey}.json`)
   return {
-    symbol: featured?.symbol ?? '—',
-    path: featured?.path ?? '',
-    stableKey: featured?.stableKey ?? '',
+    symbol: entity.symbol,
+    path: entity.path,
+    stableKey: entity.stableKey,
+    dead: entity.dead,
     total: rows.length,
     entityRationales: rows.filter((row) =>
       row.intent.some((claim) => claim.scope === 'entity')

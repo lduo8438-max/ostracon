@@ -16,6 +16,16 @@ import {
   contentTypeOf,
   readAsset,
 } from "./app-assets.ts";
+import {
+  DISCONTINUITIES_ROUTE,
+  ENTITIES_ROUTE,
+  HOTSPOTS_ROUTE,
+  LADDER_ROUTE,
+  OSTRACISED_ROUTE,
+  SUMMARY_ROUTE,
+  absolute,
+  evolutionRoute,
+} from "./routes.ts";
 
 /**
  * 三欄 UI 的伺服器。**`node:http`，零新相依。**
@@ -47,17 +57,17 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as co
  * 邏輯——而「同一個東西兩份實作」在這個專案已經出過好幾次事。改成路徑之後，
  * `ostracon export` 直接把檔案寫在同名位置，頁面一個字都不用改。
  */
-export const SUMMARY_PATH = "/api/summary.json";
-export const ENTITIES_PATH = "/api/entities.json";
-export const OSTRACISED_PATH = "/api/ostracised.json";
+export const SUMMARY_PATH = absolute(SUMMARY_ROUTE);
+export const ENTITIES_PATH = absolute(ENTITIES_ROUTE);
+export const OSTRACISED_PATH = absolute(OSTRACISED_ROUTE);
 /** 匹配階梯的分佈與跨檔案搬移清單。 */
-export const LADDER_PATH = "/api/ladder.json";
+export const LADDER_PATH = absolute(LADDER_ROUTE);
 /** 身份斷層：slot 延續、entity 血緣斷開的那些位置。 */
-export const DISCONTINUITIES_PATH = "/api/discontinuities.json";
+export const DISCONTINUITIES_PATH = absolute(DISCONTINUITIES_ROUTE);
 /** 攪動熱點。**與 CLI 共用 `listHotspots`**，不另寫一份查詢。 */
-export const HOTSPOTS_PATH = "/api/hotspots.json";
+export const HOTSPOTS_PATH = absolute(HOTSPOTS_ROUTE);
 export const evolutionPath = (stableKey: string) =>
-  `/api/evolution/${stableKey}.json`;
+  absolute(evolutionRoute(stableKey));
 
 /** `stable_key` 是 64 位十六進位。放進路徑之前一定要驗——它會變成檔名。 */
 export const STABLE_KEY = /^[0-9a-f]{64}$/;

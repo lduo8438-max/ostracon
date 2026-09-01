@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { APP_MISSING_NOTICE } from "../ui/app-assets.ts";
 import {
   declarationScopeOf,
   PARTIAL_INDEX_NOTICE,
@@ -65,6 +66,13 @@ export function main(args: string[]): void {
       ...(limit === undefined ? {} : { limit }),
       ...(repoRoot === undefined ? {} : { repoRoot }),
     });
+    if (report.app === "missing") {
+      // 只有 JSON 沒有頁面的站台是廢的。**在寫出去之後才發現不如不寫**，
+      // 但這裡是政策層，而政策層看得到的最早時機就是這裡。
+      console.error(`拒絕匯出：${APP_MISSING_NOTICE}`);
+      process.exitCode = 2;
+      return;
+    }
     console.log(
       `匯出 ${report.entities} 個宣告（含 ${report.ostracised} 個被推翻的做法）、`
       + `${report.files} 個檔案、`

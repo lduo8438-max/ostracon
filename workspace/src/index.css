@@ -286,3 +286,22 @@ code { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* 每個畫面自己的載入與錯誤狀態。
+   **載入中必須與「本來就沒有」長得不一樣**——這個介面有很多合理的空白
+   （沒有理由就留白），使用者不該把還在抓的狀態讀成觀測結果。 */
+.view-state {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 320px; padding: 28px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  color: var(--muted); font-size: 12px;
+}
+.view-state.error { flex-direction: column; align-items: flex-start; gap: 8px; color: var(--text); }
+.view-state.error code { color: var(--muted); font-size: 11px; }
+.view-spinner {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--blue);
+  animation: view-spin .7s linear infinite;
+}
+@keyframes view-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .view-spinner { animation: none; } }

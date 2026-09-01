@@ -1,10 +1,16 @@
 import type {
   Discontinuity,
+  DiscontinuityView,
   Hotspot,
+  HotspotView,
   LadderTier,
+  LadderView,
   MoveEvidence,
   OstracisedEntity,
+  OstracisedView,
+  Repository,
   TimelineRow,
+  TimelineView,
   WorkspaceData,
 } from './types'
 
@@ -168,25 +174,41 @@ const featuredEntity = (entities: ApiEntity[]): ApiEntity | undefined =>
     .filter((entity) => entity.withEntityIntent > 0)
     .sort((a, b) => b.revisions - a.revisions)[0] ?? entities[0]
 
-export async function fetchWorkspace(): Promise<WorkspaceData> {
-  // **五個端點平行抓。** 舊的三欄頁面把三個 fetch 串起來，實測那樣光是伺服器
-  // 就要 830 ms——那是冷開空白的一半。這幾個資源彼此獨立，沒有理由排隊。
-  const [summary, entities, ladder, discontinuities, hotspots, ostracised] =
-    await Promise.all([
-      get<ApiSummary>('/api/summary.json'),
-      get<ApiEntity[]>('/api/entities.json'),
-      get<ApiLadder>('/api/ladder.json'),
-      get<ApiDiscontinuities>('/api/discontinuities.json'),
-      get<ApiHotspots>('/api/hotspots.json'),
-      get<ApiOstracised>('/api/ostracised.json'),
-    ])
+/**
+ * **每個畫面只抓自己要的。**
+ *
+ * 一次抓齊六個端點是量出來被否決的：對 `ostracon ui` 而言 `node:sqlite` 是
+ * 同步的、HTTP 伺服器是單執行緒，六個並行請求只會排在同一個 event loop 上
+ * ——實測 1,434 ms，比舊頁面序列抓三個的 830 ms 還慢。靜態站台沒有這個瓶頸
+ * （同一份資料 4 ms），但首屏會多下載 154 KB（gzip）的 JSON，其中
+ * `ostracised.json` 50.9 KB 與 `discontinuities.json` 42.8 KB 在 ladder 頁
+ * 一個位元組都用不到。
+ *
+ * 所以拆成逐資源：兩種後端都受益，而且理由不同——伺服器省的是同步查詢的
+ * 排隊時間，靜態站台省的是頻寬。
+ */
 
-  const featured = featuredEntity(entities)
-  // 時間軸依賴上一步的結果（要先知道挑哪一個），所以只有它在第二段。
-  const rows = featured
-    ? await get<ApiEvolutionRow[]>(`/api/evolution/${featured.stableKey}.json`)
-    : []
+/** 外殼要的：語料身分與規模。每一頁都會用到，所以它是唯一「一定會抓」的。 */
+export async function fetchSummary(): Promise<Repository & {
+  changeDistribution: WorkspaceData['changeDistribution']
+}> {
+  const summary = await get<ApiSummary>('/api/summary.json')
+  return {
+    name: summary.rootPath,
+    commits: summary.counts.commits,
+    revisions: summary.counts.revisions,
+    entities: summary.counts.entities,
+    schema: summary.schemaVersion === null ? 'unknown' : `v${summary.schemaVersion}`,
+    changeDistribution: {
+      none: summary.changeLevels.none ?? 0,
+      shape: summary.changeLevels.shape ?? 0,
+      total: summary.changes + summary.untouched,
+    },
+  }
+}
 
+export async function fetchLadder(): Promise<LadderView> {
+  const ladder = await get<ApiLadder>('/api/ladder.json')
   const tiers: LadderTier[] = TIER_ORDER.flatMap((id) => {
     const tier = ladder.tiers.find((item) => item.tier === id)
     if (tier === undefined) return []
@@ -202,86 +224,90 @@ export async function fetchWorkspace(): Promise<WorkspaceData> {
       ...TIER_COPY[id]!,
     }]
   })
-
-  const moves: MoveEvidence[] = ladder.moves.map((move) => ({
-    symbol: move.symbol,
-    fromPath: move.fromPath,
-    toPath: move.toPath,
-    sha: move.shortSha,
-    subject: move.subject,
-    exactJaccard: move.exactJaccard,
-    ambiguitySize: move.ambiguitySize,
-  }))
-
-  const discontinuityRows: Discontinuity[] = discontinuities.rows.map((row, index) => ({
-    id: index,
-    symbol: row.symbol,
-    similarity: row.similarity,
-    sha: row.shortSha,
-    subject: row.subject,
-    path: row.path,
-    beforeEntity: row.prevStableKey,
-    afterEntity: row.nextStableKey,
-  }))
-
-  const timelineRows: TimelineRow[] = rows.map((row, index) => {
-    const entityRationale = row.intent.find((claim) => claim.scope === 'entity')
-    return {
-      index: index + 1,
-      sha: row.shortSha,
-      date: row.committedAt.slice(0, 10),
-      location: `${row.path.split('/').pop()}:${row.lineStart}–${row.lineEnd}`,
-      tier: row.tier ?? '—',
-      firstDifference: firstDifference(row.changeLevel),
-      change: changeSummary(row.changeLevel),
-      ...(entityRationale ? { rationale: entityRationale.text } : {}),
-    }
-  })
-
   return {
-    repository: {
-      name: summary.rootPath,
-      commits: summary.counts.commits,
-      revisions: summary.counts.revisions,
-      entities: summary.counts.entities,
-      schema: summary.schemaVersion === null ? 'unknown' : `v${summary.schemaVersion}`,
-    },
-    ladder: tiers,
+    tiers,
     crossFileTotal: ladder.crossFileTotal,
-    moves,
-    discontinuities: {
-      total: discontinuities.total,
-      incomparable: discontinuities.incomparable,
-      rows: discontinuityRows,
-    },
-    timeline: {
-      symbol: featured?.symbol ?? '—',
-      path: featured?.path ?? '',
-      stableKey: featured?.stableKey ?? '',
-      total: timelineRows.length,
-      entityRationales: rows.filter((row) =>
-        row.intent.some((claim) => claim.scope === 'entity')
-      ).length,
-      batchRationales: rows.filter((row) =>
-        row.intent.length > 0 && row.intent.every((claim) => claim.scope === 'batch')
-      ).length,
-      rows: timelineRows,
-    },
-    hotspots: hotspots.rows,
-    hotspotsTotal: hotspots.total,
-    hotspotsHiddenTests: hotspots.hiddenTests,
-    changeDistribution: {
-      none: summary.changeLevels.none ?? 0,
-      shape: summary.changeLevels.shape ?? 0,
-      total: summary.changes + summary.untouched,
-    },
-    ostracised: {
-      // A 級確證 = 列出的 + 測試檔裡被排除的。C 級是疑似，**不混進 A**。
-      strengthA: ostracised.rows.length + ostracised.hiddenTests,
-      strengthC: ostracised.suspected,
-      shown: ostracised.rows.length,
-      hiddenTests: ostracised.hiddenTests,
-      rows: ostracised.rows,
-    },
+    moves: ladder.moves.map((move) => ({
+      symbol: move.symbol,
+      fromPath: move.fromPath,
+      toPath: move.toPath,
+      sha: move.shortSha,
+      subject: move.subject,
+      exactJaccard: move.exactJaccard,
+      ambiguitySize: move.ambiguitySize,
+    })),
+  }
+}
+
+export async function fetchDiscontinuities(): Promise<DiscontinuityView> {
+  const view = await get<ApiDiscontinuities>('/api/discontinuities.json')
+  return {
+    total: view.total,
+    incomparable: view.incomparable,
+    rows: view.rows.map((row, index) => ({
+      id: index,
+      symbol: row.symbol,
+      similarity: row.similarity,
+      sha: row.shortSha,
+      subject: row.subject,
+      path: row.path,
+      beforeEntity: row.prevStableKey,
+      afterEntity: row.nextStableKey,
+    })),
+  }
+}
+
+export async function fetchHotspots(): Promise<HotspotView> {
+  const view = await get<ApiHotspots>('/api/hotspots.json')
+  return { rows: view.rows, total: view.total, hiddenTests: view.hiddenTests }
+}
+
+export async function fetchOstracised(): Promise<OstracisedView> {
+  const view = await get<ApiOstracised>('/api/ostracised.json')
+  return {
+    // A 級確證 = 列出的 + 測試檔裡被排除的。C 級是疑似，**不混進 A**。
+    strengthA: view.rows.length + view.hiddenTests,
+    strengthC: view.suspected,
+    shown: view.rows.length,
+    hiddenTests: view.hiddenTests,
+    rows: view.rows,
+  }
+}
+
+/**
+ * 時間軸要兩趟：先看清單挑一個，再抓它的演化。
+ *
+ * **這是唯一有順序相依的一組**，其餘五個都彼此獨立。
+ */
+export async function fetchTimeline(): Promise<TimelineView> {
+  const entities = await get<ApiEntity[]>('/api/entities.json')
+  const featured = featuredEntity(entities)
+  const rows = featured
+    ? await get<ApiEvolutionRow[]>(`/api/evolution/${featured.stableKey}.json`)
+    : []
+  return {
+    symbol: featured?.symbol ?? '—',
+    path: featured?.path ?? '',
+    stableKey: featured?.stableKey ?? '',
+    total: rows.length,
+    entityRationales: rows.filter((row) =>
+      row.intent.some((claim) => claim.scope === 'entity')
+    ).length,
+    batchRationales: rows.filter((row) =>
+      row.intent.length > 0 && row.intent.every((claim) => claim.scope === 'batch')
+    ).length,
+    rows: rows.map((row, index) => {
+      const entityRationale = row.intent.find((claim) => claim.scope === 'entity')
+      return {
+        index: index + 1,
+        sha: row.shortSha,
+        date: row.committedAt.slice(0, 10),
+        location: `${row.path.split('/').pop()}:${row.lineStart}–${row.lineEnd}`,
+        tier: row.tier ?? '—',
+        firstDifference: firstDifference(row.changeLevel),
+        change: changeSummary(row.changeLevel),
+        ...(entityRationale ? { rationale: entityRationale.text } : {}),
+      }
+    }),
   }
 }

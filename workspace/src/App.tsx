@@ -1,17 +1,55 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
-import { fetchWorkspace } from './api'
+import {
+  fetchDiscontinuities,
+  fetchHotspots,
+  fetchLadder,
+  fetchOstracised,
+  fetchSummary,
+  fetchTimeline,
+} from './api'
 import type {
   Discontinuity,
+  DiscontinuityView,
   Hotspot,
+  HotspotView,
   LadderTier,
+  LadderView,
   MoveEvidence,
   OstracisedEntity,
+  OstracisedView,
+  Repository,
   TimelineRow,
+  TimelineView,
   ViewId,
   WorkspaceData,
 } from './types'
+
+/**
+ * 每個畫面自己抓自己的資料。
+ *
+ * **載入中不是空白，錯誤不是靜默。** 這個工具的畫面上有很多合理的空白
+ * （沒有理由就留白），所以「還在抓」與「本來就沒有」必須長得不一樣——
+ * 否則使用者會把載入狀態讀成觀測結果。
+ */
+function ViewQuery<T>({ query, children }: {
+  query: { data?: T; error: unknown; isPending: boolean }
+  children: (data: T) => React.ReactNode
+}) {
+  if (query.isPending) {
+    return <div className="view-state" role="status"><i className="view-spinner" aria-hidden="true" />Reading the index…</div>
+  }
+  if (query.error || !query.data) {
+    return (
+      <div className="view-state error" role="alert">
+        <strong>This view could not be loaded.</strong>
+        <code>{query.error instanceof Error ? query.error.message : 'Unknown error'}</code>
+      </div>
+    )
+  }
+  return <>{children(query.data)}</>
+}
 
 const navItems: Array<{ id: ViewId; index: string; label: string }> = [
   { id: 'ladder', index: '01', label: 'Match ladder' },
@@ -130,10 +168,15 @@ function TierEvidence({ tier, move, moveIndex, moveCount, onNext }: {
   )
 }
 
-function LadderView({ data }: { data: WorkspaceData }) {
+function LadderView() {
+  const query = useQuery({ queryKey: ['ladder'], queryFn: fetchLadder })
+  return <ViewQuery query={query}>{data => <LadderBody data={data} />}</ViewQuery>
+}
+
+function LadderBody({ data }: { data: LadderView }) {
   const [selected, setSelected] = useState<LadderTier['id']>('L5')
   const [moveIndex, setMoveIndex] = useState(0)
-  const tier = data.ladder.find(item => item.id === selected) ?? data.ladder[data.ladder.length - 1]!
+  const tier = data.tiers.find(item => item.id === selected) ?? data.tiers[data.tiers.length - 1]!
   const move = tier.id === 'L5' && data.moves.length > 0
     ? data.moves[moveIndex % data.moves.length]
     : undefined
@@ -145,9 +188,9 @@ function LadderView({ data }: { data: WorkspaceData }) {
         <section className="panel ladder-panel">
           <div className="panel-heading"><span>Accepted links · first matching tier</span><span>log scale</span></div>
           <div className="ladder-body">
-            <LadderGlyph tiers={data.ladder} selected={selected} />
+            <LadderGlyph tiers={data.tiers} selected={selected} />
             <div className="tier-list">
-              {data.ladder.map(item => (
+              {data.tiers.map(item => (
                 <button key={item.id} onClick={() => { setSelected(item.id); setMoveIndex(0) }} className={item.id === selected ? 'tier-row selected' : 'tier-row'}>
                   <strong>{item.id}</strong><b>{format(item.count)}</b><span>{item.criterion}</span><i aria-hidden="true" />
                 </button>
@@ -171,17 +214,22 @@ function DiscontinuityCard({ row, selected, onClick }: { row: Discontinuity; sel
   )
 }
 
-function DiscontinuitiesView({ data }: { data: WorkspaceData }) {
-  const [selectedId, setSelectedId] = useState(data.discontinuities.rows[0].id)
-  const selected = data.discontinuities.rows.find(row => row.id === selectedId) ?? data.discontinuities.rows[0]
+function DiscontinuitiesView() {
+  const query = useQuery({ queryKey: ['discontinuities'], queryFn: fetchDiscontinuities })
+  return <ViewQuery query={query}>{data => <DiscontinuitiesBody data={data} />}</ViewQuery>
+}
+
+function DiscontinuitiesBody({ data }: { data: DiscontinuityView }) {
+  const [selectedId, setSelectedId] = useState(data.rows[0].id)
+  const selected = data.rows.find(row => row.id === selectedId) ?? data.rows[0]
   return (
     <div className="view">
-      <PageIntro eyebrow="Discontinuities" title={<>The slot stayed.<br />The lineage did not.</>} body="These are not moves. The same qualified slot reappears with a different entity, so earlier discussion must not be carried forward as evidence." aside={<div className="count-pill">{format(data.discontinuities.total)} recorded</div>} />
+      <PageIntro eyebrow="Discontinuities" title={<>The slot stayed.<br />The lineage did not.</>} body="These are not moves. The same qualified slot reappears with a different entity, so earlier discussion must not be carried forward as evidence." aside={<div className="count-pill">{format(data.total)} recorded</div>} />
       <div className="split-layout">
         <section className="panel list-panel">
-          <div className="panel-heading"><span>{data.discontinuities.total} breaks</span><span>lowest similarity first</span></div>
-          <div className="stack-list">{data.discontinuities.rows.map(row => <DiscontinuityCard key={row.id} row={row} selected={row.id === selected.id} onClick={() => setSelectedId(row.id)} />)}</div>
-          <p className="panel-foot cool">{data.discontinuities.rows.length} of {format(data.discontinuities.total)} shown · {data.discontinuities.incomparable} had no comparable token set (recorded as null, not zero)</p>
+          <div className="panel-heading"><span>{data.total} breaks</span><span>lowest similarity first</span></div>
+          <div className="stack-list">{data.rows.map(row => <DiscontinuityCard key={row.id} row={row} selected={row.id === selected.id} onClick={() => setSelectedId(row.id)} />)}</div>
+          <p className="panel-foot cool">{data.rows.length} of {format(data.total)} shown · {data.incomparable} had no comparable token set (recorded as null, not zero)</p>
         </section>
         <motion.section key={selected.id} className="panel discontinuity-detail" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}>
           <p className="eyebrow">Selected break · #{String(selected.id).padStart(3, '0')}</p>
@@ -211,8 +259,13 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
   )
 }
 
-function TimelineView({ data }: { data: WorkspaceData }) {
-  const hits = data.timeline.rows.filter(row => row.rationale)
+function TimelineView() {
+  const query = useQuery({ queryKey: ['timeline'], queryFn: fetchTimeline })
+  return <ViewQuery query={query}>{data => <TimelineBody data={data} />}</ViewQuery>
+}
+
+function TimelineBody({ data }: { data: TimelineView }) {
+  const hits = data.rows.filter(row => row.rationale)
   const initialHit = Math.max(0, hits.findIndex(row => window.location.hash.endsWith(row.sha)))
   const [hitIndex, setHitIndex] = useState(initialHit)
   const selected = hits[hitIndex] ?? hits[0]
@@ -222,7 +275,7 @@ function TimelineView({ data }: { data: WorkspaceData }) {
     const next = (hitIndex + 1) % hits.length
     const target = hits[next]
     setHitIndex(next)
-    history.replaceState(null, '', `#${data.timeline.stableKey}/${target.sha}`)
+    history.replaceState(null, '', `#${data.stableKey}/${target.sha}`)
     requestAnimationFrame(() => document.getElementById(`timeline-${target.sha}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
   }
 
@@ -232,10 +285,10 @@ function TimelineView({ data }: { data: WorkspaceData }) {
 
   return (
     <div className="view" ref={rowRef}>
-      <PageIntro eyebrow="Timeline" title={<span className="mono">{data.timeline.symbol}</span>} body={data.timeline.path} aside={<button className="jump-control" onClick={jump}><b>{data.timeline.entityRationales}</b><span>entity rationales<small>{data.timeline.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {data.timeline.total}</code></button>} />
+      <PageIntro eyebrow="Timeline" title={<span className="mono">{data.symbol}</span>} body={data.path} aside={<button className="jump-control" onClick={jump}><b>{data.entityRationales}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {data.total}</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
-        <div className="timeline-rows">{data.timeline.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === selected.sha} />)}</div>
+        <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === selected.sha} />)}</div>
         <p className="panel-foot">Rows use a fixed block size. Selection is an inset box-shadow; it never changes border, padding, or alignment.</p>
       </section>
       <MethodNote><p>The tier badge names the first hash layer that differs and whether the commit hunk touched the declaration. Cold-open instrumentation for fetch / render / alignRows is intentionally marked as not yet measured.</p></MethodNote>
@@ -245,15 +298,32 @@ function TimelineView({ data }: { data: WorkspaceData }) {
 
 function annualRate(row: Hotspot) { return row.structural / (row.days / 365) }
 
-function HotspotsView({ data }: { data: WorkspaceData }) {
+function HotspotsView() {
+  // 熱點的分母（`none` 佔多少）在 summary 裡，而 summary 是外殼一定會抓的，
+  // 所以這裡是快取命中，不是第二次請求。
+  const hotspots = useQuery({ queryKey: ['hotspots'], queryFn: fetchHotspots })
+  const summary = useQuery({ queryKey: ['summary'], queryFn: fetchSummary })
+  const query = {
+    isPending: hotspots.isPending || summary.isPending,
+    error: hotspots.error ?? summary.error,
+    data: hotspots.data && summary.data
+      ? { ...hotspots.data, changeDistribution: summary.data.changeDistribution }
+      : undefined,
+  }
+  return <ViewQuery query={query}>{data => <HotspotsBody data={data} />}</ViewQuery>
+}
+
+function HotspotsBody({ data }: {
+  data: HotspotView & { changeDistribution: WorkspaceData['changeDistribution'] }
+}) {
   const [mode, setMode] = useState<'absolute' | 'rate'>('absolute')
-  const rows = useMemo(() => [...data.hotspots].sort((a, b) => mode === 'absolute' ? b.structural - a.structural : annualRate(b) - annualRate(a)), [data.hotspots, mode])
+  const rows = useMemo(() => [...data.rows].sort((a, b) => mode === 'absolute' ? b.structural - a.structural : annualRate(b) - annualRate(a)), [data.rows, mode])
   const max = Math.max(...rows.map(row => mode === 'absolute' ? row.structural : annualRate(row)))
   const noneShare = data.changeDistribution.none / data.changeDistribution.total
   // 用「速率最高但絕對次數不高」的那一筆當反例；換一套語料不保證叫
   // processSuspense，所以用資料挑，不用名字寫死。
-  const rateOutlier = [...data.hotspots].sort((a, b) => annualRate(b) - annualRate(a))
-    .find(row => row.structural < Math.max(...data.hotspots.map(r => r.structural)) / 2)
+  const rateOutlier = [...data.rows].sort((a, b) => annualRate(b) - annualRate(a))
+    .find(row => row.structural < Math.max(...data.rows.map(r => r.structural)) / 2)
   return (
     <div className="view">
       <PageIntro eyebrow="Hotspots" title={<>Structural churn,<br />not edit volume.</>} body={`Rank entities by shape-changing revisions. The ${format(data.changeDistribution.none)} untouched pairs stay out of the list instead of inflating activity.`} aside={<div className="segmented"><button className={mode === 'absolute' ? 'active' : ''} onClick={() => setMode('absolute')}>Absolute</button><button className={mode === 'rate' ? 'active' : ''} onClick={() => setMode('rate')}>Rate / year</button></div>} />
@@ -264,7 +334,7 @@ function HotspotsView({ data }: { data: WorkspaceData }) {
             const value = mode === 'absolute' ? row.structural : annualRate(row)
             return <article className={index === 0 ? 'hotspot-row selected' : 'hotspot-row'} key={row.stableKey}><b>{String(index + 1).padStart(2, '0')}</b><div><strong className="mono">{row.symbol}</strong><code>{row.path}</code></div><div><strong>{mode === 'absolute' ? `${row.structural} / ${row.observed}` : value.toFixed(1)}</strong><i style={{ '--bar': `${(value / max) * 100}%` } as React.CSSProperties} /></div><span>{format(Math.round(row.days))}d</span></article>
           })}
-          <p className="panel-foot">{data.hotspots.length} of {format(data.hotspotsTotal)} entities with structural change · {data.hotspotsHiddenTests} in test files excluded · <code>change_level = shape</code></p>
+          <p className="panel-foot">{data.rows.length} of {format(data.total)} entities with structural change · {data.hiddenTests} in test files excluded · <code>change_level = shape</code></p>
         </section>
         <aside className="hotspot-side">
           <section className="distribution-panel panel"><p className="eyebrow">Change-level distribution</p><strong>{format(data.changeDistribution.none)}</strong><span>none · {percentage(noneShare)}</span><i><b style={{ width: `${noneShare * 100}%` }} /></i><p>{format(data.changeDistribution.shape)} shape changes enter the ranking.</p></section>
@@ -280,16 +350,21 @@ function OstracisedRow({ row, selected, onClick }: { row: OstracisedEntity; sele
   return <button className={selected ? 'ostracised-row selected' : 'ostracised-row'} onClick={onClick}><span><strong className="mono">{row.symbol}</strong><code>{row.path}</code></span><b>{row.durationDays.toFixed(0)}d</b><i>{row.strength}</i></button>
 }
 
-function OstracisedView({ data }: { data: WorkspaceData }) {
-  const [selectedKey, setSelectedKey] = useState(data.ostracised.rows[0].stableKey)
-  const selected = data.ostracised.rows.find(row => row.stableKey === selectedKey) ?? data.ostracised.rows[0]
+function OstracisedView() {
+  const query = useQuery({ queryKey: ['ostracised'], queryFn: fetchOstracised })
+  return <ViewQuery query={query}>{data => <OstracisedBody data={data} />}</ViewQuery>
+}
+
+function OstracisedBody({ data }: { data: OstracisedView }) {
+  const [selectedKey, setSelectedKey] = useState(data.rows[0].stableKey)
+  const selected = data.rows.find(row => row.stableKey === selectedKey) ?? data.rows[0]
   return (
     <div className="view">
-      <PageIntro eyebrow="Ostracised" title={<>Short-lived code,<br />with its exit context.</>} body="An entity can be real, useful and brief. Empty rationale cells remain empty; grouping helps the first view reveal experiments without inventing intent." aside={<div className="strength-switch"><b>A · {data.ostracised.strengthA}</b><span>C · {data.ostracised.strengthC} suspected</span></div>} />
+      <PageIntro eyebrow="Ostracised" title={<>Short-lived code,<br />with its exit context.</>} body="An entity can be real, useful and brief. Empty rationale cells remain empty; grouping helps the first view reveal experiments without inventing intent." aside={<div className="strength-switch"><b>A · {data.strengthA}</b><span>C · {data.strengthC} suspected</span></div>} />
       <div className="ostracised-layout">
         <section className="panel removal-cluster">
-          <p className="eyebrow">Grouping preview · by remove_commit</p><code>{shortSha(selected.diedSha)} · {selected.diedAt.slice(0, 10)}</code><h2 className="mono">{selected.diedSubject}</h2><p>{data.ostracised.rows.length} listed · grouping by remove_commit is not applied yet</p>
-          <div>{data.ostracised.rows.map(row => <OstracisedRow key={row.stableKey} row={row} selected={row.stableKey === selected.stableKey} onClick={() => setSelectedKey(row.stableKey)} />)}</div>
+          <p className="eyebrow">Grouping preview · by remove_commit</p><code>{shortSha(selected.diedSha)} · {selected.diedAt.slice(0, 10)}</code><h2 className="mono">{selected.diedSubject}</h2><p>{data.rows.length} listed · grouping by remove_commit is not applied yet</p>
+          <div>{data.rows.map(row => <OstracisedRow key={row.stableKey} row={row} selected={row.stableKey === selected.stableKey} onClick={() => setSelectedKey(row.stableKey)} />)}</div>
           <p className="panel-foot">Concentration audit pending: compare <code>remove_commit</code> and <code>introduce_commit</code> before making this the default grouping.</p>
         </section>
         <motion.aside key={selected.stableKey} className="panel ostracised-detail" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}>
@@ -298,33 +373,33 @@ function OstracisedView({ data }: { data: WorkspaceData }) {
           <LiteralEvidence note="Verbatim subject — it explains the removal commit, not necessarily this symbol alone.">{selected.diedSubject}</LiteralEvidence>
           <div className="sparse-note"><span>Intent layer</span><p>No entity-level rationale. The commit subject is shown with its scope made explicit; the blank is not backfilled by inference.</p></div>
           <MethodNote><p>An inverse diff finds a declaration introduced after one parent and absent at the removal commit. Strength A means the removal is directly witnessed.</p></MethodNote>
-          <p className="panel-foot">{data.ostracised.shown} shown · {data.ostracised.hiddenTests} tests hidden · C stays suspected</p>
+          <p className="panel-foot">{data.shown} shown · {data.hiddenTests} tests hidden · C stays suspected</p>
         </motion.aside>
       </div>
     </div>
   )
 }
 
-function Workspace({ data }: { data: WorkspaceData }) {
+function Workspace({ repository }: { repository: Repository }) {
   const [view, setView] = useState<ViewId>(() => window.location.hash.includes('/') ? 'timeline' : 'ladder')
   return (
     <div className="app-shell">
       <aside className="app-rail">
         <div className="brand"><i aria-hidden="true" /><strong>ostracon</strong></div>
-        <div className="repo-block"><span>Repository</span><button><b className="mono">{data.repository.name}</b><small>{format(data.repository.commits)} commits indexed</small></button></div>
+        <div className="repo-block"><span>Repository</span><button title={repository.name}><b className="mono">{repository.name.split('/').pop()}</b><small>{format(repository.commits)} commits indexed</small></button></div>
         <nav aria-label="Workspace views">{navItems.map(item => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><span>{item.index}</span><b>{item.label}</b></button>)}</nav>
-        <div className="rail-foot"><span>Schema {data.repository.schema}</span><b>{format(data.repository.revisions)} revisions · {format(data.repository.entities)} entities</b></div>
+        <div className="rail-foot"><span>Schema {repository.schema}</span><b>{format(repository.revisions)} revisions · {format(repository.entities)} entities</b></div>
       </aside>
       <main className="workspace-main">
         <div className="mobile-nav"><div className="brand"><i /><strong>ostracon</strong></div><select value={view} onChange={event => setView(event.target.value as ViewId)} aria-label="Choose view">{navItems.map(item => <option value={item.id} key={item.id}>{item.index} · {item.label}</option>)}</select></div>
-        <div className="topbar"><span className="mono">{navItems.find(item => item.id === view)?.label.toUpperCase()} / {data.repository.name}</span><span className="top-status"><i />output verified</span></div>
+        <div className="topbar"><span className="mono">{navItems.find(item => item.id === view)?.label.toUpperCase()} / {repository.name.split('/').pop()}</span><span className="top-status"><i />output verified</span></div>
         <AnimatePresence mode="wait">
           <motion.div key={view} className="view-wrap" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}>
-            {view === 'ladder' ? <LadderView data={data} /> : null}
-            {view === 'discontinuities' ? <DiscontinuitiesView data={data} /> : null}
-            {view === 'timeline' ? <TimelineView data={data} /> : null}
-            {view === 'hotspots' ? <HotspotsView data={data} /> : null}
-            {view === 'ostracised' ? <OstracisedView data={data} /> : null}
+            {view === 'ladder' ? <LadderView /> : null}
+            {view === 'discontinuities' ? <DiscontinuitiesView /> : null}
+            {view === 'timeline' ? <TimelineView /> : null}
+            {view === 'hotspots' ? <HotspotsView /> : null}
+            {view === 'ostracised' ? <OstracisedView /> : null}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -333,8 +408,19 @@ function Workspace({ data }: { data: WorkspaceData }) {
 }
 
 export default function App() {
-  const { data, error, isPending } = useQuery({ queryKey: ['ostracon-workspace', 'vuejs/core', 'v3'], queryFn: fetchWorkspace, staleTime: Infinity, retry: 1 })
-  if (isPending) return <div className="load-state"><div className="brand"><i /><strong>ostracon</strong></div><p>Loading indexed evidence</p><code>fetch → render → alignRows</code></div>
-  if (error || !data) return <div className="load-state error"><strong>Workspace could not be loaded.</strong><code>{error instanceof Error ? error.message : 'Unknown error'}</code></div>
-  return <Workspace data={data} />
+  // **外殼只等 summary。** 它是唯一每一頁都要的資料（語料身分與規模），
+  // 而且只有 0.3 KB——其餘五個端點合計 154 KB，一起等就是讓使用者為了看
+  // 一頁而下載五頁。
+  const { data, error, isPending } = useQuery({ queryKey: ['summary'], queryFn: fetchSummary })
+  if (isPending) return <div className="load-state"><div className="brand"><i /><strong>ostracon</strong></div><p>Reading the index</p></div>
+  if (error || !data) {
+    return (
+      <div className="load-state error">
+        <strong>The index could not be read.</strong>
+        <code>{error instanceof Error ? error.message : 'Unknown error'}</code>
+        <p>Start the backend with <code>ostracon ui --db &lt;index.db&gt;</code>, or serve an exported static site.</p>
+      </div>
+    )
+  }
+  return <Workspace repository={data} />
 }

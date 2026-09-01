@@ -1,6 +1,14 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  // **資產路徑必須是相對的。** 預設的 base '/' 會產生 `/assets/…`，那在
+  // `ostracon ui`（從根服務）看起來完全正常，但線上 demo 把每套語料放在
+  // 子目錄（`/vuejs-core/`），瀏覽器會去根目錄找 `/assets/…` 而拿到 404。
+  //
+  // **同一份產物，兩種部署方式，本機只驗得到其中一種。** 發布前把匯出放進
+  // demo 的目錄結構起站台才撞到——這條之所以以前不存在，是因為舊頁面把
+  // CSS 與 JS 全部內嵌，根本沒有外部資產。
+  base: './',
   server: {
     host: '127.0.0.1',
     port: 4324,

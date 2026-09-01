@@ -77,20 +77,33 @@ function truncate(raw: Buffer): Snippet {
  * repo 不存在時回空 Map 而不是丟例外——呼叫端要能把「讀不到」說出來，
  * 而不是整個畫面掛掉。**但呼叫端不得靜默省略**：payload 要帶原因。
  */
+export interface SnippetResult {
+  snippets: Map<string, Snippet>;
+  /**
+   * 語料讀得到嗎。**與「有沒有東西可讀」是兩件事。**
+   *
+   * 先前用 `snippets.size > 0` 當成功判準，於是 create-t3-app（0 個斷層、
+   * 沒有任何片段要讀）被報成 `repo-unavailable`——語料明明就在。
+   * 把「沒東西可讀」說成「讀不到」，與 NULL／0 是同一型的錯。
+   */
+  readable: boolean;
+}
+
 export function readSnippets(
   repoRoot: string,
   requests: readonly SnippetRequest[],
-): Map<string, Snippet> {
+): SnippetResult {
   const out = new Map<string, Snippet>();
-  if (requests.length === 0 || !existsSync(repoRoot)) return out;
+  if (!existsSync(repoRoot)) return { snippets: out, readable: false };
+  if (requests.length === 0) return { snippets: out, readable: true };
 
   const specs = [...new Set(requests.map((r) => r.blobSha))];
   let blobs: Map<string, Buffer>;
   try {
     blobs = readBlobsBatch(repoRoot, specs);
   } catch {
-    // 目錄在但不是 git repo、或 blob 已被 gc。與 repo 不存在同樣處理。
-    return out;
+    // 目錄在但不是 git repo、或 blob 已被 gc。
+    return { snippets: out, readable: false };
   }
 
   for (const request of requests) {
@@ -98,5 +111,5 @@ export function readSnippets(
     if (blob === undefined) continue;
     out.set(request.id, truncate(blob.subarray(request.byteStart, request.byteEnd)));
   }
-  return out;
+  return { snippets: out, readable: true };
 }

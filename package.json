@@ -1,7 +1,7 @@
 {
   "name": "ostracon",
   "version": "0.1.0",
-  "description": "從 git history 重建程式碼的決策演化史：何時誕生、被哪幾次改動重塑、理由是什麼、哪些做法試過又被推翻。結構層零 LLM。",
+  "description": "\u5f9e git history \u91cd\u5efa\u7a0b\u5f0f\u78bc\u7684\u6c7a\u7b56\u6f14\u5316\u53f2\uff1a\u4f55\u6642\u8a95\u751f\u3001\u88ab\u54ea\u5e7e\u6b21\u6539\u52d5\u91cd\u5851\u3001\u7406\u7531\u662f\u4ec0\u9ebc\u3001\u54ea\u4e9b\u505a\u6cd5\u8a66\u904e\u53c8\u88ab\u63a8\u7ffb\u3002\u7d50\u69cb\u5c64\u96f6 LLM\u3002",
   "homepage": "https://ostracon.org",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && pnpm run build:ui",
     "mine:candidates": "node mine-candidates.mjs",
     "fixtures:validate": "node validate-fixtures.mjs",
     "fixtures:controlled": "node fixtures/build-controlled-repo.mjs",
@@ -30,8 +30,11 @@
     "hotspots": "node --experimental-strip-types src/cli/hotspots.ts",
     "evidence:extract": "node --experimental-strip-types src/cli/extract-evidence.ts",
     "evidence:linked": "node --experimental-strip-types src/cli/linked-evidence.ts",
-    "prepublishOnly": "pnpm run build && pnpm test",
-    "ui:export": "node --experimental-strip-types src/cli/export-site.ts"
+    "prepublishOnly": "pnpm test",
+    "ui:export": "node --experimental-strip-types src/cli/export-site.ts",
+    "build:ui": "npm --prefix workspace ci --silent && npm --prefix workspace run build",
+    "prepack": "pnpm run build",
+    "pretest": "node -e \"process.exit(require('node:fs').existsSync('dist/ui/app/index.html')?0:1)\" || pnpm run build:ui"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

@@ -348,6 +348,27 @@ describe("伺服器與靜態匯出共用同一份前端", () => {
     }
   });
 
+  it("**資產路徑必須是相對的**——線上 demo 把每套語料放在子目錄", () => {
+    if (!appBuilt()) return;
+    // 預設的 Vite base '/' 會產生 `/assets/…`。那在 `ostracon ui`（從根服務）
+    // 完全正常，但 demo 是 `/vuejs-core/`、`/osiris/` 這樣的子目錄——瀏覽器
+    // 會去根目錄找 `/assets/…` 而拿到 404，整個頁面空白。
+    //
+    // **同一份產物，兩種部署方式，本機只驗得到其中一種。** 發布前把匯出放進
+    // demo 的目錄結構起站台才撞到；以前不存在是因為舊頁面把 CSS 與 JS 全部
+    // 內嵌，根本沒有外部資產。
+    const html = readFileSync(path.join(APP_DIR, "index.html"), "utf8");
+    const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]!);
+    assert.ok(refs.length > 0, "index.html 沒有任何資產引用，這條測試會空轉");
+    for (const ref of refs) {
+      assert.doesNotMatch(
+        ref,
+        /^\//,
+        `${ref} 是根絕對路徑，子目錄部署會 404`,
+      );
+    }
+  });
+
   it("**前端成品不得載入任何外部資源**", () => {
     if (!appBuilt()) return;
     // 字體改成隨套件攜帶的理由就是這個：`ostracon ui` 綁 127.0.0.1、索引不上傳

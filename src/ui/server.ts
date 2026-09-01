@@ -10,7 +10,12 @@ import {
   ostracisedFor,
   repoSummary,
 } from "./data.ts";
-import { PAGE } from "./page.ts";
+import {
+  APP_MISSING_NOTICE,
+  appBuilt,
+  contentTypeOf,
+  readAsset,
+} from "./app-assets.ts";
 
 /**
  * 三欄 UI 的伺服器。**`node:http`，零新相依。**
@@ -84,9 +89,28 @@ export function createUiServer(options: UiOptions): Server {
     const db = new DatabaseSync(options.dbPath, { readOnly: true });
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (url.pathname === "/" || url.pathname === "/index.html") {
-        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        response.end(PAGE);
+      // 頁面與資產都來自建置後的前端。**伺服器與靜態匯出共用同一份產物**，
+      // 所以「本機看到的」與「發佈出去的」不可能是兩個版本。
+      if (!url.pathname.startsWith("/api/")) {
+        if (!appBuilt()) {
+          response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+          response.end(APP_MISSING_NOTICE);
+          return;
+        }
+        // **不做 SPA fallback。** 這個前端用的是 hash 片段（`#<stable_key>`），
+        // 不是路徑路由——把未知路徑一律回 index.html 只會把打錯的網址偽裝成
+        // 正常頁面，而 `/nope` 回 200 是在說謊。既有測試釘住這一點。
+        const file = url.pathname === "/" || url.pathname === "/index.html"
+          ? "/index.html"
+          : url.pathname;
+        const asset = readAsset(file);
+        if (asset === undefined) {
+          response.writeHead(404, JSON_HEADERS);
+          response.end(JSON.stringify({ error: "找不到" }));
+          return;
+        }
+        response.writeHead(200, { "content-type": contentTypeOf(file) });
+        response.end(asset);
         return;
       }
       if (url.pathname === SUMMARY_PATH) {

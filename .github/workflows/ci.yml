@@ -126,9 +126,18 @@ jobs:
 
       # 建置壞掉不會被上面任何一步發現——開發與測試都走 strip-types，不碰 tsc emit。
       # 所以要在這裡真的打包一次、在封裝外安裝、實際執行，證明發布出去的東西能跑。
+      # 前端是獨立的 npm 專案（自己的 lockfile 與相依樹），不是 pnpm workspace
+      # 成員——那是刻意的：React 那棵樹不該滲進後端。`pnpm run build` 會連它
+      # 一起建（build:ui 會先 npm ci）。
       - name: 建置並冒煙測試封裝
         run: |
           pnpm run build
+          test -f dist/ui/app/index.html || { echo "::error::前端沒有被建進 dist/ui/app"; exit 1; }
+          # **不連外是承諾，不是預設值。** 字體改成隨套件攜帶之後，成品裡不該
+          # 再出現任何 http(s) 位址；漏一條 @import 就會讓離線環境退回系統字體，
+          # 而那不會有任何東西報錯。
+          ! grep -rohE 'https?://[^"'"'"')]*' dist/ui/app/index.html dist/ui/app/assets/*.css \
+            || { echo "::error::前端成品含外部資源"; exit 1; }
           npm pack --silent
           mkdir -p "$RUNNER_TEMP/pkg" && cd "$RUNNER_TEMP/pkg"
           npm init -y >/dev/null
@@ -148,6 +157,19 @@ jobs:
           ./node_modules/.bin/ostracon hotspots \
             --repo "$GITHUB_WORKSPACE" --db "$RUNNER_TEMP/smoke-hot.db" --limit 5 \
             | grep -q '次結構改動'
+          # **前端資產在「安裝後的位置」解析得到嗎。** `dist/ui/app` 的相對路徑
+          # 在開發與安裝後剛好同深度——那是巧合不是保證，與 db/schema.sql 同一個
+          # 教訓。所以要真的起伺服器抓一次，不能只檢查檔案在 tarball 裡。
+          ./node_modules/.bin/ostracon ui --db "$RUNNER_TEMP/smoke.db" --port 4319 &
+          UI_PID=$!
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:4319/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:4319/ | grep -q 'Evolution Workspace'
+          ASSET=$(curl -s http://127.0.0.1:4319/ | grep -oE '/assets/[^"]*\.js' | head -1)
+          curl -sf "http://127.0.0.1:4319$ASSET" >/dev/null
+          CSS=$(curl -s http://127.0.0.1:4319/ | grep -oE '/assets/[^"]*\.css' | head -1)
+          FONT=$(curl -s "http://127.0.0.1:4319$CSS" | grep -oE '/assets/[^)]*woff2' | head -1)
+          curl -sf "http://127.0.0.1:4319$FONT" >/dev/null
+          kill $UI_PID
 
       # 失敗時要看得到是哪幾條案例退步，而不是只有一個 exit code。
       - name: 保留黃金測試集報告

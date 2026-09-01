@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -10,7 +10,7 @@ import {
   ostracisedFor,
   repoSummary,
 } from "./data.ts";
-import { PAGE } from "./page.ts";
+import { APP_DIR, APP_MISSING_NOTICE, appBuilt, appFiles } from "./app-assets.ts";
 import { hotspotsView } from "./hotspots-view.ts";
 import {
   DISCONTINUITIES_PATH,
@@ -142,7 +142,18 @@ export function exportStaticSite(
     if (entityId === undefined) continue;
     write(evolutionPath(key), JSON.stringify(evolutionOf(db, repoId, entityId)));
   }
-  write("/index.html", PAGE);
+  // **與伺服器同一份產物。** 先前這裡寫的是一個字串常數，而伺服器回的是同一個
+  // 字串；現在兩邊都指向 dist/ui/app，所以「本機看到的」與「發佈出去的」是同
+  // 一份程式碼，不是兩份剛好一樣的東西。
+  if (!appBuilt()) throw new Error(APP_MISSING_NOTICE);
+  for (const file of appFiles()) {
+    const body = readFileSync(path.join(APP_DIR, file));
+    const target = path.join(root, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, body);
+    files++;
+    bytes += body.byteLength;
+  }
 
   return {
     entities: needed.size,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -16,6 +16,7 @@ import {
   startUiServer,
 } from "../src/ui/server.ts";
 import { exportStaticSite } from "../src/ui/export.ts";
+import { APP_DIR, appBuilt, appFiles } from "../src/ui/app-assets.ts";
 import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 const K = (n: number) => String(n).padStart(64, "0");
@@ -323,6 +324,53 @@ describe("匯出的集合不變量", () => {
           exported.has(row.stableKey),
           `${name} 列出了 ${row.symbol}，但它沒有時間軸檔案——畫面上那個按鈕會指向錯誤頁`,
         );
+      }
+    }
+  });
+});
+
+describe("伺服器與靜態匯出共用同一份前端", () => {
+  it("**匯出的前端資產與 dist/ui/app 逐檔相同**", () => {
+    // 先前兩邊各自回傳同一個字串常數——那是「兩份剛好一樣的東西」，不是同一份。
+    // 現在兩邊都指向 dist/ui/app，所以「本機看到的」與「發佈出去的」不可能分岔。
+    // 這條是刪掉 page.ts 的前提。
+    if (!appBuilt()) return; // 沒跑過 build:ui（CI 一定會跑）
+    const out = mkdtempSync(path.join(tmpdir(), "ostracon-assets-"));
+    exportStaticSite(open(hotspotDb()), out, { label: "fixture" });
+    for (const file of appFiles()) {
+      const shipped = path.join(out, file);
+      assert.ok(existsSync(shipped), `${file} 沒有被匯出`);
+      assert.deepEqual(
+        readFileSync(shipped),
+        readFileSync(path.join(APP_DIR, file)),
+        `${file} 與 dist/ui/app 的內容不同`,
+      );
+    }
+  });
+
+  it("**前端成品不得載入任何外部資源**", () => {
+    if (!appBuilt()) return;
+    // 字體改成隨套件攜帶的理由就是這個：`ostracon ui` 綁 127.0.0.1、索引不上傳
+    // 任何東西，而一條 @import 會讓離線環境靜默退回系統字體——沒有東西會報錯。
+    //
+    // **判準是「會造成載入的構造」，不是「字串裡有沒有網址」。** 第一版用後者，
+    // 立刻被 React 的產物咬到：`http://www.w3.org/2000/svg` 是 XML 命名空間，
+    // 傳給 createElementNS 當識別字用，永遠不會被抓取；`reactjs.org/docs/
+    // error-decoder` 是錯誤訊息裡的字串。把它們當成外部資源就是把識別字誤讀成
+    // 資源，而那條測試會一直紅到有人把它關掉。
+    const loaders = [
+      /<(?:script|link|img|source)\b[^>]*\b(?:src|href)\s*=\s*["']https?:/i,
+      // 壓縮後是 `@import"https://…`——**沒有空白**。第一版寫 \s+，對真正會
+      // 出貨的形式完全無效，是咬檢當場發現的。
+      /@import\s*(?:url\()?\s*["']?https?:/i,
+      /url\(\s*["']?https?:/i,
+      /\bfetch\(\s*["'`]https?:/i,
+    ];
+    for (const file of appFiles()) {
+      if (!/\.(html|css|js)$/.test(file)) continue;
+      const body = readFileSync(path.join(APP_DIR, file), "utf8");
+      for (const pattern of loaders) {
+        assert.doesNotMatch(body, pattern, `${file} 會去載入外部資源`);
       }
     }
   });

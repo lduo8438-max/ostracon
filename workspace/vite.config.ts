@@ -12,6 +12,10 @@ export default defineConfig({
     },
   },
   build: {
+    // **產物落在套件的 dist 裡**，因為 `files` 白名單只有 dist——額外的資產
+    // 目錄要另接一套複製步驟，那就是安裝摩擦的開始。
+    outDir: '../dist/ui/app',
+    emptyOutDir: true,
     rollupOptions: {
       onwarn(warning, warn) {
         if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('"use client"')) return

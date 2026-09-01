@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
+import { hotspotsView } from "./hotspots-view.ts";
 import {
   discontinuitiesFor,
   entityIdForStableKey,
@@ -48,6 +49,8 @@ export const OSTRACISED_PATH = "/api/ostracised.json";
 export const LADDER_PATH = "/api/ladder.json";
 /** 身份斷層：slot 延續、entity 血緣斷開的那些位置。 */
 export const DISCONTINUITIES_PATH = "/api/discontinuities.json";
+/** 攪動熱點。**與 CLI 共用 `listHotspots`**，不另寫一份查詢。 */
+export const HOTSPOTS_PATH = "/api/hotspots.json";
 export const evolutionPath = (stableKey: string) =>
   `/api/evolution/${stableKey}.json`;
 
@@ -103,6 +106,13 @@ export function createUiServer(options: UiOptions): Server {
       if (url.pathname === DISCONTINUITIES_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(discontinuitiesFor(db, repoId)));
+        return;
+      }
+      if (url.pathname === HOTSPOTS_PATH) {
+        // 測試檔的排除與 CLI 用同一個 predicate，而且**排除不得靜默**——
+        // 兩邊各數一次的話，畫面與 CLI 遲早會給出不同的數字。
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify(hotspotsView(db, repoId)));
         return;
       }
       const key = stableKeyFromPath(url.pathname);

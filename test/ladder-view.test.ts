@@ -4,9 +4,14 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { discontinuitiesFor, ladderStats } from "../src/ui/data.ts";
+import { discontinuitiesFor, ladderStats, repoSummary } from "../src/ui/data.ts";
+import { hotspotsView } from "../src/ui/hotspots-view.ts";
+import { listHotspots } from "../src/cli/hotspots.ts";
+import { isTestPath } from "../src/cli/ostracised.ts";
+import { SCHEMA_VERSION } from "../src/git/persist.ts";
 import {
   DISCONTINUITIES_PATH,
+  HOTSPOTS_PATH,
   LADDER_PATH,
   startUiServer,
 } from "../src/ui/server.ts";
@@ -162,7 +167,7 @@ describe("兩個新端點在伺服器與靜態匯出上是同一組 URL", () => 
   it("伺服器回得出來", async () => {
     const { url: base, server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });
     try {
-      for (const url of [LADDER_PATH, DISCONTINUITIES_PATH]) {
+      for (const url of [LADDER_PATH, DISCONTINUITIES_PATH, HOTSPOTS_PATH]) {
         const response = await fetch(base.replace(/\/$/, "") + url);
         assert.equal(response.status, 200, url);
         assert.ok(await response.json());
@@ -175,10 +180,92 @@ describe("兩個新端點在伺服器與靜態匯出上是同一組 URL", () => 
   it("**靜態匯出寫出同名檔案**——頁面不需要知道自己跑在哪一種上面", () => {
     const out = mkdtempSync(path.join(tmpdir(), "ostracon-ladder-out-"));
     exportStaticSite(open(fixtureDb()), out, { label: "fixture" });
-    for (const url of [LADDER_PATH, DISCONTINUITIES_PATH]) {
+    for (const url of [LADDER_PATH, DISCONTINUITIES_PATH, HOTSPOTS_PATH]) {
       const file = path.join(out, url.replace(/^\//, ""));
       const body = JSON.parse(readFileSync(file, "utf8"));
       assert.ok(body, url + " 沒有被匯出");
     }
+  });
+});
+
+/** 兩個宣告動過結構，其中一個在測試檔裡——用來驗排除與計數。 */
+function hotspotDb(): string {
+  const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-hot-")), "i.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+  db.exec(`
+    -- 真實的資料庫都經由 openIndexDatabase 建立，那一步會寫版本列。
+    -- fixture 直接 exec schema 的話 schema_migration 是空的——而 schemaVersion
+    -- 回 null 是**正確行為**（它報的是這個庫的實況）。這一行讓 fixture 貼近真實。
+    INSERT INTO schema_migration (version, applied_at) VALUES (${SCHEMA_VERSION}, '2026-01-01');
+    INSERT INTO repo (id, root_path, created_at) VALUES (1, '/tmp/h', '2026-01-01');
+    INSERT INTO git_commit (id, repo_id, sha, authored_at, committed_at, message, topo_order)
+      VALUES (1, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1', '2026-01-01', '2026-01-01', 'feat: a', 1),
+             (2, 1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2', '2026-01-05', '2026-01-05', 'refactor: b', 2);
+    INSERT INTO path_lineage (id, repo_id) VALUES (1, 1), (2, 1);
+    INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+      VALUES (1, 1, 1, 'shipped', 'function'), (2, 1, 2, 'spec', 'function');
+    INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+      VALUES (1, 1, '${K(1)}', 1), (2, 1, '${K(2)}', 1);
+    ${INSERT_CONTENT_FIXTURE}
+    INSERT INTO revision ${REVISION_COLUMNS} VALUES
+      ${revisionValues({ id: 1, commitId: 1, path: "src/a.ts" })},
+      ${revisionValues({ id: 2, commitId: 2, path: "src/a.ts" })},
+      ${revisionValues({ id: 3, commitId: 1, path: "src/a.spec.ts", slotId: 2, entityId: 2, lineageId: 2 })},
+      ${revisionValues({ id: 4, commitId: 2, path: "src/a.spec.ts", slotId: 2, entityId: 2, lineageId: 2 })};
+    INSERT INTO revision_change (prev_revision, next_revision, commit_id, entity_id, change_level)
+      VALUES (NULL, 1, 1, 1, 'birth'), (1, 2, 2, 1, 'shape'),
+             (NULL, 3, 1, 2, 'birth'), (3, 4, 2, 2, 'shape');
+  `);
+  db.close();
+  return dbPath;
+}
+
+describe("攪動熱點的端點", () => {
+  it("**與 CLI 共用同一個 predicate，兩邊不可能給出不同的數字**", () => {
+    const db = open(hotspotDb());
+    const view = hotspotsView(db, 1);
+    // 這是「CLI 說 5 顆聚合 commit、UI 說 6 顆」那個 bug 的守門：畫面若自己
+    // 再數一次，遲早與 CLI 分岔。這裡直接拿 CLI 的兩個函式重算一遍。
+    const all = listHotspots(db, 1);
+    assert.equal(view.total, all.length);
+    assert.equal(view.hiddenTests, all.filter((row) => isTestPath(row.path)).length);
+    assert.deepEqual(
+      view.rows.map((row) => row.path),
+      all.filter((row) => !isTestPath(row.path)).map((row) => row.path),
+    );
+  });
+
+  it("測試檔被排除，但**排除不得靜默**", () => {
+    const view = hotspotsView(open(hotspotDb()), 1);
+    assert.equal(view.total, 2, "母數含測試檔");
+    assert.equal(view.hiddenTests, 1);
+    assert.deepEqual(view.rows.map((r) => r.symbol), ["shipped"]);
+  });
+
+  it("截斷之後母數不變", () => {
+    const view = hotspotsView(open(hotspotDb()), 1, 0);
+    assert.equal(view.rows.length, 0);
+    assert.equal(view.total, 2, "先截斷再算母數的話這裡會變成 0");
+  });
+});
+
+describe("summary 帶得出這套語料的身分", () => {
+  it("**規模數字必須來自這個資料庫**，不是別套語料的常數", () => {
+    const db = open(hotspotDb());
+    const summary = repoSummary(db, 1);
+    assert.deepEqual(summary.counts, { commits: 2, revisions: 4, entities: 2 });
+    // 先前 mock 的標題寫 vuejs/core、數字卻是 angular 的（38,278 commit）。
+    // 接回資料庫之後那種錯不可能再發生——這條就是釘住那件事。
+    assert.equal(summary.schemaVersion, SCHEMA_VERSION);
+  });
+
+  it("改動層級的分佈是完整的，不只挑兩個出來", () => {
+    const summary = repoSummary(open(hotspotDb()), 1);
+    // `none` 的占比是熱點只算 shape 的理由，畫面要講得出來就需要完整分母。
+    assert.deepEqual(summary.changeLevels, { birth: 2, shape: 2 });
+    assert.equal(summary.changes, 4, "birth 與 shape 都算改動");
+    assert.equal(summary.untouched, 0);
   });
 });

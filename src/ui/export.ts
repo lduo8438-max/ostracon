@@ -48,6 +48,17 @@ export interface ExportOptions {
   repoId?: number;
   /** 匯出幾個宣告。畫面本來就只列這麼多。 */
   limit?: number;
+  /**
+   * 語料的路徑。給了才會把斷層的前後程式碼片段嵌進匯出。
+   *
+   * **索引不存原始碼**（只有 blob hash 與 byte 位移），所以片段一定要回讀
+   * git。不給不是錯誤——匯出可能在沒有語料的機器上跑——但 payload 會記下
+   * 是哪一種情況，畫面因此說得出為什麼沒有片段。
+   *
+   * **給了就會把那些程式碼公開出去。** 對 MIT 語料沒問題，對私有 repo 是
+   * 一次不可逆的外洩，所以這是明示的旗標而不是預設行為。
+   */
+  repoRoot?: string;
 }
 
 export interface ExportReport {
@@ -104,7 +115,10 @@ export function exportStaticSite(
   // 這兩份是**全 repo 的彙總**，不隨 `--limit` 裁切：階梯的分母就是整個 repo
   // 的配對數，裁掉之後那個比例會說謊。實測 vuejs/core 兩份合計 100 KB 出頭。
   write(LADDER_PATH, JSON.stringify(ladderStats(db, repoId)));
-  write(DISCONTINUITIES_PATH, JSON.stringify(discontinuitiesFor(db, repoId)));
+  write(
+    DISCONTINUITIES_PATH,
+    JSON.stringify(discontinuitiesFor(db, repoId, 500, options.repoRoot)),
+  );
   const hotspots = hotspotsView(db, repoId);
   write(HOTSPOTS_PATH, JSON.stringify(hotspots));
 

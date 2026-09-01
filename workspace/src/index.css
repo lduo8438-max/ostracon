@@ -23,6 +23,9 @@
   --blue: #62bafa;
   --blue-soft: #213c53;
   --amber: #f3ab52;
+  /* topbar 是 sticky 的，所以任何跟著視窗釘住的面板都要扣掉它。
+     寫成變數而不是散在各處的 72px——它在 920px 以下會變成 54px。 */
+  --topbar: 72px;
 }
 
 * { box-sizing: border-box; }
@@ -252,6 +255,7 @@ code { overflow-wrap: anywhere; }
   .mobile-nav .brand strong { font-size: 15px; }
   .mobile-nav select { max-width: 190px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 9px 12px; color: var(--text); font-size: 11px; }
   .topbar { top: 64px; height: 54px; padding-inline: 18px; }
+  :root { --topbar: 118px; } /* 手機版 topbar 疊在 64px 的 mobile-nav 之下 */
   .top-status { display: none; }
   .view { padding: 28px 18px 52px; }
   .page-intro { min-height: 0; grid-template-columns: 1fr; gap: 20px; margin-bottom: 28px; }
@@ -357,3 +361,66 @@ code { overflow-wrap: anywhere; }
 .repo-path { color: var(--muted); font-size: 9px; }
 .hotspot-row { cursor: pointer; }
 .hotspot-row:hover { background: var(--surface-2); }
+
+/* hunk 證據三態。**冷色與灰階，不用暖色**——暖色只給逐字引文。 */
+.hunk-touched, .hunk-untouched, .hunk-unknown { font-size: 9px; letter-spacing: .04em; }
+.hunk-touched { color: var(--blue); }
+.hunk-untouched { color: var(--muted); }
+/* 「不知道」要與「沒碰到」看得出差別，否則三態在畫面上就退化成兩態。 */
+.hunk-unknown { color: var(--muted); border-bottom: 1px dotted var(--muted); }
+
+/* 斷層的前後片段。等寬字是必須的——那是程式碼，不是散文。 */
+.revision-pair pre {
+  margin: 10px 0 6px; padding: 11px 12px; max-height: 320px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-3);
+  color: #cbd7de; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; line-height: 1.6; white-space: pre; tab-size: 2;
+}
+/* 截斷要看得見，但不搶戲——它是註腳不是警告。 */
+.snippet-note { display: block; color: var(--muted); font-size: 9px; }
+
+
+/* ── 雙欄工作區：清單獨立捲動，詳情跟著視窗釘住 ────────────────────────────
+   先前這兩個版面是普通文件流：左欄 421／537 列會把整頁撐高好幾個螢幕，而右欄
+   的詳情停在 grid 頂端。捲到第 40 筆點下去，右半邊是一整片空白——詳情確實更新
+   了，但使用者得捲回頁首才看得到。**內容是對的，版面讓它看不見。**
+
+   只在真的是兩欄時套用。手機版兩個版面都已經塌成單欄，那時 sticky 會把詳情
+   釘在螢幕上擋住清單，比不修更糟。 */
+@media (min-width: 921px) {
+  .split-layout { align-items: start; }
+  /* 標頭與頁尾留在原地，只有列表本身捲——那兩行寫著「421 breaks」與
+     「6 條無法比較」，捲走了就等於沒說。 */
+  .split-layout .list-panel {
+    position: sticky;
+    top: calc(var(--topbar) + 20px);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - var(--topbar) - 40px);
+  }
+  .split-layout .stack-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .discontinuity-detail {
+    position: sticky;
+    top: calc(var(--topbar) + 20px);
+    max-height: calc(100vh - var(--topbar) - 40px);
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 1181px) {
+  .ostracised-layout { align-items: start; }
+  .removal-cluster {
+    position: sticky;
+    top: calc(var(--topbar) + 20px);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - var(--topbar) - 40px);
+  }
+  .removal-cluster > div { flex: 1; min-height: 0; overflow-y: auto; }
+  .ostracised-detail {
+    position: sticky;
+    top: calc(var(--topbar) + 20px);
+    max-height: calc(100vh - var(--topbar) - 40px);
+    overflow-y: auto;
+  }
+}

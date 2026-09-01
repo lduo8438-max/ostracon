@@ -24,11 +24,15 @@ function lastNewLine(h: DiffHunk): number {
 /**
  * hunk 是否碰到新側的 [startLine, endLine]。
  *
+ * **匯出是為了讓畫面用同一個判準。** 時間軸要標「這次改動有沒有真的碰到這個
+ * 宣告」，而那與 L3c 成立的前提是同一件事。另寫一份的話會出現「畫面說沒碰到、
+ * matcher 當時認為碰到了」——那是最難發現的那種錯，因為兩邊各自看起來都對。
+ *
  * 只比對端點是不夠的：一個「兩行換兩行」的 hunk 落在宣告正中間時，位移為零，
  * 端點回推得到完全正確的舊行號，但宣告的內容其實改了——那會產生一個假的位置
  * 證明。所以必須檢查整個區間不與任何 hunk 相交。
  */
-function touches(h: DiffHunk, startLine: number, endLine: number): boolean {
+export function touches(h: DiffHunk, startLine: number, endLine: number): boolean {
   if (h.newCount > 0) {
     return startLine <= lastNewLine(h) && endLine >= h.newStart;
   }

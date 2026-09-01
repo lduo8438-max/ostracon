@@ -37,6 +37,9 @@ export function revisionValues(row: {
   lineageId?: number;
   path?: string;
   contentId?: number;
+  /** 行範圍。hunk 證據的測試要靠它決定 hunk 有沒有碰到這個宣告。 */
+  lineStart?: number;
+  lineEnd?: number;
 }): string {
   const {
     id,
@@ -47,7 +50,9 @@ export function revisionValues(row: {
     lineageId = 1,
     path = "src/a.ts",
     contentId = CONTENT_ID,
+    lineStart = 1,
+    lineEnd = 2,
   } = row;
   return `(${id}, ${repoId}, ${commitId}, ${slotId}, ${entityId}, ${lineageId},`
-    + ` '${path}', ${contentId}, x'0b', 0, 1, 1, 2)`;
+    + ` '${path}', ${contentId}, x'0b', 0, 1, ${lineStart}, ${lineEnd})`;
 }

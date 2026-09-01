@@ -9,6 +9,12 @@ import {
   listOstracised,
   type OstracisedRow,
 } from "../cli/ostracised.ts";
+import { touches } from "../match/position.ts";
+import {
+  readSnippets,
+  type Snippet,
+  type SnippetRequest,
+} from "./snippets.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
@@ -175,6 +181,8 @@ export interface IntentRow {
 }
 
 export interface EvolutionRow extends Omit<TimelineRow, "rationale"> {
+  /** 這次改動的 hunk 有沒有碰到這個宣告。三態，見 `HunkEvidence`。 */
+  hunkEvidence: HunkEvidence;
   /** 這一次改動已驗證的逐字引文，拆成陣列——分隔符是儲存細節，不該外洩。 */
   quotes: string[];
   /** 這一次改動的分型意圖。空陣列是**真實的觀測值**，不是缺資料。 */
@@ -187,6 +195,74 @@ export interface EvolutionRow extends Omit<TimelineRow, "rationale"> {
  * 分兩次查的話，前端得自己把 claim 對回改動，而對齊錯了的後果是把 A 改動的
  * 理由印在 B 底下——那是這個工具最不能犯的錯。
  */
+/**
+ * 這次改動有沒有真的碰到這個宣告。**三態，不是布林。**
+ *
+ * - `touched`：這顆 commit 對這個檔案的 hunk 裡，有一個與宣告的行範圍相交。
+ * - `untouched`：有 hunk，但沒有一個碰到它——**檔案動了，這段沒動**。
+ *   這正是「改動 306 次、其中 62 次完全沒變」那個數字的來源。
+ * - `unknown`：這次改動**沒有 hunk 資料**（純改名、二進位、或 git 沒給出
+ *   hunk）。它不是「沒碰到」——把不知道說成沒碰到，就是把沒有證據當成
+ *   最強的負證據，與 `slot_discontinuity.similarity` 的 NULL／0 同一條規則。
+ */
+export type HunkEvidence = "touched" | "untouched" | "unknown";
+
+/**
+ * 一個 entity 的每一次改動，hunk 有沒有碰到它。
+ *
+ * **判準用 `touches`，與 matcher 共用同一支函式**——L3c 成立的前提就是
+ * 「宣告未被任何 hunk 碰到」，畫面若另寫一份，兩邊遲早給出相反的答案。
+ *
+ * 一次查完整條時間軸而不是逐列查：306 列就是 306 次查詢，而它們掃的是同一
+ * 組索引。`file_change` 的 UNIQUE (commit_id, path) 保證每次改動至多一列。
+ */
+function hunkEvidenceFor(
+  db: DatabaseSync,
+  repoId: number,
+  entityId: number,
+): Map<string, HunkEvidence> {
+  const rows = db.prepare(
+    `SELECT c.sha AS sha, r.line_start AS lineStart, r.line_end AS lineEnd,
+            fh.old_start AS oldStart, fh.old_count AS oldCount,
+            fh.new_start AS newStart, fh.new_count AS newCount
+       FROM revision r
+       JOIN git_commit c ON c.id = r.commit_id
+       JOIN file_change fc ON fc.commit_id = r.commit_id AND fc.path = r.path
+       LEFT JOIN file_hunk fh ON fh.file_change_id = fc.id
+      WHERE r.repo_id = ? AND r.entity_id = ?`,
+  ).all(repoId, entityId) as unknown as Array<{
+    sha: string;
+    lineStart: number;
+    lineEnd: number;
+    oldStart: number | null;
+    oldCount: number | null;
+    newStart: number | null;
+    newCount: number | null;
+  }>;
+
+  const evidence = new Map<string, HunkEvidence>();
+  for (const row of rows) {
+    if (evidence.get(row.sha) === "touched") continue;
+    // LEFT JOIN 的 NULL 代表這次改動一個 hunk 都沒有——那是「不知道」。
+    if (row.newStart === null) {
+      if (!evidence.has(row.sha)) evidence.set(row.sha, "unknown");
+      continue;
+    }
+    const hit = touches(
+      {
+        oldStart: row.oldStart!,
+        oldCount: row.oldCount!,
+        newStart: row.newStart,
+        newCount: row.newCount!,
+      },
+      row.lineStart,
+      row.lineEnd,
+    );
+    evidence.set(row.sha, hit ? "touched" : "untouched");
+  }
+  return evidence;
+}
+
 export function evolutionOf(
   db: DatabaseSync,
   repoId: number,
@@ -227,12 +303,14 @@ export function evolutionOf(
     byCommit.set(sha, bucket);
   }
 
+  const hunks = hunkEvidenceFor(db, repoId, entityId);
   return timelineOf(db, entityId).map(({ rationale, ...row }) => ({
     ...row,
     quotes: rationale === null
       ? []
       : rationale.split(RATIONALE_SEPARATOR).map(unwrapQuote),
     intent: byCommit.get(row.sha) ?? [],
+    hunkEvidence: hunks.get(row.sha) ?? "unknown",
   }));
 }
 
@@ -570,10 +648,23 @@ export interface DiscontinuityRow {
   similarity: number | null;
   prevStableKey: string;
   nextStableKey: string;
+  /** 斷層之前那一版的原始碼。索引不存原始碼，這是讀取時從 git blob 切出來的。 */
+  before?: Snippet;
+  /** 斷層之後那一版。 */
+  after?: Snippet;
 }
 
 export interface DiscontinuityView {
   total: number;
+  /**
+   * 片段為什麼在或不在。**抑制不得靜默**——沒有片段時畫面要說得出原因，
+   * 而不是留下一塊沒有解釋的空白。
+   *
+   * - `included`：讀到了。
+   * - `not-requested`：匯出時沒有給 `--repo`。
+   * - `repo-unavailable`：給了但讀不到（路徑不在、不是 git repo、blob 被 gc）。
+   */
+  snippets: "included" | "not-requested" | "repo-unavailable";
   /** 其中 `similarity` 為 NULL（無法比較）的筆數。**抑制不能靜默。** */
   incomparable: number;
   rows: DiscontinuityRow[];
@@ -584,14 +675,16 @@ export interface DiscontinuityView {
  *
  * schema 把它稱作「專案最有價值的輸出之一」：**它告訴使用者「斷層以前的討論
  * 與現在無關」**。slot 是「這個位置」的職責連續性，entity 是「這段程式碼」的
- * 血緣，兩者分歧處就是這裡（不變量 2）。
+ * 血緣，兩者分歧處就是這裡（不變量 2）。實測 vuejs/core 有 421 條。
  *
- * 實測 vuejs/core 有 421 條，而畫面上先前一條都沒有。
+ * `repoRoot` 給了才讀前後片段。**不給不是錯誤**——靜態匯出可能在沒有語料的
+ * 機器上跑——但 payload 一定要說出是哪一種情況。
  */
 export function discontinuitiesFor(
   db: DatabaseSync,
   repoId: number,
   limit = 500,
+  repoRoot?: string,
 ): DiscontinuityView {
   const totals = db.prepare(
     `SELECT COUNT(*) AS total,
@@ -609,26 +702,80 @@ export function discontinuitiesFor(
     `SELECT nr.path AS path, s.qualified_name AS symbol,
             SUBSTR(c.sha, 1, 10) AS shortSha, c.committed_at AS committedAt,
             c.message AS message, d.similarity AS similarity,
-            pe.stable_key AS prevStableKey, ne.stable_key AS nextStableKey
+            pe.stable_key AS prevStableKey, ne.stable_key AS nextStableKey,
+            hex(nr.blob_sha) AS afterBlob, nr.byte_start AS afterStart,
+            nr.byte_end AS afterEnd,
+            hex(pr.blob_sha) AS beforeBlob, pr.byte_start AS beforeStart,
+            pr.byte_end AS beforeEnd
        FROM slot_discontinuity d
        JOIN slot s ON s.id = d.slot_id
        JOIN git_commit c ON c.id = d.commit_id
        JOIN revision nr ON nr.commit_id = d.commit_id AND nr.slot_id = d.slot_id
+       -- 斷層「之前」那一版：同一個 slot、topo 序最靠近且更早的那一列。
+       -- **不能用 prev_entity 的最後一版**——那個 entity 可能在別的 slot
+       -- 繼續活著，取到的就不是這個位置上被換掉的那一段。
+       LEFT JOIN revision pr ON pr.id = (
+         SELECT r2.id FROM revision r2
+           JOIN git_commit c2 ON c2.id = r2.commit_id
+          WHERE r2.slot_id = d.slot_id AND c2.topo_order < c.topo_order
+          ORDER BY c2.topo_order DESC LIMIT 1
+       )
        JOIN entity pe ON pe.id = d.prev_entity
        JOIN entity ne ON ne.id = d.next_entity
       WHERE ne.repo_id = ?
       ORDER BY c.topo_order DESC
       LIMIT ?`,
   ).all(repoId, limit) as unknown as Array<
-    Omit<DiscontinuityRow, "subject"> & { message: string }
+    Omit<DiscontinuityRow, "subject" | "before" | "after"> & {
+      message: string;
+      afterBlob: string; afterStart: number; afterEnd: number;
+      beforeBlob: string | null; beforeStart: number | null; beforeEnd: number | null;
+    }
   >;
+
+  const requests: SnippetRequest[] = [];
+  if (repoRoot !== undefined) {
+    rows.forEach((row, index) => {
+      requests.push({
+        id: `a${index}`,
+        blobSha: row.afterBlob.toLowerCase(),
+        byteStart: row.afterStart,
+        byteEnd: row.afterEnd,
+      });
+      if (row.beforeBlob !== null) {
+        requests.push({
+          id: `b${index}`,
+          blobSha: row.beforeBlob.toLowerCase(),
+          byteStart: row.beforeStart!,
+          byteEnd: row.beforeEnd!,
+        });
+      }
+    });
+  }
+  const snippets = repoRoot === undefined
+    ? new Map<string, Snippet>()
+    : readSnippets(repoRoot, requests);
 
   return {
     total: totals.total,
     incomparable: totals.incomparable ?? 0,
-    rows: rows.map(({ message, ...rest }) => ({
-      ...rest,
-      subject: message.split("\n", 1)[0] ?? "",
-    })),
+    snippets: repoRoot === undefined
+      ? "not-requested"
+      : snippets.size > 0
+        ? "included"
+        : "repo-unavailable",
+    rows: rows.map((
+      { message, afterBlob, afterStart, afterEnd, beforeBlob, beforeStart, beforeEnd, ...rest },
+      index,
+    ) => {
+      const before = snippets.get(`b${index}`);
+      const after = snippets.get(`a${index}`);
+      return {
+        ...rest,
+        subject: message.split("\n", 1)[0] ?? "",
+        ...(before ? { before } : {}),
+        ...(after ? { after } : {}),
+      };
+    }),
   };
 }

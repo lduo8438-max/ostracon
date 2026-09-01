@@ -66,6 +66,17 @@ function fixtureDb(): string {
   return dbPath;
 }
 
+/** 沒有任何斷層的語料。「沒東西可讀」與「讀不到」必須分得開。 */
+function emptyDb(): string {
+  const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-empty-")), "i.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
+  db.exec("INSERT INTO repo (id, root_path, created_at) VALUES (1, '/tmp/e', '2026-01-01');");
+  db.close();
+  return dbPath;
+}
+
 const open = (p: string) => {
   const db = new DatabaseSync(p, { readOnly: true });
   db.exec("PRAGMA foreign_keys = ON");
@@ -153,6 +164,15 @@ describe("斷層的前後片段", () => {
       Buffer.byteLength(snippet.text) <= SNIPPET_MAX_BYTES,
       "位元組上限沒有生效，單行輸入會整個灌進 payload",
     );
+  });
+
+  it("**沒東西可讀 ≠ 讀不到**", () => {
+    // create-t3-app 有 0 個斷層。給了正確的 --repo 卻回 repo-unavailable，
+    // 畫面就會說「語料讀不到」——而語料明明就在。判準是「讀不讀得到」，
+    // 不是「有沒有讀到東西」。實測踩到過。
+    const empty = discontinuitiesFor(open(emptyDb()), 1, 500, process.cwd());
+    assert.equal(empty.total, 0);
+    assert.equal(empty.snippets, "included");
   });
 
   it("**讀不到語料時要說出是哪一種情況**，不是留白", () => {

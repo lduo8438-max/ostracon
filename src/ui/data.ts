@@ -752,16 +752,19 @@ export function discontinuitiesFor(
       }
     });
   }
-  const snippets = repoRoot === undefined
-    ? new Map<string, Snippet>()
+  const read = repoRoot === undefined
+    ? undefined
     : readSnippets(repoRoot, requests);
+  const snippets = read?.snippets ?? new Map<string, Snippet>();
 
   return {
     total: totals.total,
     incomparable: totals.incomparable ?? 0,
-    snippets: repoRoot === undefined
+    // **判準是「語料讀不讀得到」，不是「有沒有讀到東西」。** 0 個斷層的語料
+    // 沒有任何片段要讀，那不代表讀不到——create-t3-app 實測踩到過。
+    snippets: read === undefined
       ? "not-requested"
-      : snippets.size > 0
+      : read.readable
         ? "included"
         : "repo-unavailable",
     rows: rows.map((

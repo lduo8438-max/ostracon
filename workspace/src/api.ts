@@ -16,16 +16,40 @@ import type {
   WorkspaceData,
 } from './types'
 
+// **直接用後端那一份，不抄。** routes.ts 是零相依的字串常數，Vite 會把它
+// 打包進來；抄一份的代價已經付過一次了（見上方 `get` 的註解）。
+import {
+  DISCONTINUITIES_ROUTE,
+  ENTITIES_ROUTE,
+  HOTSPOTS_ROUTE,
+  LADDER_ROUTE,
+  OSTRACISED_ROUTE,
+  SUMMARY_ROUTE,
+  evolutionRoute,
+} from '../../src/ui/routes'
+
 /**
  * 對後端的唯一出入口。
  *
- * 路徑一律是相對的 `/api/*.json`：**伺服器（`ostracon ui`）與匯出的靜態站台
- * 用的是同一組 URL**，所以這裡不需要、也不該有「哪一種後端」的分支。
- * 開發時由 vite 的 proxy 轉到 127.0.0.1:4319。
+ * **路徑一律相對於 `document.baseURI` 解析。** 伺服器（`ostracon ui`）與匯出的
+ * 靜態站台共用同一組路由，所以這裡不需要、也不該有「哪一種後端」的分支——
+ * 但「共用」的前提是路徑不能綁在網域根上。
+ *
+ * 這裡原本寫死 `/api/*.json`，而註解還宣稱那是「相對」的。它在 `ostracon ui`
+ * （服務於網域根）與 vite dev server 上都正常，一放到 GitHub Pages 的
+ * `/ostracon-demo/<語料>/` 之下就整批逃到網域根目錄拿 404，五個畫面全部進不去。
+ * **兩種部署位置，只驗了根那一種**；而且發布前的煙霧測試只 curl 了 HTML 與
+ * 資產，沒有 curl 前端真正會抓的那幾個 URL。
+ *
+ * 路由本身現在來自 `src/ui/routes.ts`——與伺服器、匯出同一份，不再各抄一次。
  */
-const get = async <T>(path: string): Promise<T> => {
-  const response = await fetch(path)
-  if (!response.ok) throw new Error(`${path} → HTTP ${response.status}`)
+const get = async <T>(route: string): Promise<T> => {
+  // 錯誤訊息印**解析後**的完整 URL。先前印的是傳進來的字串，於是畫面說
+  // 「/api/summary.json → HTTP 404」，而實際被請求的是網域根上那一條——
+  // 要打開 Network 面板才看得出差別。
+  const url = new URL(route, document.baseURI).toString()
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`${url} → HTTP ${response.status}`)
   return response.json() as Promise<T>
 }
 
@@ -189,7 +213,7 @@ const changeSummary = (changeLevel: string) =>
 export async function fetchSummary(): Promise<Repository & {
   changeDistribution: WorkspaceData['changeDistribution']
 }> {
-  const summary = await get<ApiSummary>('/api/summary.json')
+  const summary = await get<ApiSummary>(SUMMARY_ROUTE)
   return {
     name: summary.rootPath,
     commits: summary.counts.commits,
@@ -205,7 +229,7 @@ export async function fetchSummary(): Promise<Repository & {
 }
 
 export async function fetchLadder(): Promise<LadderView> {
-  const ladder = await get<ApiLadder>('/api/ladder.json')
+  const ladder = await get<ApiLadder>(LADDER_ROUTE)
   const tiers: LadderTier[] = TIER_ORDER.flatMap((id) => {
     const tier = ladder.tiers.find((item) => item.tier === id)
     if (tier === undefined) return []
@@ -237,7 +261,7 @@ export async function fetchLadder(): Promise<LadderView> {
 }
 
 export async function fetchDiscontinuities(): Promise<DiscontinuityView> {
-  const view = await get<ApiDiscontinuities>('/api/discontinuities.json')
+  const view = await get<ApiDiscontinuities>(DISCONTINUITIES_ROUTE)
   return {
     total: view.total,
     incomparable: view.incomparable,
@@ -258,12 +282,12 @@ export async function fetchDiscontinuities(): Promise<DiscontinuityView> {
 }
 
 export async function fetchHotspots(): Promise<HotspotView> {
-  const view = await get<ApiHotspots>('/api/hotspots.json')
+  const view = await get<ApiHotspots>(HOTSPOTS_ROUTE)
   return { rows: view.rows, total: view.total, hiddenTests: view.hiddenTests }
 }
 
 export async function fetchOstracised(): Promise<OstracisedView> {
-  const view = await get<ApiOstracised>('/api/ostracised.json')
+  const view = await get<ApiOstracised>(OSTRACISED_ROUTE)
   return {
     // A 級確證 = 列出的 + 測試檔裡被排除的。C 級是疑似，**不混進 A**。
     strengthA: view.rows.length + view.hiddenTests,
@@ -281,7 +305,7 @@ export async function fetchOstracised(): Promise<OstracisedView> {
  * 752 筆在瀏覽器裡篩選是零成本的，不需要伺服器端搜尋。
  */
 export async function fetchEntities(): Promise<EntityListItem[]> {
-  const entities = await get<ApiEntity[]>('/api/entities.json')
+  const entities = await get<ApiEntity[]>(ENTITIES_ROUTE)
   return entities.map((entity) => ({
     stableKey: entity.stableKey,
     symbol: entity.symbol,
@@ -316,7 +340,7 @@ export const featuredKey = (entities: EntityListItem[]): string | undefined =>
  * 錯誤頁。舊的三欄頁面兩份名單都查，這裡漏了。
  */
 export async function fetchOstracisedTargets(): Promise<EntityListItem[]> {
-  const view = await get<ApiOstracised>('/api/ostracised.json')
+  const view = await get<ApiOstracised>(OSTRACISED_ROUTE)
   return view.rows.map((row) => ({
     stableKey: row.stableKey,
     symbol: row.symbol,
@@ -333,7 +357,7 @@ export async function fetchOstracisedTargets(): Promise<EntityListItem[]> {
 export async function fetchEvolution(
   entity: EntityListItem,
 ): Promise<TimelineView> {
-  const rows = await get<ApiEvolutionRow[]>(`/api/evolution/${entity.stableKey}.json`)
+  const rows = await get<ApiEvolutionRow[]>(evolutionRoute(entity.stableKey))
   return {
     symbol: entity.symbol,
     path: entity.path,

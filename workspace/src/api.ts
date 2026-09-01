@@ -10,6 +10,7 @@ import type {
   OstracisedEntity,
   OstracisedView,
   Repository,
+  Snippet,
   TimelineRow,
   TimelineView,
   WorkspaceData,
@@ -74,7 +75,10 @@ interface ApiLadder {
 interface ApiDiscontinuities {
   total: number
   incomparable: number
+  snippets: DiscontinuityView['snippets']
   rows: Array<{
+    before?: Snippet
+    after?: Snippet
     path: string
     symbol: string
     shortSha: string
@@ -95,6 +99,7 @@ interface ApiEvolutionRow {
   shortSha: string
   committedAt: string
   changeLevel: string
+  hunkEvidence: 'touched' | 'untouched' | 'unknown'
   tier: string | null
   path: string
   lineStart: number
@@ -236,8 +241,11 @@ export async function fetchDiscontinuities(): Promise<DiscontinuityView> {
   return {
     total: view.total,
     incomparable: view.incomparable,
+    snippets: view.snippets,
     rows: view.rows.map((row, index) => ({
       id: index,
+      ...(row.before ? { before: row.before } : {}),
+      ...(row.after ? { after: row.after } : {}),
       symbol: row.symbol,
       similarity: row.similarity,
       sha: row.shortSha,
@@ -347,6 +355,7 @@ export async function fetchEvolution(
         location: `${row.path.split('/').pop()}:${row.lineStart}–${row.lineEnd}`,
         tier: row.tier ?? '—',
         firstDifference: firstDifference(row.changeLevel),
+        hunkEvidence: row.hunkEvidence,
         change: changeSummary(row.changeLevel),
         ...(entityRationale ? { rationale: entityRationale.text } : {}),
       }

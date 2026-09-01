@@ -20,6 +20,7 @@ import type {
   Discontinuity,
   DiscontinuityView,
   EntityListItem,
+  Snippet,
   Hotspot,
   HotspotView,
   LadderTier,
@@ -68,6 +69,20 @@ const navItems: Array<{ id: ViewId; index: string; label: string }> = [
 ]
 
 const format = (value: number) => value.toLocaleString('en-US')
+/**
+ * hunk 證據的三態。**「unknown」不是「沒碰到」**——這次改動根本沒有 hunk
+ * 資料（純改名、二進位），把它顯示成「沒碰到」就是把不知道當成負證據。
+ */
+const HUNK_LABEL: Record<TimelineRow['hunkEvidence'], string> = {
+  touched: 'hunk touched it',
+  untouched: 'hunk missed it',
+  unknown: 'no hunk data',
+}
+const HUNK_TITLE: Record<TimelineRow['hunkEvidence'], string> = {
+  touched: 'A diff hunk in this commit overlaps the declaration',
+  untouched: 'The file changed, but no hunk overlaps this declaration',
+  unknown: 'This change carries no hunk information — not the same as untouched',
+}
 const shortSha = (value: string) => value.slice(0, 10)
 const percentage = (value: number) => `${(value * 100).toFixed(1)}%`
 /**
@@ -222,6 +237,36 @@ function LadderBody({ data }: { data: LadderView }) {
   )
 }
 
+/**
+ * 一段原始碼，或說明它為什麼不在。
+ *
+ * **索引不存原始碼**（只有 blob hash 與 byte 位移），所以片段是回讀 git 切出
+ * 來的——匯出時沒給 `--repo` 就沒有。那不是缺陷，但**必須說出來**：這個介面
+ * 有很多合理的空白，使用者不該把「沒讀」當成「沒有這段程式碼」。
+ */
+function SnippetBlock({ snippet, reason, empty }: {
+  snippet?: Snippet
+  reason: DiscontinuityView['snippets']
+  empty: string
+}) {
+  if (snippet) {
+    return (
+      <>
+        <pre>{snippet.text}</pre>
+        {snippet.truncated
+          ? <small className="snippet-note">First {snippet.text.split('\n').length} of {snippet.lines} lines</small>
+          : <small className="snippet-note quiet">{snippet.lines} line{snippet.lines === 1 ? '' : 's'}</small>}
+      </>
+    )
+  }
+  const why = reason === 'not-requested'
+    ? 'Source was not embedded in this export. The index stores a blob hash and byte offsets, never the source itself.'
+    : reason === 'repo-unavailable'
+      ? 'The corpus could not be read, so the source could not be recovered.'
+      : empty
+  return <p className="honest-blank">{why}</p>
+}
+
 function DiscontinuityCard({ row, selected, onClick }: { row: Discontinuity; selected: boolean; onClick: () => void }) {
   return (
     <button className={selected ? 'list-row selected' : 'list-row'} onClick={onClick}>
@@ -253,10 +298,17 @@ function DiscontinuitiesBody({ data }: { data: DiscontinuityView }) {
           <h2 className="mono detail-title">{selected.symbol}</h2>
           <p className="mono quiet">{shortSha(selected.sha)} · {selected.subject}</p>
           <div className="revision-pair">
-            <div><span>Before · previous entity</span><code>{selected.path}</code><small className="mono">{selected.beforeEntity.slice(0, 12)}…</small></div>
-            <div className="after"><span>After · new entity</span><code>{selected.path}</code><small className="mono">{selected.afterEntity.slice(0, 12)}…</small></div>
+            <div>
+              <span>Before · previous entity</span><code>{selected.path}</code>
+              <SnippetBlock snippet={selected.before} reason={data.snippets} empty="No earlier revision in this slot." />
+              <small className="mono">{selected.beforeEntity.slice(0, 12)}…</small>
+            </div>
+            <div className="after">
+              <span>After · new entity</span><code>{selected.path}</code>
+              <SnippetBlock snippet={selected.after} reason={data.snippets} empty="Not available." />
+              <small className="mono">{selected.afterEntity.slice(0, 12)}…</small>
+            </div>
           </div>
-          <p className="honest-blank">Source snippets are not shown. The index stores a blob hash and byte offsets, never the source itself — reading the two revisions back is a separate step, not a missing field.</p>
           <div className="verdict"><strong>Same slot · different entity</strong><p>Responsibility continues under the qualified slot, but code ancestry does not. Similarity {selected.similarity?.toFixed(4) ?? '—'} is recorded, not promoted into identity.</p></div>
           <MethodNote><p>The adjacent revisions resolve to the same <code>slot_id</code>. No accepted ladder match exists, so <code>slot_discontinuity</code> records both entity IDs, the commit, and nullable similarity.</p></MethodNote>
           <div className="policy-note"><span>Evidence policy</span><p>Claims attached to the earlier entity stop here. The slot remains visible while the ancestry break stays explicit.</p></div>
@@ -270,7 +322,7 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
   return (
     <article id={`timeline-${row.sha}`} className={selected ? 'timeline-row selected' : 'timeline-row'}>
       <div className="timeline-commit"><small>{String(row.index).padStart(3, '0')}</small><strong>{row.sha}</strong><span>{row.date}</span><code>{row.location}</code></div>
-      <div className="timeline-change"><button className="tier-badge" title="The first hash layer that differs">{row.tier} · {row.firstDifference}</button><p>{row.change}</p></div>
+      <div className="timeline-change"><button className="tier-badge" title="The first hash layer that differs">{row.tier} · {row.firstDifference}</button><span className={`hunk-${row.hunkEvidence}`} title={HUNK_TITLE[row.hunkEvidence]}>{HUNK_LABEL[row.hunkEvidence]}</span><p>{row.change}</p></div>
       <div className="timeline-evidence">{row.rationale ? <LiteralEvidence>{row.rationale}</LiteralEvidence> : <p className="honest-blank">— no entity-level or batch-level rationale</p>}</div>
     </article>
   )

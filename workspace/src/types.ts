@@ -54,11 +54,26 @@ export interface Discontinuity {
   path: string
   beforeEntity: string
   afterEntity: string
+  /** 斷層前後那兩版的原始碼。索引不存原始碼，這是回讀 git blob 切出來的。 */
+  before?: Snippet
+  after?: Snippet
 }
-// beforeCode / afterCode 尚未接。索引**不存原始碼**（只存 blob_sha 與 byte
-// 位移），要顯示片段得回讀 git blob——實跑驗過可行（17 ms／段，549 條合計
-// 約 278 KB），但它牽涉匯出流程與一條授權注意事項，另外一刀處理。
-// 在那之前畫面誠實留白，不編造程式碼。
+
+/** 一段原始碼片段。**截斷必須看得見**，否則使用者會以為那就是全部。 */
+export interface Snippet {
+  text: string
+  /** 原本有幾行。截斷時 `text` 只含前面幾行。 */
+  lines: number
+  truncated: boolean
+}
+
+/**
+ * 這次改動的 hunk 有沒有碰到這個宣告。**三態，不是布林。**
+ *
+ * `unknown` 是「這次改動沒有 hunk 資料」（純改名、二進位），**不是「沒碰到」**。
+ * 把不知道說成沒碰到，就是把沒有證據當成最強的負證據。
+ */
+export type HunkEvidence = 'touched' | 'untouched' | 'unknown'
 
 export interface TimelineRow {
   index: number
@@ -69,12 +84,10 @@ export interface TimelineRow {
   tier: string
   /** 四層雜湊裡第一個相異的層級。 */
   firstDifference: string
+  hunkEvidence: HunkEvidence
   change: string
   rationale?: string
 }
-// hunkTouched 尚未接。資料在 file_hunk 裡，但判準必須與 matcher 的
-// `insidePureAddHunk` 共用——另寫一份就會出現「畫面說沒碰到、matcher 當時
-// 認為碰到了」，那是最難發現的那種錯。
 
 export interface Hotspot {
   stableKey: string
@@ -124,6 +137,10 @@ export interface LadderView {
 
 export interface DiscontinuityView {
   total: number
+  /**
+   * 片段為什麼在或不在。**抑制不得靜默**——沒有片段時畫面要說得出原因。
+   */
+  snippets: 'included' | 'not-requested' | 'repo-unavailable'
   /** `similarity` 為 null（無法比較）的筆數。**抑制不得靜默。** */
   incomparable: number
   rows: Discontinuity[]

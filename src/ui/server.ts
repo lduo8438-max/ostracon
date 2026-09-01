@@ -70,6 +70,12 @@ function stableKeyFromPath(pathname: string): string | null | undefined {
   return STABLE_KEY.test(match[1]!) ? match[1]! : null;
 }
 
+/** 這個 repo 索引時的根路徑。讀片段要回本地 git，所以需要它。 */
+function repoRootOf(db: DatabaseSync, repoId: number): string | undefined {
+  return (db.prepare("SELECT root_path AS root FROM repo WHERE id = ?")
+    .get(repoId) as { root: string } | undefined)?.root;
+}
+
 export function createUiServer(options: UiOptions): Server {
   const repoId = options.repoId ?? 1;
   return createServer((request, response) => {
@@ -104,8 +110,12 @@ export function createUiServer(options: UiOptions): Server {
         return;
       }
       if (url.pathname === DISCONTINUITIES_PATH) {
+        // 本機伺服器旁邊就是語料，所以片段直接讀。讀不到時 payload 會說
+        // `repo-unavailable`，不是靜默留白。
         response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(discontinuitiesFor(db, repoId)));
+        response.end(JSON.stringify(
+          discontinuitiesFor(db, repoId, 500, repoRootOf(db, repoId)),
+        ));
         return;
       }
       if (url.pathname === HOTSPOTS_PATH) {

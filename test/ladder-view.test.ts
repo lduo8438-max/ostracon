@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -204,19 +204,29 @@ function hotspotDb(): string {
       VALUES (1, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1', '2026-01-01', '2026-01-01', 'feat: a', 1),
              (2, 1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2', '2026-01-05', '2026-01-05', 'refactor: b', 2);
     INSERT INTO path_lineage (id, repo_id) VALUES (1, 1), (2, 1);
+    INSERT INTO path_lineage (id, repo_id) VALUES (3, 1);
     INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
-      VALUES (1, 1, 1, 'shipped', 'function'), (2, 1, 2, 'spec', 'function');
-    INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
-      VALUES (1, 1, '${K(1)}', 1), (2, 1, '${K(2)}', 1);
+      VALUES (1, 1, 1, 'shipped', 'function'), (2, 1, 2, 'spec', 'function'),
+             (3, 1, 3, 'abandoned', 'function');
+    INSERT INTO entity (id, repo_id, stable_key, birth_commit_id, death_commit_id)
+      VALUES (1, 1, '${K(1)}', 1, NULL), (2, 1, '${K(2)}', 1, NULL),
+             (3, 1, '${K(3)}', 1, 2);
     ${INSERT_CONTENT_FIXTURE}
     INSERT INTO revision ${REVISION_COLUMNS} VALUES
       ${revisionValues({ id: 1, commitId: 1, path: "src/a.ts" })},
       ${revisionValues({ id: 2, commitId: 2, path: "src/a.ts" })},
       ${revisionValues({ id: 3, commitId: 1, path: "src/a.spec.ts", slotId: 2, entityId: 2, lineageId: 2 })},
-      ${revisionValues({ id: 4, commitId: 2, path: "src/a.spec.ts", slotId: 2, entityId: 2, lineageId: 2 })};
+      ${revisionValues({ id: 4, commitId: 2, path: "src/a.spec.ts", slotId: 2, entityId: 2, lineageId: 2 })},
+      ${revisionValues({ id: 5, commitId: 1, path: "src/gone.ts", slotId: 3, entityId: 3, lineageId: 3 })};
     INSERT INTO revision_change (prev_revision, next_revision, commit_id, entity_id, change_level)
       VALUES (NULL, 1, 1, 1, 'birth'), (1, 2, 2, 1, 'shape'),
-             (NULL, 3, 1, 2, 'birth'), (3, 4, 2, 2, 'shape');
+             (NULL, 3, 1, 2, 'birth'), (3, 4, 2, 2, 'shape'),
+             (NULL, 5, 1, 3, 'birth'), (5, NULL, 2, 3, 'death');
+    -- **被推翻的做法，而且改動量最低。** 匯出用 --limit 裁 entities.json 時它
+    -- 會被擠出去，但它的時間軸仍然必須被匯出——那正是要釘的那條不變量。
+    INSERT INTO excursion
+      (repo_id, entity_id, introduce_commit, remove_commit, duration_days, strength, method)
+      VALUES (1, 3, 1, 2, 4.0, 'A', 'inverse_diff');
   `);
   db.close();
   return dbPath;
@@ -255,7 +265,7 @@ describe("summary 帶得出這套語料的身分", () => {
   it("**規模數字必須來自這個資料庫**，不是別套語料的常數", () => {
     const db = open(hotspotDb());
     const summary = repoSummary(db, 1);
-    assert.deepEqual(summary.counts, { commits: 2, revisions: 4, entities: 2 });
+    assert.deepEqual(summary.counts, { commits: 2, revisions: 5, entities: 3 });
     // 先前 mock 的標題寫 vuejs/core、數字卻是 angular 的（38,278 commit）。
     // 接回資料庫之後那種錯不可能再發生——這條就是釘住那件事。
     assert.equal(summary.schemaVersion, SCHEMA_VERSION);
@@ -264,8 +274,56 @@ describe("summary 帶得出這套語料的身分", () => {
   it("改動層級的分佈是完整的，不只挑兩個出來", () => {
     const summary = repoSummary(open(hotspotDb()), 1);
     // `none` 的占比是熱點只算 shape 的理由，畫面要講得出來就需要完整分母。
-    assert.deepEqual(summary.changeLevels, { birth: 2, shape: 2 });
-    assert.equal(summary.changes, 4, "birth 與 shape 都算改動");
+    assert.deepEqual(summary.changeLevels, { birth: 3, death: 1, shape: 2 });
+    assert.equal(summary.changes, 6, "birth 與 shape 都算改動");
     assert.equal(summary.untouched, 0);
+  });
+});
+
+describe("匯出的集合不變量", () => {
+  it("**畫面上每個能點的 stable_key，都必須有對應的時間軸檔案**", () => {
+    // 這條是產品承諾，不是實作細節：Ostracised 與 Hotspots 的每一列都帶
+    // 「開啟時間軸」的入口，而入口指向不存在的目的地比沒有入口更糟——
+    // 使用者會以為是資料壞了。
+    //
+    // 實際咬到過一次：新前端只在 entities.json 裡找 entity，而被推翻的做法
+    // **不在那份名單裡**（vuejs/core 實測 537 條有 493 條不在），於是產品
+    // 自己產生的按鈕把使用者帶到「不在匯出範圍」的錯誤頁。時間軸檔案一直
+    // 都在，錯的是查找。
+    const out = mkdtempSync(path.join(tmpdir(), "ostracon-invariant-"));
+    const db = open(hotspotDb());
+    // **--limit 1 是這條測試的關鍵。** 不裁的話 entities.json 會含全部 entity，
+    // 「在 ostracised 但不在 entities」這個情況根本造不出來，斷言就是空轉的。
+    // 第一版正是那樣，拿掉匯出裡的聯集也不會紅。
+    exportStaticSite(db, out, { label: "fixture", limit: 1 });
+
+    const entities = JSON.parse(
+      readFileSync(path.join(out, "api", "entities.json"), "utf8"),
+    ) as Array<{ stableKey: string }>;
+    const exported = new Set(
+      readdirSync(path.join(out, "api", "evolution"))
+        .map((file) => file.replace(/\.json$/, "")),
+    );
+    const ostracised = JSON.parse(
+      readFileSync(path.join(out, "api", "ostracised.json"), "utf8"),
+    ) as { rows: Array<{ stableKey: string; symbol: string }> };
+    const hotspots = JSON.parse(
+      readFileSync(path.join(out, "api", "hotspots.json"), "utf8"),
+    ) as { rows: Array<{ stableKey: string; symbol: string }> };
+
+    const inEntities = new Set(entities.map((e) => e.stableKey));
+    assert.ok(
+      ostracised.rows.some((row) => !inEntities.has(row.stableKey)),
+      "fixture 沒有造出「在 ostracised 但不在 entities」的列——斷言會空轉",
+    );
+
+    for (const [name, rows] of [["ostracised", ostracised.rows], ["hotspots", hotspots.rows]] as const) {
+      for (const row of rows) {
+        assert.ok(
+          exported.has(row.stableKey),
+          `${name} 列出了 ${row.symbol}，但它沒有時間軸檔案——畫面上那個按鈕會指向錯誤頁`,
+        );
+      }
+    }
   });
 });

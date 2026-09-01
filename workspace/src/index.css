@@ -305,3 +305,55 @@ code { overflow-wrap: anywhere; }
 }
 @keyframes view-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .view-spinner { animation: none; } }
+
+/* 宣告 picker。**新前端補回舊介面最有價值的能力**——五個畫面都是策展好的
+   故事，但這個工具的核心問題是「我那個宣告發生了什麼」。 */
+.picker-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(5, 7, 10, .72); backdrop-filter: blur(4px);
+}
+.picker {
+  width: min(680px, 100%); max-height: 70vh; overflow: hidden;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  box-shadow: 0 30px 90px rgba(0,0,0,.55);
+}
+.picker-input {
+  height: 46px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--line);
+  outline: 0; background: transparent; color: var(--text); font-size: 13px;
+}
+.picker-list { overflow: auto; }
+.picker-row {
+  width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding: 10px 16px; border: 0; border-bottom: 1px solid #1b2024;
+  background: none; color: inherit; text-align: left; cursor: pointer;
+}
+.picker-row:hover, .picker-row:focus-visible { background: var(--surface-2); }
+.picker-row.current { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--blue); }
+.picker-row strong { font-size: 12px; }
+.picker-row code { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.picker-meta { flex: none; color: var(--muted); font-size: 10px; text-align: right; }
+.picker-meta b { color: var(--text); font-weight: 600; }
+.picker-meta em { display: block; margin-top: 3px; font-style: normal; }
+/* 有專屬理由是稀有的訊號——**唯一的暖色仍然只給引文**，所以這裡用它的邊界
+   而不是填色，避免與逐字引文搶同一個語意。 */
+.picker-meta .has-rationale { color: var(--amber); }
+.picker-foot { margin: 0; padding: 9px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.picker-open {
+  border: 0; padding: 0; background: none; color: var(--muted); cursor: pointer;
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.picker-open b { color: var(--text); }
+.picker-open kbd {
+  margin-left: 6px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--muted); font-family: inherit; font-size: 9px;
+}
+.tag-dead {
+  margin-left: 7px; padding: 1px 6px; border: 1px solid var(--line-strong, #343c44); border-radius: 3px;
+  color: var(--muted); font-style: normal; font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+}
+.repo-path { color: var(--muted); font-size: 9px; }
+.hotspot-row { cursor: pointer; }
+.hotspot-row:hover { background: var(--surface-2); }

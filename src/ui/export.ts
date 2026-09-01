@@ -105,14 +105,23 @@ export function exportStaticSite(
   // 的配對數，裁掉之後那個比例會說謊。實測 vuejs/core 兩份合計 100 KB 出頭。
   write(LADDER_PATH, JSON.stringify(ladderStats(db, repoId)));
   write(DISCONTINUITIES_PATH, JSON.stringify(discontinuitiesFor(db, repoId)));
-  write(HOTSPOTS_PATH, JSON.stringify(hotspotsView(db, repoId)));
+  const hotspots = hotspotsView(db, repoId);
+  write(HOTSPOTS_PATH, JSON.stringify(hotspots));
 
-  // 兩份名單的 entity 聯集才是「訪客點得到的一切」。
+  // **三份名單的聯集才是「訪客點得到的一切」。**
+  //
+  // 熱點原本不在這個聯集裡。真實語料看不出來——前 50 名熱點的改動數本來就高，
+  // 一定落在 `byChurn` 的窗口內——但那是 `--limit` 的運氣不是保證：把 limit 調小，
+  // 熱點清單上的項目就會指向不存在的時間軸。畫面上每一列都帶「開啟時間軸」的
+  // 入口，而入口指向錯誤頁比沒有入口更糟：使用者會以為資料壞了。
+  // 集合不變量測試抓到的。
+  //
   // **檔名用 `stable_key`**：rowid 會隨全量重建漂移，而漂移最壞的後果不是 404，
   // 是舊網址在重建後成功回傳另一個 entity。
   const needed = new Set<string>([
     ...entities.map((e) => e.stableKey),
     ...ostracised.rows.map((r) => r.stableKey),
+    ...hotspots.rows.map((r) => r.stableKey),
   ]);
   for (const key of needed) {
     const entityId = entityIdForStableKey(db, repoId, key);

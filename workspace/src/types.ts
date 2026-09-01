@@ -137,10 +137,24 @@ export interface HotspotView {
   hiddenTests: number
 }
 
+/** 宣告清單的一列。picker 用它，所以要看得出「值不值得點進去」。 */
+export interface EntityListItem {
+  stableKey: string
+  symbol: string
+  path: string
+  /** 這個宣告出現在幾次改動裡（含完全沒變的那些）。 */
+  revisions: number
+  /** 有幾次改動附帶專屬理由。**這是稀有的訊號，picker 要標出來。** */
+  withEntityIntent: number
+  withBatchIntent: number
+  dead: boolean
+}
+
 export interface TimelineView {
   symbol: string
   path: string
   stableKey: string
+  dead: boolean
   total: number
   entityRationales: number
   batchRationales: number

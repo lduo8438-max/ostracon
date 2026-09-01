@@ -1,0 +1,14 @@
+# 建置與相依的產物。原始碼進版控，產物不進。
+node_modules/
+dist/
+*.tsbuildinfo
+
+# tsconfig.node.json 原本沒有 noEmit，於是 `tsc -b` 會把 vite.config.ts 與
+# tailwind.config.ts 各編出一份 .js 與 .d.ts 放在原地——版控裡出現三份同義的
+# 設定檔。已在 tsconfig 修掉；這幾行是萬一有人改回去時的第二道防線。
+vite.config.js
+vite.config.d.ts
+tailwind.config.js
+tailwind.config.d.ts
+
+.DS_Store

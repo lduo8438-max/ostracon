@@ -5,7 +5,6 @@ import {
   parseTimelineHash,
   rationaleTargets,
 } from "../src/ui/page-logic.ts";
-import { PAGE } from "../src/ui/page.ts";
 
 const row = (...scopes: string[]) => ({ intent: scopes.map((scope) => ({ scope })) });
 
@@ -70,60 +69,43 @@ describe("時間軸的網址片段", () => {
   });
 });
 
-describe("頁面確實用的是這一份實作", () => {
-  it("三個函式的本體被注入頁面，頁面裡沒有另一份抄本", () => {
-    // 這是這組測試能不能咬得住的前提：頁面若自己抄一份，上面全部白測。
-    for (const fn of [parseTimelineHash, formatTimelineHash, rationaleTargets]) {
-      assert.ok(
-        PAGE.includes(fn.toString()),
-        fn.name + " 的本體不在頁面裡——頁面可能自己抄了一份",
-      );
-    }
-  });
-
-  it("注入的內容是合法 JS（型別標註在 strip-types 下會變成空白）", () => {
-    for (const fn of [parseTimelineHash, formatTimelineHash, rationaleTargets]) {
-      assert.doesNotThrow(
-        () => new Function("return (" + fn.toString() + ")"),
-        fn.name + " 注入頁面後不是合法 JS",
-      );
-    }
-  });
-
-  it("**頁面的 JS 語法是對的**", () => {
-    // 整份頁面是一個樣板字串，所以 tsc 只檢查得到它是不是合法字串，
-    // **檢查不到裡面的 JS**。而樣板字串裡的反引號與插值起頭都是活的——
-    // 光是加這個功能就踩了三次：巢狀樣板的逸出、註解裡的插值起頭、
-    // 頁面內 JSDoc 的反引號。前兩次 tsc 剛好報錯，第三次也是；
-    // 但只要逸出「剛好」湊成合法的 TS，錯就會靜默地送到瀏覽器。
-    const script = PAGE.slice(
-      PAGE.indexOf("<script>") + "<script>".length,
-      PAGE.lastIndexOf("</script>"),
-    );
-    assert.ok(script.length > 1000, "沒抓到 script 內容");
-    // 只編譯不執行：這裡沒有 DOM，而要驗的是語法不是行為。
-    assert.doesNotThrow(() => new Function(script), "頁面的 JS 有語法錯誤");
-    // 不能改用「成品裡不該出現插值語法」當守門：頁面**故意**有巢狀樣板
-    // 字串（給瀏覽器求值的），成品裡的字面插值是對的。寫過那條，當場紅。
-  });
-
-  it("**前端不得自己抄一份網址邏輯**", async () => {
+describe("前端確實用的是這一份實作", () => {
+  /**
+   * 舊版這裡有三條，全是為了 `page.ts` 而存在：函式本體有沒有被注入、注入後
+   * 是不是合法 JS、整份頁面的 script 語法對不對。**頁面刪掉之後三條都沒有
+   * 對象了**——那是一段送到瀏覽器的樣板字串，node 這一端執行不了它，所以
+   * 只能用 regex 與 `new Function` 從外面戳。
+   *
+   * 現在的前端是真的模組：Vite 會 import 這個檔案，`tsc` 會檢查它，
+   * vitest 會把用到它的元件掛起來跑。所以「有沒有抄一份」才是剩下的風險，
+   * 而它由下面這一條顧。
+   */
+  it("**前端不得自己抄一份共用邏輯**", async () => {
     // 舊頁面與新前端共用同一組網址（#<stable_key> 與 #<key>/<sha>）。任何一邊
     // 改了編碼規則，另一邊產生的連結就失效，而那種錯只會在使用者貼連結給別人
     // 時才發現。做這個功能時我差一點就把兩個函式抄進 workspace/src——所以改成
     // 讓抄本不存在，並在這裡釘住。
+    //
+    // `rationaleTargets` 是**後來補進來的**：`api.ts` 原本自己抄了同樣的三個
+    // predicate（`some(entity)`、`every(batch)`、`find(entity)`）。兩份剛好
+    // 一樣不等於同一份——標頭的計數與跳轉清單分岔過一次就夠了。
     const fs = await import("node:fs/promises");
     const dir = "workspace/src";
     let files: string[];
     try {
-      files = await fs.readdir(dir);
+      // **要遞迴。** 原本只讀最上層，子目錄裡的抄本看不見。
+      files = (await fs.readdir(dir, { recursive: true })) as string[];
     } catch {
       return; // workspace/ 不在（例如只 clone 了子集）時不強制
     }
+    let scanned = 0;
     for (const file of files) {
       if (!/\.tsx?$/.test(file)) continue;
+      scanned += 1;
       const source = await fs.readFile(`${dir}/${file}`, "utf8");
-      for (const name of ["parseTimelineHash", "formatTimelineHash"]) {
+      for (
+        const name of ["parseTimelineHash", "formatTimelineHash", "rationaleTargets"]
+      ) {
         assert.doesNotMatch(
           source,
           new RegExp(`(function|const)\\s+${name}\\b`),
@@ -131,16 +113,31 @@ describe("頁面確實用的是這一份實作", () => {
         );
       }
     }
+    assert.ok(scanned > 0, "一個 .ts/.tsx 都沒掃到——這條測試會空轉");
   });
 
-  it("跳轉不改變列高——**改了對齊就散了**", () => {
-    // 命中列用 inset box-shadow 標示。邊框或內距都會改高度，而意圖欄與演化欄
-    // 是逐列量測對齊的：高度一變，理由就印在別人的改動底下。
-    assert.match(PAGE, /\.rev\.hit, \.slot\.hit \{ box-shadow: inset/);
-    assert.doesNotMatch(
-      PAGE,
-      /\.(rev|slot)\.hit \{[^}]*\b(border|padding|margin)\b/,
-      "命中列不得用會改變盒模型的屬性",
-    );
+  it("**共用的那一份真的被前端 import 了**", async () => {
+    // 上一條只證明「沒有抄本」。抄本不存在也可能是因為根本沒人用它——
+    // 那樣兩邊仍然會分岔，只是分岔在別的地方。
+    const fs = await import("node:fs/promises");
+    let sources: string[];
+    try {
+      const files = (await fs.readdir("workspace/src", { recursive: true })) as string[];
+      sources = await Promise.all(
+        files.filter((file) => /\.tsx?$/.test(file))
+          .map((file) => fs.readFile(`workspace/src/${file}`, "utf8")),
+      );
+    } catch {
+      return;
+    }
+    const all = sources.join("\n");
+    for (const name of ["parseTimelineHash", "formatTimelineHash", "rationaleTargets"]) {
+      assert.match(
+        all,
+        new RegExp(`\\b${name}\\b`),
+        `前端沒有用到 ${name}——共用的那一份等於沒有共用`,
+      );
+    }
+    assert.match(all, /from '\.\.\/\.\.\/src\/ui\/page-logic'/);
   });
 });

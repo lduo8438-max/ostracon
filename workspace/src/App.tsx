@@ -447,7 +447,7 @@ function DeclarationPicker({ entities, current, onPick, onClose }: {
   )
 }
 
-function TimelineView({ stableKey, onSelect }: {
+export function TimelineView({ stableKey, onSelect }: {
   stableKey?: string
   onSelect: (key: string) => void
 }) {

@@ -1,7 +1,13 @@
 import type { Config } from 'tailwindcss'
 
 export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  // **測試檔不得影響出貨產物。** Tailwind 是掃字串的：契約測試裡一個叫
+  // `container` 的區域變數就讓 `.container` 那整組 utility 進了正式 CSS
+  // （+288 bytes 的死碼）。掃描範圍要排除測試。
+  content: [
+    './index.html',
+    './src/**/!(*.test).{ts,tsx}',
+  ],
   theme: {
     extend: {
       fontFamily: {

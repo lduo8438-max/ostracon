@@ -128,7 +128,9 @@ function LiteralEvidence({ children, note }: { children: React.ReactNode; note?:
 }
 
 function LadderGlyph({ tiers, selected }: { tiers: LadderTier[]; selected: LadderTier['id'] }) {
-  const max = Math.log10(Math.max(...tiers.map(t => t.count)) + 1)
+  // `Math.max(...[])` 是 `-Infinity`，接著每一條的寬度都會是 NaN——SVG 不會
+  // 報錯，只會靜默畫錯。空階梯用 1 當分母，反正沒有任何一條要畫。
+  const max = tiers.length === 0 ? 1 : Math.log10(Math.max(...tiers.map(t => t.count)) + 1)
   return (
     <svg className="ladder-glyph" viewBox="0 0 164 250" role="img" aria-label="Accepted match tiers shown on a logarithmic scale">
       {tiers.map((tier, index) => {
@@ -281,12 +283,52 @@ function DiscontinuitiesView() {
   return <ViewQuery query={query}>{data => <DiscontinuitiesBody data={data} />}</ViewQuery>
 }
 
-function DiscontinuitiesBody({ data }: { data: DiscontinuityView }) {
-  const [selectedId, setSelectedId] = useState(data.rows[0].id)
+/**
+ * 零斷層是**結果**，不是缺口。
+ *
+ * create-t3-app 索引了 1,378 顆 commit、405 個 entity，偵測器跑完之後一條
+ * `slot_discontinuity` 都沒有——那是這套語料的答案。畫面必須說得出這句話，
+ * 而不是崩在 `rows[0]` 上，也不是留一塊沒有解釋的空白。
+ *
+ * 片段狀態要一起講清楚：這套語料是 `included`（匯出時真的帶了原始碼），
+ * 只是沒有斷層可以拿來顯示——與 `not-requested`（刻意不嵌入）是兩件事。
+ */
+function NoDiscontinuities({ data }: { data: DiscontinuityView }) {
+  return (
+    <section className="panel">
+      <p className="eyebrow">No discontinuities recorded</p>
+      <h2>Every slot in this corpus kept its lineage.</h2>
+      <p>
+        The detector ran over the whole index and accepted a ladder match at every
+        adjacent revision pair. Nothing here was suppressed or truncated — the count
+        is zero because the corpus has no break, not because the view has no data.
+      </p>
+      <p className="honest-blank">
+        {data.snippets === 'included'
+          ? 'Source snippets were embedded for this export; there were simply no breaks to show them for.'
+          : data.snippets === 'not-requested'
+            ? 'Source was not embedded in this export, which is moot here: there are no breaks to show.'
+            : 'The corpus could not be read, which is moot here: there are no breaks to show.'}
+      </p>
+      <MethodNote><p>A discontinuity is recorded only when two adjacent revisions resolve to the same <code>slot_id</code> and no ladder tier accepts a match. False breaks are worse than missed ones, so the threshold stays conservative.</p></MethodNote>
+    </section>
+  )
+}
+
+export function DiscontinuitiesBody({ data }: { data: DiscontinuityView }) {
+  // **空陣列是合法輸入。** `rows[0].id` 在 create-t3-app 上直接丟例外，
+  // 整個畫面變全黑——而那套語料的 0 是正確答案。
+  const [selectedId, setSelectedId] = useState<number | undefined>(data.rows[0]?.id)
   const selected = data.rows.find(row => row.id === selectedId) ?? data.rows[0]
+  const intro = (
+    <PageIntro eyebrow="Discontinuities" title={<>The slot stayed.<br />The lineage did not.</>} body="These are not moves. The same qualified slot reappears with a different entity, so earlier discussion must not be carried forward as evidence." aside={<div className="count-pill">{data.total === 0 ? 'none recorded' : `${format(data.total)} recorded`}</div>} />
+  )
+  if (selected === undefined) {
+    return <div className="view">{intro}<NoDiscontinuities data={data} /></div>
+  }
   return (
     <div className="view">
-      <PageIntro eyebrow="Discontinuities" title={<>The slot stayed.<br />The lineage did not.</>} body="These are not moves. The same qualified slot reappears with a different entity, so earlier discussion must not be carried forward as evidence." aside={<div className="count-pill">{format(data.total)} recorded</div>} />
+      {intro}
       <div className="split-layout">
         <section className="panel list-panel">
           <div className="panel-heading"><span>{data.total} breaks</span><span>lowest similarity first</span></div>
@@ -454,16 +496,30 @@ function TimelineView({ stableKey, onSelect }: {
   )
 }
 
-function TimelineBody({ data, entities, onSelect }: {
+export function TimelineBody({ data, entities, onSelect }: {
   data: TimelineView
   entities: EntityListItem[]
   onSelect: (key: string) => void
 }) {
   const [picking, setPicking] = useState(false)
+  // **理由是稀有的**（Osiris 4.0%），所以「一條都沒有」是常態而不是例外。
+  // 先前 `hits[hitIndex] ?? hits[0]` 在空陣列上是 `undefined`，而每一列的
+  // `selected.sha` 都在 render 本體裡——osiris 的時間軸與 vue 那條只帶 key 的
+  // 精選深連結（`Dep.ts:hasBit`，零專屬理由）因此整頁全黑。
   const hits = data.rows.filter(row => row.rationale)
-  const initialHit = Math.max(0, hits.findIndex(row => window.location.hash.endsWith(row.sha)))
-  const [hitIndex, setHitIndex] = useState(initialHit)
-  const selected = hits[hitIndex] ?? hits[0]
+  // 深連結指定的那一列。**不限於有理由的列**：先前用 `hits.findIndex` 找不到
+  // 就退回第 0 個命中，於是 `#key/sha` 會靜默捲到別的地方——把「找不到」
+  // 偽裝成「找到了」。
+  const deepSha = parseTimelineHash(window.location.hash).sha
+  const deepRow = deepSha === '' ? undefined : data.rows.find(row => row.sha === deepSha)
+  // `-1` = 游標不在任何一條理由上（沒有理由，或深連結指向沒有理由的那一列）。
+  // **這個值是刻意留 -1 而不是夾成 0 的**：計數器印 `hitIndex + 1`，於是
+  // 自然變成 `0 / N`，而 `(hitIndex + 1) % hits.length` 也正好從第一條開始。
+  const [hitIndex, setHitIndex] = useState(() =>
+    deepRow !== undefined
+      ? hits.findIndex(row => row.sha === deepRow.sha)
+      : (hits.length > 0 ? 0 : -1))
+  const [focusSha, setFocusSha] = useState<string | undefined>(deepRow?.sha ?? hits[0]?.sha)
   const rowRef = useRef<HTMLDivElement>(null)
 
   // 「/」開 picker：命令列的慣例，而且不與瀏覽器既有快捷鍵衝突。
@@ -478,15 +534,20 @@ function TimelineBody({ data, entities, onSelect }: {
   }, [])
 
   const jump = () => {
+    if (hits.length === 0) return // 按鈕已 disabled；`% 0` 會是 NaN，這裡是第二道
     const next = (hitIndex + 1) % hits.length
-    const target = hits[next]
+    const target = hits[next]!
     setHitIndex(next)
-    history.replaceState(null, '', `#${data.stableKey}/${target.sha}`)
+    setFocusSha(target.sha)
+    history.replaceState(null, '', formatTimelineHash(data.stableKey, target.sha))
     requestAnimationFrame(() => document.getElementById(`timeline-${target.sha}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
   }
 
+  // 冷開深連結時捲到指定那一列。**條件是那一列真的存在**，不是網址裡有斜線——
+  // 先前寫 `hash.includes('/')` 再讀 `selected.sha`，兩者根本不是同一件事。
   useEffect(() => {
-    if (window.location.hash.includes('/')) requestAnimationFrame(() => document.getElementById(`timeline-${selected.sha}`)?.scrollIntoView({ block: 'center' }))
+    if (deepRow === undefined) return
+    requestAnimationFrame(() => document.getElementById(`timeline-${deepRow.sha}`)?.scrollIntoView({ block: 'center' }))
   }, [])
 
   return (
@@ -502,10 +563,10 @@ function TimelineBody({ data, entities, onSelect }: {
       <PageIntro
         eyebrow={<button className="picker-open" onClick={() => setPicking(true)}>Timeline · <b>change declaration</b> <kbd>/</kbd></button>}
         title={<span className="mono">{data.symbol}{data.dead ? <i className="tag-dead">removed</i> : null}</span>}
-        body={data.path} aside={<button className="jump-control" onClick={jump}><b>{data.entityRationales}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {data.total}</code></button>} />
+        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{hits.length}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {hits.length}</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
-        <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === selected.sha} />)}</div>
+        <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === focusSha} />)}</div>
         <p className="panel-foot">Rows use a fixed block size. Selection is an inset box-shadow; it never changes border, padding, or alignment.</p>
       </section>
       <MethodNote><p>The tier badge names the first hash layer that differs and whether the commit hunk touched the declaration. Cold-open instrumentation for fetch / render / alignRows is intentionally marked as not yet measured.</p></MethodNote>
@@ -573,12 +634,34 @@ function OstracisedView({ onOpen }: { onOpen: (key: string) => void }) {
   return <ViewQuery query={query}>{data => <OstracisedBody data={data} onOpen={onOpen} />}</ViewQuery>
 }
 
-function OstracisedBody({ data, onOpen }: { data: OstracisedView; onOpen: (key: string) => void }) {
-  const [selectedKey, setSelectedKey] = useState(data.rows[0].stableKey)
+export function OstracisedBody({ data, onOpen }: { data: OstracisedView; onOpen: (key: string) => void }) {
+  // 與斷層那一處**同型**：清單可以是空的。三套 demo 語料都有列，所以線上沒撞到
+  // ——但「沒撞到」不是「不會撞」，而空清單在這裡是完全合法的索引結果。
+  const [selectedKey, setSelectedKey] = useState<string | undefined>(data.rows[0]?.stableKey)
   const selected = data.rows.find(row => row.stableKey === selectedKey) ?? data.rows[0]
+  const intro = (
+    <PageIntro eyebrow="Ostracised" title={<>Short-lived code,<br />with its exit context.</>} body="An entity can be real, useful and brief. Empty rationale cells remain empty; grouping helps the first view reveal experiments without inventing intent." aside={<div className="strength-switch"><b>A · {data.strengthA}</b><span>C · {data.strengthC} suspected</span></div>} />
+  )
+  if (selected === undefined) {
+    return (
+      <div className="view">
+        {intro}
+        <section className="panel">
+          <p className="eyebrow">No overturned approaches recorded</p>
+          <h2>Nothing in this corpus was introduced and then removed.</h2>
+          <p>
+            Strength A requires the same entity to be born and to die inside the indexed
+            range, with identical content at both ends. An empty list is a result, not a
+            gap: {data.hiddenTests} declaration(s) in test files were excluded, and
+            {' '}{data.strengthC} remain merely suspected.
+          </p>
+        </section>
+      </div>
+    )
+  }
   return (
     <div className="view">
-      <PageIntro eyebrow="Ostracised" title={<>Short-lived code,<br />with its exit context.</>} body="An entity can be real, useful and brief. Empty rationale cells remain empty; grouping helps the first view reveal experiments without inventing intent." aside={<div className="strength-switch"><b>A · {data.strengthA}</b><span>C · {data.strengthC} suspected</span></div>} />
+      {intro}
       <div className="ostracised-layout">
         <section className="panel removal-cluster">
           <p className="eyebrow">Grouping preview · by remove_commit</p><code>{shortSha(selected.diedSha)} · {selected.diedAt.slice(0, 10)}</code><h2 className="mono">{selected.diedSubject}</h2><p>{data.rows.length} listed · grouping by remove_commit is not applied yet</p>

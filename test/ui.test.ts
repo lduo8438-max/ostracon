@@ -20,7 +20,7 @@ import {
 } from "../src/ui/server.ts";
 import { exportStaticSite } from "../src/ui/export.ts";
 import { declarationScopeOf } from "../src/index/repo-pass.ts";
-import { PAGE } from "../src/ui/page.ts";
+import { APP_DIR, appBuilt, appFiles } from "../src/ui/app-assets.ts";
 import { sha256 } from "../src/evidence/span.ts";
 import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
@@ -290,19 +290,14 @@ describe("三欄 UI 的伺服器", () => {
     }
   });
 
-  it("頁面沒有任何外部資源", () => {
-    // 零相依、可離線是這個專案的賣點之一；一個 CDN 連結就足以毀掉它。
-    assert.equal(/(?:src|href)="(?:https?:)?\/\//.test(PAGE), false);
-    assert.match(PAGE, /system-ui/, "字體用系統堆疊，不下載字體檔");
-  });
-
-  it("逐列高度保留子像素，而且從任一欄捲動都同步", () => {
-    // Chrome 目視驗證抓到第一版只同步「演化 → 意圖」；從意圖欄捲就會拆開。
-    assert.match(PAGE, /getBoundingClientRect\(\)\.height/);
-    assert.doesNotMatch(PAGE, /\.offsetHeight/);
-    assert.match(PAGE, /evolutionPane\.addEventListener\("scroll"/);
-    assert.match(PAGE, /intentPane\.addEventListener\("scroll"/);
-  });
+  // 「頁面沒有任何外部資源」搬到 ladder-view.test.ts 的
+  // 「**前端成品不得載入任何外部資源**」——那一條掃的是真正出貨的
+  // `dist/ui/app`，而不是一段永遠不會送到瀏覽器的樣板字串。
+  //
+  // 「逐列高度保留子像素，而且從任一欄捲動都同步」**沒有搬，因為機制沒有了**：
+  // 舊頁面是兩個各自捲動的欄，要靠 JS 逐列量測高度才對得齊；新前端一列就是
+  // 一個 grid row（`.timeline-row` 裡三個 div），對齊由版面保證，沒有第二個
+  // 捲動容器可以拆開。契約消失是因為造成它的東西消失了，不是因為不再在意。
 });
 
 describe("整批理由要標示而不是收回", () => {
@@ -434,10 +429,10 @@ describe("整批理由要標示而不是收回", () => {
     db.close();
   });
 
-  it("整批的引文不給暖色——顏色本身也不能誇大", () => {
-    assert.match(PAGE, /\.claim\.batch q \{/);
-    assert.match(PAGE, /Batch · shared across/);
-  });
+  // 「整批的引文不給暖色」搬到 workspace/src/contract.test.tsx 的
+  // 「**整批理由不進逐列的暖色格**」：那一條真的把元件掛起來，斷言整批列
+  // 拿到的是 `.honest-blank` 而不是 `.literal-evidence`——比釘一條 CSS 選擇器
+  // 接近契約本身。
 });
 
 describe("靜態匯出", () => {
@@ -650,55 +645,19 @@ describe("對外身分是 stable_key，不是 rowid", () => {
     }
   });
 
-  it("**切換名單要清掉選取**", () => {
-    // 留著的話右邊還是上一個宣告的時間軸，左邊卻沒有任何 aria-current 列——
-    // 畫面看起來像右側資料失去來源。
-    assert.match(PAGE, /clearSelection\(\);\s*\n\s*renderEntities\(""\);/);
-    assert.match(PAGE, /function clearSelection\(\)/);
-    // 初始提示只有一份文字，HTML 與 clearSelection 共用同一個常數。
-    assert.equal((PAGE.match(/Select a declaration from the left\./g) ?? []).length, 1);
-  });
-
-  /**
-   * 時間軸的深連結（`#<stable_key>`）。
-   *
-   * **這一組是原始碼層級的釘樁，不是行為驗證**——`page.ts` 是一段送到瀏覽器的
-   * 字串，node 這一端執行不了它。這個檔案既有的做法就是這樣：捲動同步那兩個
-   * bug 是在 Chrome 上抓到的，測試是事後補上去防止它們無聲回來。
-   *
-   * 資料那一半驗得到，而且驗過了：`Dep.ts:hasBit` 只出現在
-   * `ostracised.json`、不在 `entities.json`，所以深連結必須切到 gone tab。
-   */
-  it("**深連結用 stable_key，而且兩個入口共用同一段切換**", () => {
-    // 對外身分一律是 stable_key（不變量 1）：rowid 會隨全量重建漂移，
-    // 而舊網址在重建後可能成功回傳另一個 entity——那比 404 難發現得多。
-    assert.match(PAGE, /function openFromHash\(\)/);
-    assert.match(PAGE, /location\.hash/);
-    // 首次載入與之後改網址都要能用。
-    assert.match(PAGE, /addEventListener\("hashchange"/);
-    assert.match(PAGE, /await openFromHash\(\);/);
-    // 要找的宣告可能只在「被推翻的做法」那份名單裡，必須先切 tab。
-    assert.match(PAGE, /switchTab\("gone"\)/);
-    // 切 tab 的邏輯只有一份：按鈕與深連結共用。兩份的話遲早分岔。
-    assert.match(PAGE, /function switchTab\(which\)/);
-    assert.equal((PAGE.match(/\$\("tab-gone"\)\.setAttribute/g) ?? []).length, 1);
-  });
-
-  it("**選取會更新網址，但不得堆積上一頁**", () => {
-    // 時間軸要可分享；用 replaceState 而不是 pushState——在左欄點十條宣告
-    // 不該在上一頁堆十筆。
-    assert.doesNotMatch(PAGE, /history\.pushState/);
-    // 網址一律經由 formatTimelineHash 組出來，**不在頁面裡自己拼**。
-    // 原本這裡釘的是那一行的字面寫法，加上「跳到某一列」之後寫法改了而行為沒變，
-    // 於是它咬的是拼法不是不變量。改成釘「有沒有走那個唯一的入口」——
-    // 而 encodeURIComponent 與 stable_key 由 page-logic.test.ts 直接測那個函式。
-    assert.match(PAGE, /history\.replaceState\(null, "", formatTimelineHash\(/);
-    assert.doesNotMatch(
-      PAGE,
-      /history\.replaceState\(null, "", "#"/,
-      "頁面自己拼網址了——編碼規則會與 formatTimelineHash 分岔",
-    );
-  });
+  // 「**切換名單要清掉選取**」**沒有搬，因為機制沒有了**：舊頁面有 all／gone
+  // 兩個 tab 共用同一個右欄，切 tab 不清選取就會留下上一條時間軸。新前端沒有
+  // 那組 tab——picker 選完直接換整條時間軸，右欄不存在「來源消失」的狀態。
+  //
+  // 「**深連結用 stable_key，而且兩個入口共用同一段切換**」搬到
+  // workspace/src/contract.test.tsx 的「深連結解析（真的發請求）」。舊的那一條
+  // 自己寫著「**這一組是原始碼層級的釘樁，不是行為驗證**」——它只能 regex 比對
+  // `switchTab("gone")` 有沒有出現在字串裡。現在是真的發請求：只在
+  // ostracised.json 裡的 key 打得開、在 entities.json 裡的不去付第二份的成本、
+  // 兩份都沒有時出現明確錯誤而不是靜默退回精選。
+  //
+  // 「**選取會更新網址，但不得堆積上一頁**」也搬過去了，而且從「原始碼裡有沒有
+  // 出現 pushState」變成「點一下之後 `history.length` 有沒有變」。
 });
 
 describe("清單的名稱要符合資料", () => {
@@ -723,38 +682,54 @@ describe("清單的名稱要符合資料", () => {
     db.close();
   });
 
-  it("tab 名稱不宣稱「現存」", () => {
-    assert.match(PAGE, /All declarations/);
-    assert.doesNotMatch(PAGE, /Current declarations/);
-  });
+  // 「tab 名稱不宣稱「現存」」搬到 workspace/src/contract.test.tsx 的
+  // 「**已消亡的宣告仍看得到，並且逐列標示**」——picker 現在承擔同一件事，
+  // 而那一條連「有沒有真的標出 removed」一起驗。
 });
 
 describe("公開 demo 的介面文字是英文", () => {
-  it("靜態標題、互動提示與時間軸標籤一起英文化", () => {
-    assert.match(PAGE, /<html lang="en">/);
-    assert.match(PAGE, /Ostracised approaches/);
-    assert.match(PAGE, /Filter by path or symbol/);
-    assert.match(PAGE, /Blank space is an observed value/);
-    assert.match(PAGE, /birth: "Added", death: "Removed"/);
-    assert.match(PAGE, /abandoned_reason: "Abandonment rationale"/);
-    assert.match(PAGE, /Grade C candidates, unverified and omitted/);
-    assert.match(PAGE, /Written by the author in this commit message/);
-    assert.match(PAGE, /"unchanged entry", "unchanged entries"/);
+  it("**出貨的產物裡不得有任何中日韓字元**", () => {
+    if (!appBuilt()) return;
+    // 舊版是逐條列出九個英文字串——那是「這幾句翻過了」，不是「介面是英文的」，
+    // 加一個新畫面就繞過去了。改成掃成品：這個 repo 的註解、commit 訊息與
+    // 測試名稱都是中文，但**壓縮之後留在 bundle 裡的中文只可能是介面文字**。
+    const cjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
+    for (const file of appFiles()) {
+      if (!/\.(html|js|css)$/.test(file)) continue;
+      const body = readFileSync(path.join(APP_DIR, file), "utf8");
+      const hit = cjk.exec(body);
+      assert.equal(
+        hit,
+        null,
+        hit === null ? "" : `${file} 含中日韓字元：${body.slice(Math.max(0, hit.index - 40), hit.index + 40)}`,
+      );
+    }
+    assert.match(readFileSync(path.join(APP_DIR, "index.html"), "utf8"), /<html lang="en">/);
   });
 });
 
-describe("反白與標題的可讀性", () => {
-  it("**選中列的天數不得與底色同色**", () => {
-    // `.entity[aria-current="true"]` 的底色是 --ink，而 `.days` 的字色也是
-    // --ink——深色印在深色上，天數整個消失。錄影放大之後才看得出來。
-    assert.match(PAGE, /\.entity\[aria-current="true"\] \.days \{ color: var\(--surface\); \}/);
-  });
-
-  it("**左欄標題不得被 h2 的 float 規則捲走**", () => {
-    // `h2 span { float: right }` 是為「純文字標題 + 一個計數 span」寫的。
-    // 左欄的標題本身是 span（要隨 tab 換字），被一起浮動之後標題跑到右邊，
-    // h2 也因為沒有 in-flow 內容而高度塌陷，底線從計數文字中間穿過。
-    assert.match(PAGE, /h2 #list-title \{ float: none; \}/);
+describe("反白不得改變版面", () => {
+  it("**沒有任何 .selected 規則會改到盒模型**", () => {
+    // 舊頁面釘的是 `.rev.hit, .slot.hit { box-shadow: inset`——理由是意圖欄與
+    // 演化欄逐列量測對齊，選中列一長高理由就印到別人的改動底下。新前端不靠
+    // 量測對齊了，但同一條規則仍然成立：選取只換顏色，不換尺寸，否則點一下
+    // 整張表就會抖一下。
+    //
+    // **`border-color` 是允許的**（寬度沒變），`border:` 簡寫與 `border-width`
+    // 不允許——那正是最容易不小心寫成的形式。
+    const css = readFileSync(
+      new URL("../workspace/src/index.css", import.meta.url),
+      "utf8",
+    );
+    const rules = [...css.matchAll(/^([^\n{]*\.selected[^\n{]*)\{([^}]*)\}/gm)];
+    assert.ok(rules.length >= 5, `只找到 ${rules.length} 條 .selected 規則——選擇器改了，這條會空轉`);
+    for (const [, selector, body] of rules) {
+      assert.doesNotMatch(
+        body!,
+        /(^|;)\s*(padding|margin|border-width|border-style|border|font-size|line-height)\s*:/,
+        `${selector!.trim()} 改到了盒模型——選取會讓那一列的高度變動`,
+      );
+    }
   });
 });
 

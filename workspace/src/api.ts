@@ -27,6 +27,7 @@ import {
   SUMMARY_ROUTE,
   evolutionRoute,
 } from '../../src/ui/routes'
+import { rationaleTargets } from '../../src/ui/page-logic'
 
 /**
  * 對後端的唯一出入口。
@@ -358,20 +359,25 @@ export async function fetchEvolution(
   entity: EntityListItem,
 ): Promise<TimelineView> {
   const rows = await get<ApiEvolutionRow[]>(evolutionRoute(entity.stableKey))
+  // **專屬／整批的分法只有一份**，在 `src/ui/page-logic.ts`。這裡原本自己抄了
+  // 一遍同樣的三個 predicate（`some(entity)`、`every(batch)`、`find(entity)`）；
+  // 兩份剛好一樣不等於同一份，而那個模組的存在理由就是不讓它有第二份。
+  const targets = rationaleTargets(rows)
+  const entityRows = new Set(targets.entity)
   return {
     symbol: entity.symbol,
     path: entity.path,
     stableKey: entity.stableKey,
     dead: entity.dead,
     total: rows.length,
-    entityRationales: rows.filter((row) =>
-      row.intent.some((claim) => claim.scope === 'entity')
-    ).length,
-    batchRationales: rows.filter((row) =>
-      row.intent.length > 0 && row.intent.every((claim) => claim.scope === 'batch')
-    ).length,
+    entityRationales: targets.entity.length,
+    batchRationales: targets.batch.length,
     rows: rows.map((row, index) => {
-      const entityRationale = row.intent.find((claim) => claim.scope === 'entity')
+      // 只有專屬理由進得了逐列的 `rationale`——那一格是唯一的暖色。整批的
+      // 引文歸不到這一個宣告身上，所以它只進標頭的計數，不進列。
+      const entityRationale = entityRows.has(index)
+        ? row.intent.find((claim) => claim.scope === 'entity')
+        : undefined
       return {
         index: index + 1,
         sha: row.shortSha,

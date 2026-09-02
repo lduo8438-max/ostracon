@@ -1,6 +1,15 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  // **契約測試要真的把元件掛起來。** 上線後的兩個全黑崩潰都在 render 本體
+  // （`rows[0].id`、`selected.sha`），任何只驗資料的測試都攔不住，而先前這裡
+  // 一條渲染測試都沒有。jsdom 是為了 `window.location.hash`——深連結的冷開
+  // 路徑會讀它。
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.tsx'],
+  },
   // **資產路徑必須是相對的。** 預設的 base '/' 會產生 `/assets/…`，那在
   // `ostracon ui`（從根服務）看起來完全正常，但線上 demo 把每套語料放在
   // 子目錄（`/vuejs-core/`），瀏覽器會去根目錄找 `/assets/…` 而拿到 404。

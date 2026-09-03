@@ -1,6 +1,6 @@
 {
   "name": "ostracon",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "從 git history 重建程式碼的決策演化史：何時誕生、被哪幾次改動重塑、理由是什麼、哪些做法試過又被推翻。結構層零 LLM。",
   "homepage": "https://ostracon.org",
   "repository": {

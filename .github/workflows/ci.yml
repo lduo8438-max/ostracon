@@ -160,16 +160,88 @@ jobs:
           # **前端資產在「安裝後的位置」解析得到嗎。** `dist/ui/app` 的相對路徑
           # 在開發與安裝後剛好同深度——那是巧合不是保證，與 db/schema.sql 同一個
           # 教訓。所以要真的起伺服器抓一次，不能只檢查檔案在 tarball 裡。
+          #
+          # **每一個抽出來的變數都要先確認不是空的。** 這一段原本用
+          # `grep -oE '/assets/[^)]*woff2'` 去 CSS 裡找字體，而 CSS 寫的是
+          # `url(./xxx.woff2)`（相對於 CSS 自己所在的目錄，沒有 /assets/ 前綴）
+          # ——抓到空字串，接著 `curl "$BASE$FONT"` 變成抓首頁，然後成功。
+          # **那條檢查從來沒有抓過任何一個字體檔，而且一直是綠的。**
           ./node_modules/.bin/ostracon ui --db "$RUNNER_TEMP/smoke.db" --port 4319 &
           UI_PID=$!
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:4319/ >/dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:4319/ | grep -q 'Evolution Workspace'
-          ASSET=$(curl -s http://127.0.0.1:4319/ | grep -oE '/assets/[^"]*\.js' | head -1)
-          curl -sf "http://127.0.0.1:4319$ASSET" >/dev/null
-          CSS=$(curl -s http://127.0.0.1:4319/ | grep -oE '/assets/[^"]*\.css' | head -1)
-          FONT=$(curl -s "http://127.0.0.1:4319$CSS" | grep -oE '/assets/[^)]*woff2' | head -1)
-          curl -sf "http://127.0.0.1:4319$FONT" >/dev/null
+          curl -s http://127.0.0.1:4319/ > "$RUNNER_TEMP/home.html"
+          # 資產一律照 HTML 裡真正寫的形式抓（`./assets/…`），去掉前導的 `./`
+          # 之後接在頁面所在目錄底下——**與瀏覽器同一套解析規則**。原本抽的是
+          # `/assets/…`（`./assets/…` 的子字串），那在根目錄服務時剛好也對，
+          # 所以它擋不住「資產寫成網域根絕對路徑」這個真的出過事的 bug。
+          grep -qE '(src|href)="\./assets/' "$RUNNER_TEMP/home.html" \
+            || { echo "::error::首頁沒有相對形式的資產引用"; exit 1; }
+          ! grep -qE '(src|href)="/' "$RUNNER_TEMP/home.html" \
+            || { echo "::error::首頁有根絕對資產路徑，子目錄部署會 404"; exit 1; }
+          for REF in $(grep -oE '(src|href)="\./[^"]+"' "$RUNNER_TEMP/home.html" | sed 's/.*="\.\///;s/"$//'); do
+            curl -sf "http://127.0.0.1:4319/$REF" >/dev/null \
+              || { echo "::error::資產 $REF 拿不到"; exit 1; }
+          done
+          CSS=$(grep -oE 'href="\./[^"]*\.css"' "$RUNNER_TEMP/home.html" | sed 's/.*="\.\///;s/"$//' | head -1)
+          test -n "$CSS" || { echo "::error::抽不出 CSS 路徑"; exit 1; }
+          # 字體的 URL 相對於 **CSS 所在的目錄**，不是頁面根目錄。
+          CSSDIR=$(dirname "$CSS")
+          FONTS=$(curl -s "http://127.0.0.1:4319/$CSS" | grep -oE 'url\(\./[^)]*woff2\)' | sed 's/url(\.\///;s/)$//')
+          test -n "$FONTS" || { echo "::error::CSS 裡抽不出字體——這條檢查會空轉"; exit 1; }
+          for FONT in $FONTS; do
+            curl -sf "http://127.0.0.1:4319/$CSSDIR/$FONT" >/dev/null \
+              || { echo "::error::字體 $FONT 拿不到"; exit 1; }
+          done
+          # 六個資料端點。畫面進不進得去靠的是這些，不是 HTML 有沒有 200。
+          for EP in summary entities ladder discontinuities hotspots ostracised; do
+            curl -sf "http://127.0.0.1:4319/api/$EP.json" >/dev/null \
+              || { echo "::error::端點 api/$EP.json 拿不到"; exit 1; }
+          done
+          # hash 路由，不做 SPA fallback：未知路徑回 200 是在說謊。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4319/nope)" = 404
           kill $UI_PID
+          # **`ostracon export` 也要從安裝後的套件走一次。** 它與 `ui` 讀的是
+          # 同一份 `dist/ui/app`，但走的是複製檔案而不是 HTTP 服務，失敗方式不同。
+          # **用 `smoke-hot.db` 而不是 `smoke.db`**：後者是 `why` 快路徑建的，
+          # 只走單一血緣，`export` 會（正確地）拒絕它。這一行本地跑第一次就撞到，
+          # 順帶證明那道守門在安裝後的套件裡也還在。
+          ./node_modules/.bin/ostracon export --db "$RUNNER_TEMP/smoke-hot.db" \
+            --out "$RUNNER_TEMP/site" --label ci
+          for EP in summary entities ladder discontinuities hotspots ostracised; do
+            test -f "$RUNNER_TEMP/site/api/$EP.json" \
+              || { echo "::error::匯出缺少 api/$EP.json"; exit 1; }
+          done
+          # **匯出的站台掛在子目錄之下才是它的用途**（線上 demo 是
+          # `/<repo>/<語料>/`）。這裡起一台以**網域根**為根的伺服器，把匯出放進
+          # `/proj/c/`，用瀏覽器的解析規則抓一次資產。
+          #
+          # **講清楚這一段擋得住什麼**：它擋的是「HTML 裡的資產路徑逃出子目錄」。
+          # 它**擋不住**前端 JS 自己把資料端點寫成網域根絕對路徑——那正是 0.1.1
+          # 修的那個 bug，而 curl 不執行 JS。那一條由 `test/subpath-deploy.test.ts`
+          # 顧（掃 bundle 不得有根絕對 `/api/`，並用 `new URL` 驗解析語意）。
+          # 兩層守不同的東西，寫在這裡是為了不讓下一個人誤以為這裡守到了。
+          mkdir -p "$RUNNER_TEMP/pages/proj" && cp -R "$RUNNER_TEMP/site" "$RUNNER_TEMP/pages/proj/c"
+          (cd "$RUNNER_TEMP/pages" && python3 -m http.server 8123 >/dev/null 2>&1) &
+          SRV_PID=$!
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8123/proj/c/ >/dev/null && break; sleep 1; done
+          curl -s http://127.0.0.1:8123/proj/c/ > "$RUNNER_TEMP/sub.html"
+          ! grep -qE '(src|href)="/' "$RUNNER_TEMP/sub.html" \
+            || { echo "::error::匯出的頁面有根絕對資產路徑"; exit 1; }
+          SUBREFS=$(grep -oE '(src|href)="\./[^"]+"' "$RUNNER_TEMP/sub.html" | sed 's/.*="\.\///;s/"$//')
+          test -n "$SUBREFS" || { echo "::error::匯出的頁面抽不出資產——這段會空轉"; exit 1; }
+          for REF in $SUBREFS; do
+            curl -sf "http://127.0.0.1:8123/proj/c/$REF" >/dev/null \
+              || { echo "::error::子目錄部署下資產 $REF 拿不到"; exit 1; }
+          done
+          for EP in summary entities ladder discontinuities hotspots ostracised; do
+            curl -sf "http://127.0.0.1:8123/proj/c/api/$EP.json" >/dev/null \
+              || { echo "::error::子目錄部署下 api/$EP.json 拿不到"; exit 1; }
+          done
+          # 咬檢：這台伺服器必須抓得出「逃到網域根」，否則上面幾條沒有意義。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/api/summary.json)" = 404 \
+            || { echo "::error::網域根竟然拿得到，這台伺服器抓不出外逃"; exit 1; }
+          kill $SRV_PID
 
       # 失敗時要看得到是哪幾條案例退步，而不是只有一個 exit code。
       - name: 保留黃金測試集報告

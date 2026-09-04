@@ -15,7 +15,7 @@ import {
   type Snippet,
   type SnippetRequest,
 } from "./snippets.ts";
-import { unwrapQuote } from "../evidence/span.ts";
+import { sha256, unwrapQuote } from "../evidence/span.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
 /**
@@ -392,6 +392,152 @@ export interface RepoSummary {
    * `shape`** 的理由，畫面要講得出這件事就需要分母。
    */
   changeLevels: Record<string, number>;
+}
+
+/**
+ * 三個可達性契約。**不要再用一句「所有 entity 都查得到」同時描述伺服器、
+ * 靜態匯出與 demo**——那句話在三套小語料上剛好成立，在 pypa/pip 上是
+ * 400 / 21,409（1.9%），在 playwright 上是 400 / 42,512（0.94%）。
+ *
+ * | 契約 | 定義 |
+ * |---|---|
+ * | `indexed` | 資料庫裡存在的全部 entity |
+ * | `discoverable` | 能由清單或搜尋找到，**而且知道它有沒有理由** |
+ * | `inspectable` | 打得開完整時間軸 |
+ */
+export interface EntityCoverage {
+  indexed: number;
+  discoverable: number;
+  inspectable: number;
+  /** 選取規則。使用者要能判斷「我要的那個為什麼不在」。 */
+  rule: string;
+  /** 沒被收進來的那些去了哪裡。全部都在時為 `null`。 */
+  absentReason: string | null;
+}
+
+/**
+ * 建一份可達性報告。
+ *
+ * **`discoverable` 與 `inspectable` 必須由呼叫端提供，沒有預設值。** 只有
+ * 決定上限的那一層知道真正的數字：伺服器知道它送出幾筆、匯出知道它寫了幾個
+ * 檔案。給一個「等於 indexed」的預設值等於把先前那句假宣稱寫回型別裡。
+ */
+export function entityCoverage(
+  db: DatabaseSync,
+  repoId: number,
+  served: Omit<EntityCoverage, "indexed">,
+): EntityCoverage {
+  const indexed = (db.prepare(
+    "SELECT COUNT(*) AS n FROM entity WHERE repo_id = ?",
+  ).get(repoId) as { n: number }).n;
+  // 大於總數只可能是算錯了。**寧可吵，也不要送出一個看起來合理的錯數字。**
+  if (served.discoverable > indexed || served.inspectable > indexed) {
+    throw new Error(
+      `可達性數字大於索引總數：discoverable=${served.discoverable}` +
+      ` inspectable=${served.inspectable} indexed=${indexed}`,
+    );
+  }
+  return { indexed, ...served };
+}
+
+/**
+ * 一條理由，以及它涵蓋的範圍。
+ *
+ * **扇出是 scope，不是品質。** 一條引文指向 72 個 entity，要表達的是
+ * 「這是一條整批理由，涵蓋 72 個 entity」，不是「72 條獨立理由」。先前畫面
+ * 逐列顯示，於是同一句話被印 72 次——實測 pip 6,866 列只來自 762 條引文
+ * （9.0 倍），playwright 6,982 列只來自 490 條（14.2 倍）。
+ *
+ * **主鍵是（引文, commit），不是引文本身。** 一句話在兩顆 commit 裡說是兩次
+ * 陳述；合併會把甲 commit 的 entity 掛到乙的引文上，而那正是這個專案在防的
+ * 歸屬錯誤。代價量過：pip 762 條引文裡只有 8 條出現在多顆 commit（最多 3 顆），
+ * playwright 是 0 條——**分開的代價是 9 列，合併的代價是一類錯誤。**
+ */
+export interface RationaleGroup {
+  /** 穩定且可放進網址：`sha256(text + NUL + sha)` 的前 16 個十六進位字元。 */
+  quoteId: string;
+  /** 已過 `unwrapQuote`。儲存層仍然逐字。 */
+  text: string;
+  kind: string;
+  commitSha: string;
+  /** commit 主旨。讀者需要脈絡才判斷得了這句話在講什麼。 */
+  subject: string;
+  /**
+   * `entity` = 只涵蓋一個宣告；`batch` = 涵蓋多個。
+   * **由 `entities` 導出**，與 `reach` 同一個陣列——標頭數字與清單分岔在這個
+   * 專案已經出過事（CLI 說 5 顆聚合 commit、UI 說 6 顆）。
+   */
+  scope: ClaimScope;
+  /** 涵蓋到的 `stable_key`。**完整清單，不截斷**——折疊是呈現層的事。 */
+  entities: string[];
+  /** `= entities.length`。不得另算。 */
+  reach: number;
+}
+
+/**
+ * 把可呈現的理由依（引文, commit）分組。
+ *
+ * 一般 claim 掛在 `revision_change` 上，`abandoned_reason` 掛在 `excursion` 上，
+ * 兩者的 entity 與 commit 都要 COALESCE 出來——與 `evolutionOf` 同一套接法。
+ */
+export function rationaleGroups(
+  db: DatabaseSync,
+  repoId: number,
+): RationaleGroup[] {
+  const rows = db.prepare(
+    `SELECT cl.text AS text, cl.claim_type AS kind, gc.sha AS sha,
+            gc.message AS message, gc.topo_order AS topoOrder,
+            e.stable_key AS stableKey
+       FROM v_presentable_claim cl
+       LEFT JOIN revision_change rc ON rc.id = cl.revision_change_id
+       LEFT JOIN excursion x ON x.id = cl.excursion_id
+       JOIN git_commit gc ON gc.id = COALESCE(rc.commit_id, x.remove_commit)
+       JOIN entity e ON e.id = COALESCE(rc.entity_id, x.entity_id)
+      WHERE cl.repo_id = ?
+      ORDER BY gc.topo_order, cl.claim_type, e.stable_key`,
+  ).all(repoId) as unknown as Array<{
+    text: string;
+    kind: string;
+    sha: string;
+    message: string;
+    topoOrder: number;
+    stableKey: string;
+  }>;
+
+  const groups = new Map<string, RationaleGroup & { topoOrder: number }>();
+  for (const row of rows) {
+    const text = unwrapQuote(row.text);
+    const key = `${text}\u0000${row.sha}\u0000${row.kind}`;
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = {
+        quoteId: sha256(key).slice(0, 16),
+        text,
+        kind: row.kind,
+        commitSha: row.sha,
+        subject: subjectOf(row.message),
+        scope: "entity",
+        entities: [],
+        reach: 0,
+        topoOrder: row.topoOrder,
+      };
+      groups.set(key, group);
+    }
+    // 同一個 entity 可能被同一顆 commit 的多次改動命中；清單要是集合。
+    if (!group.entities.includes(row.stableKey)) group.entities.push(row.stableKey);
+  }
+  return [...groups.values()]
+    .map(({ topoOrder: _topoOrder, ...group }) => ({
+      ...group,
+      reach: group.entities.length,
+      scope: scopeOf(group.entities.length),
+    }))
+    .sort((a, b) => a.reach - b.reach || a.commitSha.localeCompare(b.commitSha));
+}
+
+/** commit 主旨＝第一行。**要同時吃 LF 與 CRLF**，否則 CRLF 語料會留一個尾端 CR。 */
+function subjectOf(message: string): string {
+  return message.split(/\r?\n/, 1)[0]?.replace(/\r$/, "") ?? "";
 }
 
 export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {

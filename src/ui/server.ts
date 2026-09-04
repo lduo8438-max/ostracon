@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { hotspotsView } from "./hotspots-view.ts";
 import {
   discontinuitiesFor,
+  entityCoverage,
   entityIdForStableKey,
   evolutionOf,
   ladderStats,
@@ -125,7 +126,20 @@ export function createUiServer(options: UiOptions): Server {
       }
       if (url.pathname === SUMMARY_PATH) {
         response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(repoSummary(db, repoId)));
+        // **可達性由送出的那一層報。** 這台伺服器的清單有上限（`listEntities`
+        // 預設 400），而任何一個 `stable_key` 都打得開時間軸——兩個數字不同，
+        // 所以要分開報，不能共用一句「都查得到」。
+        response.end(JSON.stringify({
+          ...repoSummary(db, repoId),
+          coverage: entityCoverage(db, repoId, {
+            discoverable: listEntities(db, repoId).length,
+            inspectable: (db.prepare(
+              "SELECT COUNT(*) AS n FROM entity WHERE repo_id = ?",
+            ).get(repoId) as { n: number }).n,
+            rule: "entities with a rationale, topped up by change count",
+            absentReason: "reachable with `ostracon why <path>:<symbol>`",
+          }),
+        }));
         return;
       }
       if (url.pathname === ENTITIES_PATH) {

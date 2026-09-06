@@ -332,25 +332,94 @@ export function rationaleCountsFor(
   groups: RationaleGroup[],
   stableKey: string,
 ): { entity: number; shared: number } {
-  let entity = 0
-  let shared = 0
-  for (const group of groups) {
-    if (!group.entities.includes(stableKey)) continue
-    if (group.scope === 'entity') entity += 1
-    else shared += 1
-  }
-  return { entity, shared }
+  const summary = rationaleSummaryByEntity(groups).get(stableKey)
+  return { entity: summary?.entity ?? 0, shared: summary?.shared ?? 0 }
+}
+
+export type DeclarationOrder = 'explained' | 'changed'
+
+export interface RationaleSummary {
+  entity: number
+  shared: number
+  /** 最窄的共用理由涵蓋幾個宣告；沒有共用理由時為 null。 */
+  minSharedReach: number | null
 }
 
 /**
- * 沒有指定要看哪一個時的預設：**有專屬理由、而且時間軸最長的那一個**。
+ * 一次建立反向索引。picker 會替每個候選比較多次；每次都掃完整 groups，除了慢，
+ * 也很容易讓「列上顯示的數字」與「真正拿來排序的數字」分成兩份實作。
+ */
+export function rationaleSummaryByEntity(
+  groups: RationaleGroup[],
+): Map<string, RationaleSummary> {
+  const summaries = new Map<string, RationaleSummary>()
+  for (const group of groups) {
+    for (const stableKey of group.entities) {
+      const summary = summaries.get(stableKey) ?? {
+        entity: 0,
+        shared: 0,
+        minSharedReach: null,
+      }
+      if (group.scope === 'entity') summary.entity += 1
+      else {
+        summary.shared += 1
+        summary.minSharedReach = summary.minSharedReach === null
+          ? group.reach
+          : Math.min(summary.minSharedReach, group.reach)
+      }
+      summaries.set(stableKey, summary)
+    }
+  }
+  return summaries
+}
+
+const declarationTieBreak = (a: EntityListItem, b: EntityListItem) =>
+  a.path.localeCompare(b.path)
+  || a.symbol.localeCompare(b.symbol)
+  || a.stableKey.localeCompare(b.stableKey)
+
+/**
+ * 兩個入口，兩種問題：Best explained 找最值得先讀的理由，Most changed 找最常
+ * 變動的宣告。前者只信 RationaleGroup，不再拿逐列 claim 計數冒充引文群組。
+ */
+export function orderDeclarations(
+  entities: EntityListItem[],
+  groups: RationaleGroup[],
+  order: DeclarationOrder,
+): EntityListItem[] {
+  if (order === 'changed') {
+    return [...entities].sort((a, b) =>
+      b.revisions - a.revisions || declarationTieBreak(a, b))
+  }
+  const summaries = rationaleSummaryByEntity(groups)
+  const of = (entity: EntityListItem) => summaries.get(entity.stableKey) ?? {
+    entity: 0,
+    shared: 0,
+    minSharedReach: null,
+  }
+  return [...entities].sort((a, b) => {
+    const left = of(a)
+    const right = of(b)
+    return Number(right.entity > 0) - Number(left.entity > 0)
+      || right.entity - left.entity
+      || Number(right.shared > 0) - Number(left.shared > 0)
+      || (left.minSharedReach ?? Number.POSITIVE_INFINITY)
+        - (right.minSharedReach ?? Number.POSITIVE_INFINITY)
+      || b.revisions - a.revisions
+      || declarationTieBreak(a, b)
+  })
+}
+
+/**
+ * 沒有指定要看哪一個時，與 picker 的 Best explained 入口共用同一個排序。
  *
  * 不寫死 stable_key——換一套語料就會指到不存在的東西，而那正是稀疏訊號最需要
  * 被找到的場景（實測 vuejs/core 的 compileScript 是 306 列裡藏 2 條）。
  */
-export const featuredKey = (entities: EntityListItem[]): string | undefined =>
-  (entities.filter((entity) => entity.withEntityIntent > 0)
-    .sort((a, b) => b.revisions - a.revisions)[0] ?? entities[0])?.stableKey
+export const featuredKey = (
+  entities: EntityListItem[],
+  groups: RationaleGroup[],
+): string | undefined => orderDeclarations(entities, groups, 'explained')[0]?.stableKey
 
 /**
  * 被推翻的做法也可以開時間軸。

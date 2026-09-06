@@ -12,8 +12,11 @@ import {
   fetchRationales,
   fetchSummary,
   featuredKey,
+  orderDeclarations,
   rationaleCountsFor,
+  rationaleSummaryByEntity,
 } from './api'
+import type { DeclarationOrder } from './api'
 // **直接用後端那一份，不抄。** page-logic.ts 是零相依的純函式，Vite 只會把
 // 用到的那兩個打包進來，不會把後端拖進前端的建置圖。舊頁面與新前端共用同一組
 // 網址，任何一邊改了編碼規則另一邊的連結就失效——所以它必須只有一份。
@@ -411,6 +414,7 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
+  const [order, setOrder] = useState<DeclarationOrder>('explained')
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -442,15 +446,16 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
   }
 
   const needle = query.trim().toLowerCase()
+  const rationaleSummaries = useMemo(
+    () => rationaleSummaryByEntity(rationales),
+    [rationales],
+  )
   const matches = useMemo(() => {
-    const scored = needle === ''
+    const candidates = needle === ''
       ? entities
       : entities.filter(e => `${e.symbol} ${e.path}`.toLowerCase().includes(needle))
-    // 有專屬理由的排前面：那是這個工具唯一稀有的東西，藏在第 300 名沒有意義。
-    return [...scored].sort((a, b) =>
-      (b.withEntityIntent > 0 ? 1 : 0) - (a.withEntityIntent > 0 ? 1 : 0)
-      || b.revisions - a.revisions).slice(0, 60)
-  }, [entities, needle])
+    return orderDeclarations(candidates, rationales, order).slice(0, 60)
+  }, [entities, needle, order, rationales])
 
   return (
     <div className="picker-backdrop" onClick={onClose} role="presentation">
@@ -463,21 +468,33 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
         aria-modal="true"
         aria-label="Choose a declaration"
       >
-        <input
-          ref={inputRef}
-          className="picker-input"
-          type="search"
-          value={query}
-          placeholder="Filter by symbol or path"
-          onChange={event => setQuery(event.target.value)}
-          // Escape 由對話框那一層處理，這裡只留「Enter 選第一筆」。
-          onKeyDown={event => { if (event.key === 'Enter' && matches[0]) onPick(matches[0]) }}
-        />
+        <div className="picker-controls">
+          <input
+            ref={inputRef}
+            className="picker-input"
+            type="search"
+            value={query}
+            aria-label="Filter declarations"
+            placeholder="Filter by symbol or path"
+            onChange={event => setQuery(event.target.value)}
+            // Escape 由對話框那一層處理，這裡只留「Enter 選第一筆」。
+            onKeyDown={event => { if (event.key === 'Enter' && matches[0]) onPick(matches[0]) }}
+          />
+          <div className="picker-order" role="group" aria-label="Declaration order">
+            <button type="button" aria-pressed={order === 'explained'} onClick={() => setOrder('explained')}>Best explained</button>
+            <button type="button" aria-pressed={order === 'changed'} onClick={() => setOrder('changed')}>Most changed</button>
+          </div>
+          <p className="picker-order-note">
+            {order === 'explained'
+              ? 'Entity-only groups first; narrower shared groups break the remaining ties.'
+              : 'Highest change count first; rationale scope remains visible on every row.'}
+          </p>
+        </div>
         <div className="picker-list">
           {matches.length === 0
             ? <p className="honest-blank">Nothing matches these {format(entities.length)} declarations. The list is curated — it is not the whole corpus.</p>
             : matches.map(entity => {
-              const counts = rationaleCountsFor(rationales, entity.stableKey)
+              const counts = rationaleSummaries.get(entity.stableKey) ?? { entity: 0, shared: 0 }
               return (
                 <button
                   key={entity.stableKey}
@@ -492,7 +509,7 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
                   <span className="picker-meta">
                     <b>{format(entity.revisions)}</b> changes
                     {counts.entity > 0
-                      ? <em className="has-rationale">{counts.entity} quote group{counts.entity === 1 ? '' : 's'}</em>
+                      ? <em className="has-rationale">{counts.entity} entity-only group{counts.entity === 1 ? '' : 's'}</em>
                       : counts.shared > 0
                         ? <em>{counts.shared} shared group{counts.shared === 1 ? '' : 's'}</em>
                         : <em className="quiet">no rationale</em>}
@@ -502,8 +519,9 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
             })}
         </div>
         <p className="picker-foot">
-          Showing {matches.length} of {format(entities.length)} · declarations with an
-          entity-specific rationale come first
+          Showing {matches.length} of {format(entities.length)} · {order === 'explained'
+            ? 'ranked by explanation quality'
+            : 'ranked by change count'}
           {entities.length < total
             ? <><br /><b>This list is curated, not complete.</b> {format(total)} declarations
               are indexed; the list keeps those with a rationale and tops up by change count.
@@ -522,8 +540,13 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
   onSelect: (key: string) => void
 }) {
   const list = useQuery({ queryKey: ['entities'], queryFn: fetchEntities })
+  // 預設入口由真正的引文群組決定，所以不能等選好 entity 才抓。否則初始選取只
+  // 能退回舊的逐列 claim 計數，畫面標示一套、排序又是另一套。
+  const rationales = useQuery({ queryKey: ['rationales'], queryFn: fetchRationales })
   const entities = list.data
-  const key = stableKey ?? (entities ? featuredKey(entities) : undefined)
+  const key = stableKey ?? (entities && rationales.data
+    ? featuredKey(entities, rationales.data)
+    : undefined)
   const inEntities = entities?.find(item => item.stableKey === key)
   // **被推翻的做法不在 entities.json 裡，但它們的時間軸一定被匯出。**
   // 只在第一份名單裡找，會讓 Ostracised 的「Open its timeline」指向錯誤頁。
@@ -541,13 +564,8 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
     queryFn: () => fetchEvolution(entity!),
     enabled: entity !== undefined,
   })
-  const rationales = useQuery({
-    queryKey: ['rationales'],
-    queryFn: fetchRationales,
-    enabled: entity !== undefined,
-  })
   const query = {
-    isPending: list.isPending || stillLooking
+    isPending: list.isPending || rationales.isPending || stillLooking
       || (entity !== undefined && (evolution.isPending || rationales.isPending)),
     error: list.error ?? fallback.error ?? evolution.error ?? rationales.error,
     data: entities && evolution.data && rationales.data

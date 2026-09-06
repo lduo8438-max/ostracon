@@ -5,6 +5,7 @@ import { describe, expect, it, beforeAll } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MotionConfig } from 'framer-motion'
 import { DiscontinuitiesBody, HotspotsBody, LadderBody, OstracisedBody, TimelineBody, TimelineView, Workspace } from './App'
+import { featuredKey, orderDeclarations } from './api'
 import type { DiscontinuityView, OstracisedView, RationaleGroup, TimelineRow, TimelineView as TimelineViewData } from './types'
 
 /**
@@ -326,7 +327,7 @@ describe('深連結解析（真的發請求）', () => {
 describe('宣告選單是一個真的 modal', () => {
   const entities = [
     { stableKey: 'a'.repeat(64), symbol: 'alpha', path: 'a.ts', revisions: 3, withEntityIntent: 1, withBatchIntent: 0, dead: false },
-    { stableKey: 'b'.repeat(64), symbol: 'beta', path: 'b.ts', revisions: 2, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+    { stableKey: 'b'.repeat(64), symbol: 'beta', path: 'b.ts', revisions: 20, withEntityIntent: 0, withBatchIntent: 0, dead: false },
   ]
   const openPicker = (total = entities.length) => {
     window.location.hash = ''
@@ -398,8 +399,45 @@ describe('宣告選單是一個真的 modal', () => {
     const { container } = openPicker()
     const alpha = [...container.querySelectorAll('.picker-row')]
       .find(item => item.textContent?.includes('alpha'))!
-    expect(alpha.textContent).toContain('1 quote group')
+    expect(alpha.textContent).toContain('1 entity-only group')
     expect(alpha.textContent).not.toContain('1 rationale')
+  })
+
+  it('預設看解釋品質，切換後才按改動量排序', () => {
+    // beta 改得更多，但 alpha 有一個真正的 entity-only 引文群組。舊排序讀的是
+    // EntityListItem.withEntityIntent；這條直接驗畫面使用 RationaleGroup。
+    const { container } = openPicker()
+    const symbols = () => [...container.querySelectorAll('.picker-row strong')]
+      .map(item => item.textContent)
+    expect(symbols().slice(0, 2)).toEqual(['alpha', 'beta'])
+    const changed = [...container.querySelectorAll<HTMLButtonElement>('.picker-order button')]
+      .find(button => button.textContent === 'Most changed')!
+    expect(changed.getAttribute('aria-pressed')).toBe('false')
+    act(() => { changed.click() })
+    expect(changed.getAttribute('aria-pressed')).toBe('true')
+    expect(symbols().slice(0, 2)).toEqual(['beta', 'alpha'])
+    expect(container.querySelector('.picker-order-note')?.textContent)
+      .toContain('rationale scope remains visible')
+  })
+
+  it('Best explained 完整遵守群組數、共用範圍、改動量的字典序', () => {
+    const rows = [
+      { stableKey: 'a'.repeat(64), symbol: 'one-wide', path: 'a.ts', revisions: 99, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'b'.repeat(64), symbol: 'one-narrow', path: 'b.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'c'.repeat(64), symbol: 'two-entity', path: 'c.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'd'.repeat(64), symbol: 'no-reason', path: 'd.ts', revisions: 200, withEntityIntent: 9, withBatchIntent: 0, dead: false },
+    ]
+    const groups = [
+      rationale('entity', [rows[0]!.stableKey], 'entity-a'),
+      rationale('entity', [rows[1]!.stableKey], 'entity-b'),
+      rationale('entity', [rows[2]!.stableKey], 'entity-c1'),
+      rationale('entity', [rows[2]!.stableKey], 'entity-c2'),
+      rationale('batch', [rows[0]!.stableKey, rows[2]!.stableKey, 'e'.repeat(64), 'f'.repeat(64)], 'wide'),
+      rationale('batch', [rows[1]!.stableKey, rows[2]!.stableKey], 'narrow'),
+    ]
+    expect(orderDeclarations(rows, groups, 'explained').map(item => item.symbol))
+      .toEqual(['two-entity', 'one-narrow', 'one-wide', 'no-reason'])
+    expect(featuredKey(rows, groups)).toBe(rows[2]!.stableKey)
   })
 })
 

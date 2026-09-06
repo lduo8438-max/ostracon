@@ -9,11 +9,15 @@ import { verifyParserAdapters } from "../src/ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../src/git/index.ts";
 import { indexLineage } from "../src/index/lineage-pass.ts";
 import {
+  declarationScopeOf,
   declarationIndexerVersion,
   DECLARATIONS_PASS_NAME,
   indexRepoStructure,
 } from "../src/index/repo-pass.ts";
-import { lineageIdAt } from "../src/index/structural.ts";
+import {
+  assertNoSplitEntityRows,
+  lineageIdAt,
+} from "../src/index/structural.ts";
 import { why } from "../src/cli/why.ts";
 import { ostracised } from "../src/cli/ostracised.ts";
 import { openIndexDatabase } from "../src/git/persist.ts";
@@ -94,6 +98,26 @@ function shape(db: DatabaseSync): string[] {
   ).all() as unknown as { k: string; n: number }[]).map((r) => `${r.k}:${r.n}`);
 }
 
+function counts(db: DatabaseSync): { entities: number; revisions: number; changes: number } {
+  const count = (table: string) => (db.prepare(
+    `SELECT COUNT(*) AS n FROM ${table}`,
+  ).get() as { n: number }).n;
+  return {
+    entities: count("entity"),
+    revisions: count("revision"),
+    changes: count("revision_change"),
+  };
+}
+
+function splitRows(db: DatabaseSync): number {
+  return (db.prepare(
+    `SELECT COUNT(*) AS n
+       FROM revision_change rc
+       JOIN revision r ON r.id = COALESCE(rc.next_revision, rc.prev_revision)
+      WHERE r.entity_id <> rc.entity_id`,
+  ).get() as { n: number }).n;
+}
+
 async function fastPass(repo: string, dbPath: string, at: string, file: string) {
   const report = indexGit(repo, { dbPath, until: at });
   const db = open(dbPath);
@@ -131,7 +155,7 @@ describe("結構層的 scope", () => {
     mixed.close();
   });
 
-  it("全 repo pass 之後的快路徑不觸發無謂重建", async () => {
+  it("全 repo pass 之後拒絕把單一血緣產出混進來", async () => {
     await verifyParserAdapters();
     const { repo, git } = makeMoveRepo();
     const head = git("rev-parse", "HEAD");
@@ -140,15 +164,77 @@ describe("結構層的 scope", () => {
     const db = open(dbPath);
 
     await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
-    const before = shape(db);
+    const before = { shape: shape(db), counts: counts(db) };
 
-    // repo scope 的產出對單一血緣的問題已經更完整，快路徑一列都插不進去。
+    // repo scope 的產出對單一血緣的問題已經更完整。舊實作以為既有 revision
+    // 會讓這趟成為 no-op，實際上 createEntity 與 revision_change 仍會插入，留下
+    // 沒有自己 revision 的 ghost entity。
     const lineageId = lineageIdAt(db, report.repoId, head, "src/guard.ts");
-    await indexLineage(db, repo, report.repoId, lineageId!, INDEXER_VERSION);
+    await assert.rejects(
+      () => indexLineage(db, repo, report.repoId, lineageId!, INDEXER_VERSION),
+      /scope:repo.*不變量 1/,
+    );
 
     const again = await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
     assert.equal(again.mode, "incremental");
-    assert.deepEqual(shape(db), before);
+    assert.deepEqual({ shape: shape(db), counts: counts(db) }, before);
+    assert.equal(splitRows(db), 0);
+    db.close();
+  });
+
+  it("**repo-scoped 索引上跑 why 不得製造分裂身份，且答案逐字穩定**", async () => {
+    await verifyParserAdapters();
+    const { repo, git } = makeMoveRepo();
+    const head = git("rev-parse", "HEAD");
+    const dbPath = freshDb();
+    const report = indexGit(repo, { dbPath, until: head });
+    const db = open(dbPath);
+    await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
+    const before = { shape: shape(db), counts: counts(db) };
+    assert.equal(declarationScopeOf(db, report.repoId), "repo");
+    db.close();
+
+    const first = await why(repo, "src/guard.ts:isRateLimited", dbPath, head);
+    const second = await why(repo, "src/guard.ts:isRateLimited", dbPath, head);
+    assert.equal(second, first, "重跑 why 的輸出必須逐字相同");
+    assert.match(first, /route\.ts/, "repo scope 的完整搬移血緣不得被快路徑蓋掉");
+
+    const after = open(dbPath);
+    assert.deepEqual({ shape: shape(after), counts: counts(after) }, before);
+    assert.equal(splitRows(after), 0);
+    assert.equal(declarationScopeOf(after, report.repoId), "repo");
+    after.close();
+  });
+
+  it("**repo 水位線也擋不住的舊分裂，讀取守門必須抓得到**", async () => {
+    await verifyParserAdapters();
+    const { repo, git } = makeMoveRepo();
+    const head = git("rev-parse", "HEAD");
+    const dbPath = freshDb();
+    const report = indexGit(repo, { dbPath, until: head });
+    const db = open(dbPath);
+    await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
+
+    const owner = db.prepare(
+      `SELECT r.id AS revisionId, r.commit_id AS commitId, e.birth_commit_id AS birthCommitId
+         FROM revision r JOIN entity e ON e.id = r.entity_id
+        ORDER BY r.id LIMIT 1`,
+    ).get() as { revisionId: number; commitId: number; birthCommitId: number };
+    const ghost = Number(db.prepare(
+      `INSERT INTO entity (repo_id, stable_key, birth_commit_id)
+       VALUES (?, ?, ?)`,
+    ).run(report.repoId, "f".repeat(64), owner.birthCommitId).lastInsertRowid);
+    db.prepare(
+      `INSERT INTO revision_change
+         (prev_revision, commit_id, entity_id, change_level, sig_changed)
+       VALUES (?, ?, ?, 'death', 0)`,
+    ).run(owner.revisionId, owner.commitId, ghost);
+
+    assert.equal(declarationScopeOf(db, report.repoId), "repo", "水位線刻意維持假 repo");
+    assert.throws(
+      () => assertNoSplitEntityRows(db, report.repoId),
+      /分裂成兩個身份.*不變量 1/s,
+    );
     db.close();
   });
 

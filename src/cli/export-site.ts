@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { APP_MISSING_NOTICE } from "../ui/app-assets.ts";
+import { assertNoSplitEntityRows } from "../index/structural.ts";
 import {
   declarationScopeOf,
   PARTIAL_INDEX_NOTICE,
@@ -43,6 +44,7 @@ export function main(args: string[]): void {
 
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
+    assertNoSplitEntityRows(db, 1);
     // **匯出會被發佈出去，收不回來。** 讀到降級過的索引就停下來，而不是印個
     // 警告然後照樣產生一份數字偏高的站台——我自己踩過一次。
     if (declarationScopeOf(db, 1) === "lineage") {

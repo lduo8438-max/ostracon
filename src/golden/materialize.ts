@@ -71,6 +71,50 @@ interface Fixture {
   cases: FixtureCase[];
 }
 
+/**
+ * Golden 只補產品 pass 尚未寫出的 revision，不能把既有座標改掛到 fixture 想要的
+ * entity。後者正是 split identity 的生成方式；revision_match 可以連兩個身份，
+ * revision 本身的 ownership 不可以被測試建構器重寫。
+ */
+function goldenRevision(
+  db: DatabaseSync,
+  repo: string,
+  repoId: number,
+  lineageId: number,
+  fallbackEntityId: number,
+  observed: ObservedDeclaration,
+): { id: number; entityId: number } {
+  const existing = db.prepare(
+    `SELECT r.id AS id, r.entity_id AS entityId
+       FROM revision r
+       JOIN slot s ON s.id = r.slot_id
+       JOIN git_commit c ON c.id = r.commit_id
+      WHERE c.repo_id = ? AND c.sha = ?
+        AND s.repo_id = ? AND s.lineage_id = ?
+        AND s.qualified_name = ? AND s.kind = ? AND s.disambiguator = ?`,
+  ).get(
+    repoId,
+    observed.commit,
+    repoId,
+    lineageId,
+    observed.symbol,
+    observed.kind,
+    String(observed.occurrence),
+  ) as { id: number; entityId: number } | undefined;
+  if (existing !== undefined) return existing;
+  return {
+    id: ensureRevision(
+      db,
+      repo,
+      repoId,
+      lineageId,
+      fallbackEntityId,
+      observed,
+    ),
+    entityId: fallbackEntityId,
+  };
+}
+
 
 export async function materializeGoldenCoordinates(
   repo: string,
@@ -145,11 +189,23 @@ export async function materializeGoldenCoordinates(
         String(representative.occurrence),
       );
       const prevRevision = prev && parent
-        ? ensureRevision(db, repo, gitReport.repoId, lineageId, entityId, prev)
+        ? goldenRevision(db, repo, gitReport.repoId, lineageId, entityId, prev)
         : undefined;
       const nextRevision = next
-        ? ensureRevision(db, repo, gitReport.repoId, lineageId, entityId, next)
+        ? goldenRevision(db, repo, gitReport.repoId, lineageId, entityId, next)
         : undefined;
+      const owners = new Set(
+        [prevRevision?.entityId, nextRevision?.entityId].filter(
+          (owner): owner is number => owner !== undefined,
+        ),
+      );
+      if (owners.size > 1) {
+        throw new Error(
+          `golden change_level ${c.id} 的前後 revision 屬於不同 entity；`
+          + "fixture 不得用 revision_change 把兩個身份黏在一起。",
+        );
+      }
+      const changeEntity = nextRevision?.entityId ?? prevRevision?.entityId ?? entityId;
       const actual = !prev
         ? "birth"
         : !next
@@ -165,10 +221,10 @@ export async function materializeGoldenCoordinates(
            change_level = excluded.change_level,
            sig_changed = excluded.sig_changed`,
       ).run(
-        prevRevision ?? null,
-        nextRevision ?? null,
+        prevRevision?.id ?? null,
+        nextRevision?.id ?? null,
         commitId(db, gitReport.repoId, c.at_commit),
-        entityId,
+        changeEntity,
         actual,
         prev && next && prev.node.text.split("\n", 1)[0] !== next.node.text.split("\n", 1)[0]
           ? 1
@@ -307,7 +363,7 @@ export async function materializeGoldenCoordinates(
           prev.symbol,
           String(prev.occurrence),
         );
-        const prevRevision = ensureRevision(
+        const prevRevision = goldenRevision(
           db,
           repo,
           gitReport.repoId,
@@ -332,7 +388,7 @@ export async function materializeGoldenCoordinates(
           matched ? prev.symbol : next.symbol,
           String(matched ? prev.occurrence : next.occurrence),
         );
-        const nextRevision = ensureRevision(
+        const nextRevision = goldenRevision(
           db,
           repo,
           gitReport.repoId,
@@ -354,8 +410,8 @@ export async function materializeGoldenCoordinates(
                accepted = 1,
                ambiguity_size = excluded.ambiguity_size`,
           ).run(
-            prevRevision,
-            nextRevision,
+            prevRevision.id,
+            nextRevision.id,
             matched.tier,
             matched.exactJaccard ?? null,
             matched.exactJaccard ?? null,

@@ -10,6 +10,7 @@ import type {
   OstracisedEntity,
   OstracisedView,
   Repository,
+  RationaleGroup,
   Snippet,
   TimelineRow,
   TimelineView,
@@ -24,6 +25,7 @@ import {
   HOTSPOTS_ROUTE,
   LADDER_ROUTE,
   OSTRACISED_ROUTE,
+  RATIONALES_ROUTE,
   SUMMARY_ROUTE,
   evolutionRoute,
 } from '../../src/ui/routes'
@@ -138,6 +140,9 @@ interface ApiOstracised {
   suspected: number
 }
 
+/** 後端的 RationaleGroup 已是畫面需要的完整形狀，不在前端重算 reach 或 scope。 */
+type ApiRationaleGroup = RationaleGroup
+
 /**
  * 每一層的判準與說明。**這是關於演算法的靜態文字，不是資料**，所以留在前端。
  *
@@ -199,7 +204,7 @@ const changeSummary = (changeLevel: string) =>
 /**
  * **每個畫面只抓自己要的。**
  *
- * 一次抓齊六個端點是量出來被否決的：對 `ostracon ui` 而言 `node:sqlite` 是
+ * 一次抓齊所有端點是量出來被否決的：對 `ostracon ui` 而言 `node:sqlite` 是
  * 同步的、HTTP 伺服器是單執行緒，六個並行請求只會排在同一個 event loop 上
  * ——實測 1,434 ms，比舊頁面序列抓三個的 830 ms 還慢。靜態站台沒有這個瓶頸
  * （同一份資料 4 ms），但首屏會多下載 154 KB（gzip）的 JSON，其中
@@ -318,6 +323,25 @@ export async function fetchEntities(): Promise<EntityListItem[]> {
   }))
 }
 
+export async function fetchRationales(): Promise<RationaleGroup[]> {
+  return get<ApiRationaleGroup[]>(RATIONALES_ROUTE)
+}
+
+/** 一個宣告被幾個相異引文群組解釋。扇出增加只會改 group.reach，不會改這裡。 */
+export function rationaleCountsFor(
+  groups: RationaleGroup[],
+  stableKey: string,
+): { entity: number; shared: number } {
+  let entity = 0
+  let shared = 0
+  for (const group of groups) {
+    if (!group.entities.includes(stableKey)) continue
+    if (group.scope === 'entity') entity += 1
+    else shared += 1
+  }
+  return { entity, shared }
+}
+
 /**
  * 沒有指定要看哪一個時的預設：**有專屬理由、而且時間軸最長的那一個**。
  *
@@ -370,8 +394,6 @@ export async function fetchEvolution(
     stableKey: entity.stableKey,
     dead: entity.dead,
     total: rows.length,
-    entityRationales: targets.entity.length,
-    batchRationales: targets.batch.length,
     rows: rows.map((row, index) => {
       // 只有專屬理由進得了逐列的 `rationale`——那一格是唯一的暖色。整批的
       // 引文歸不到這一個宣告身上，所以它只進標頭的計數，不進列。

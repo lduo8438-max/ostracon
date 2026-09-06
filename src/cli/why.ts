@@ -9,7 +9,11 @@ import { unwrapQuote } from "../evidence/span.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
 import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
-import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
+import {
+  declarationScopeOf,
+  indexRepoStructure,
+  REBUILD_NOTICE,
+} from "../index/repo-pass.ts";
 import {
   detectExcursions,
   type ExcursionMethod,
@@ -17,6 +21,7 @@ import {
 } from "../index/excursion.ts";
 import {
   assertNoCrossRepoRows,
+  assertNoSplitEntityRows,
   git,
   lineageIdAt,
   lineagesEverAt,
@@ -574,7 +579,10 @@ export async function why(
     }
 
     let rebuilt = false;
-    if (options.full) {
+    if (options.full || declarationScopeOf(db, gitReport.repoId) === "repo") {
+      // repo scope 已經有比單一血緣更完整的答案。若走訪層剛補了新 commit，沿用
+      // repo pass 的水位線增量補齊；若已到終點，這裡近乎 no-op。把 lineage pass
+      // 疊上去會因跨檔案搬移的 birth 座標不同而製造第二個 stable_key。
       // 這個資料庫如果是快路徑建的，全 repo pass 會先把結構層作廢重建——否則
       // 它算出來的跨檔案配對會撞上既有的 revision 列而被丟掉，`--full` 就成了
       // 靜默無效（實測：Osiris 的 isRateLimited 仍只顯示搬移後的 1 次改動）。
@@ -596,6 +604,7 @@ export async function why(
     // 不綁 repo 的查詢會靜默挑錯——那類汙染是潛伏的，輸出還是對的，所以只能
     // 在這裡擋，不能等某個查詢開始說謊。
     assertNoCrossRepoRows(db, gitReport.repoId);
+    assertNoSplitEntityRows(db, gitReport.repoId);
 
     // 證據層：零網路、零 LLM。commit message 已經在資料庫裡，規則式抽取器只挑
     // 有明確理由標記的行，全部通過 span 斷言才會出現在時間軸上。

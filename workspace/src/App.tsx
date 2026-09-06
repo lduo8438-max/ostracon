@@ -9,8 +9,10 @@ import {
   fetchEvolution,
   fetchOstracised,
   fetchOstracisedTargets,
+  fetchRationales,
   fetchSummary,
   featuredKey,
+  rationaleCountsFor,
 } from './api'
 // **直接用後端那一份，不抄。** page-logic.ts 是零相依的純函式，Vite 只會把
 // 用到的那兩個打包進來，不會把後端拖進前端的建置圖。舊頁面與新前端共用同一組
@@ -29,6 +31,7 @@ import type {
   OstracisedEntity,
   OstracisedView,
   Repository,
+  RationaleGroup,
   TimelineRow,
   TimelineView,
   ViewId,
@@ -398,8 +401,9 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
  * 每一列顯示改動數與**專屬理由數**——理由是稀有的，所以「值不值得點進去」
  * 這件事必須在點進去之前就看得到。
  */
-function DeclarationPicker({ entities, total, current, onPick, onClose }: {
+function DeclarationPicker({ entities, rationales, total, current, onPick, onClose }: {
   entities: EntityListItem[]
+  rationales: RationaleGroup[]
   /** 這個語料一共有幾個宣告。**清單通常比它少**，見下方頁尾。 */
   total: number
   current?: string
@@ -472,27 +476,30 @@ function DeclarationPicker({ entities, total, current, onPick, onClose }: {
         <div className="picker-list">
           {matches.length === 0
             ? <p className="honest-blank">Nothing matches these {format(entities.length)} declarations. The list is curated — it is not the whole corpus.</p>
-            : matches.map(entity => (
-              <button
-                key={entity.stableKey}
-                className={entity.stableKey === current ? 'picker-row current' : 'picker-row'}
-                onClick={() => onPick(entity)}
-              >
-                <span>
-                  <strong className="mono">{entity.symbol}</strong>
-                  {entity.dead ? <i className="tag-dead">removed</i> : null}
-                  <code>{entity.path}</code>
-                </span>
-                <span className="picker-meta">
-                  <b>{format(entity.revisions)}</b> changes
-                  {entity.withEntityIntent > 0
-                    ? <em className="has-rationale">{entity.withEntityIntent} rationale{entity.withEntityIntent === 1 ? '' : 's'}</em>
-                    : entity.withBatchIntent > 0
-                      ? <em>{entity.withBatchIntent} batch-only</em>
-                      : <em className="quiet">no rationale</em>}
-                </span>
-              </button>
-            ))}
+            : matches.map(entity => {
+              const counts = rationaleCountsFor(rationales, entity.stableKey)
+              return (
+                <button
+                  key={entity.stableKey}
+                  className={entity.stableKey === current ? 'picker-row current' : 'picker-row'}
+                  onClick={() => onPick(entity)}
+                >
+                  <span>
+                    <strong className="mono">{entity.symbol}</strong>
+                    {entity.dead ? <i className="tag-dead">removed</i> : null}
+                    <code>{entity.path}</code>
+                  </span>
+                  <span className="picker-meta">
+                    <b>{format(entity.revisions)}</b> changes
+                    {counts.entity > 0
+                      ? <em className="has-rationale">{counts.entity} quote group{counts.entity === 1 ? '' : 's'}</em>
+                      : counts.shared > 0
+                        ? <em>{counts.shared} shared group{counts.shared === 1 ? '' : 's'}</em>
+                        : <em className="quiet">no rationale</em>}
+                  </span>
+                </button>
+              )
+            })}
         </div>
         <p className="picker-foot">
           Showing {matches.length} of {format(entities.length)} · declarations with an
@@ -534,11 +541,17 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
     queryFn: () => fetchEvolution(entity!),
     enabled: entity !== undefined,
   })
+  const rationales = useQuery({
+    queryKey: ['rationales'],
+    queryFn: fetchRationales,
+    enabled: entity !== undefined,
+  })
   const query = {
-    isPending: list.isPending || stillLooking || (entity !== undefined && evolution.isPending),
-    error: list.error ?? fallback.error ?? evolution.error,
-    data: entities && evolution.data
-      ? { entities, timeline: evolution.data }
+    isPending: list.isPending || stillLooking
+      || (entity !== undefined && (evolution.isPending || rationales.isPending)),
+    error: list.error ?? fallback.error ?? evolution.error ?? rationales.error,
+    data: entities && evolution.data && rationales.data
+      ? { entities, timeline: evolution.data, rationales: rationales.data }
       : undefined,
   }
   // 兩份名單都找過了還是沒有——網址寫錯或匯出範圍不含它。**要說出來，不要
@@ -558,6 +571,7 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
         <TimelineBody
           data={data.timeline}
           entities={data.entities}
+          rationales={data.rationales}
           totalEntities={totalEntities}
           onSelect={onSelect}
         />
@@ -566,9 +580,10 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
   )
 }
 
-export function TimelineBody({ data, entities, totalEntities, onSelect }: {
+export function TimelineBody({ data, entities, rationales, totalEntities, onSelect }: {
   data: TimelineView
   entities: EntityListItem[]
+  rationales: RationaleGroup[]
   /** 語料裡的宣告總數。**清單是策展過的**，兩者不同時 picker 要說出來。 */
   totalEntities: number
   onSelect: (key: string) => void
@@ -579,6 +594,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
   // `selected.sha` 都在 render 本體裡——osiris 的時間軸與 vue 那條只帶 key 的
   // 精選深連結（`Dep.ts:hasBit`，零專屬理由）因此整頁全黑。
   const hits = data.rows.filter(row => row.rationale)
+  const rationaleCounts = rationaleCountsFor(rationales, data.stableKey)
   // 深連結指定的那一列。**不限於有理由的列**：先前用 `hits.findIndex` 找不到
   // 就退回第 0 個命中，於是 `#key/sha` 會靜默捲到別的地方——把「找不到」
   // 偽裝成「找到了」。
@@ -633,6 +649,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
       {picking ? (
         <DeclarationPicker
           entities={entities}
+          rationales={rationales}
           total={totalEntities}
           current={data.stableKey}
           onPick={entity => { setPicking(false); onSelect(entity.stableKey) }}
@@ -642,7 +659,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
       <PageIntro
         eyebrow={<button className="picker-open" onClick={() => setPicking(true)}>Timeline · <b>change declaration</b> <kbd>/</kbd></button>}
         title={<span className="mono">{data.symbol}{data.dead ? <i className="tag-dead">removed</i> : null}</span>}
-        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{hits.length}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {hits.length}</code></button>} />
+        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{rationaleCounts.entity}</b><span>entity quote groups<small>{rationaleCounts.shared} shared groups</small></span><code>{hitIndex + 1} / {hits.length} rows</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
         <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === focusSha} />)}</div>
@@ -836,7 +853,7 @@ export function Workspace({ repository }: { repository: Repository }) {
 
 export default function App() {
   // **外殼只等 summary。** 它是唯一每一頁都要的資料（語料身分與規模），
-  // 而且只有 0.3 KB——其餘五個端點合計 154 KB，一起等就是讓使用者為了看
+  // 而且只有 0.3 KB——其餘端點合計遠大於它，一起等就是讓使用者為了看
   // 一頁而下載五頁。
   const { data, error, isPending } = useQuery({ queryKey: ['summary'], queryFn: fetchSummary })
   if (isPending) return <div className="load-state"><div className="brand"><i /><strong>ostracon</strong></div><p>Reading the index</p></div>

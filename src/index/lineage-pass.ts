@@ -20,8 +20,13 @@ import {
   writeDiscontinuity,
   writeMatch,
   reconcileEntityDeaths,
+  assertNoSplitEntityRows,
 } from "./structural.ts";
-import { assertDeclarationsResumable, recordDeclarationScope } from "./repo-pass.ts";
+import {
+  assertDeclarationsResumable,
+  declarationScopeOf,
+  recordDeclarationScope,
+} from "./repo-pass.ts";
 
 /**
  * 對**單一路徑血緣**跑完整的結構層索引：解析、匹配、寫 slot / entity /
@@ -99,7 +104,13 @@ export async function indexLineage(
   // 原本一道都沒有——於是舊演算法的資料庫會被續跑成新舊混合，收尾的
   // `recordDeclarationScope` 再把水位線覆寫成新版本，混合的證據當場消失。
   assertDeclarationsResumable(db, repoId, indexerVersion);
-
+  assertNoSplitEntityRows(db, repoId);
+  if (declarationScopeOf(db, repoId) === "repo") {
+    throw new Error(
+      "declarations 已是 scope:repo；單一血緣 pass 不得寫入同一份產出（不變量 1）。"
+      + "請沿用 indexRepoStructure 的增量水位線。",
+    );
+  }
   const { observe, prefetch } = createObserver(repo);
   const before = revisionCount(db, repoId);
   const report: LineagePassReport = {

@@ -101,7 +101,7 @@ describe("匯出站台掛在非根路徑", () => {
       }
 
       // 二、資料端點。**這一段是這次線上事故的位置**：資產全對、頁面 200、
-      // console 乾淨，而六個端點整批打到網域根上。
+      // console 乾淨，而固定端點整批打到網域根上。
       for (const route of FIXED_ROUTES) {
         const resolved = new URL(route, pageUrl);
         assert.ok(
@@ -153,7 +153,7 @@ describe("前端產物的請求路徑", () => {
     }
   });
 
-  it("**六條固定路由都要真的出現在產物裡**", () => {
+  it("**每條固定路由都要真的出現在產物裡**", () => {
     if (!appBuilt()) return;
     // 上一條單獨存在時是可以空轉的：把所有 API 呼叫刪光、或掃錯檔案，
     // 它一樣會綠。這一條釘住「前端確實走 routes.ts 那一份」。

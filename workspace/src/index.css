@@ -388,8 +388,20 @@ code { overflow-wrap: anywhere; }
 }
 .picker-order button:hover, .picker-order button:focus-visible { color: var(--text); }
 .picker-order button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+.picker-order button:disabled { color: var(--muted); cursor: not-allowed; opacity: .45; }
 .picker-order-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; }
 .picker-list { overflow-y: auto; overflow-x: hidden; }
+.picker-state {
+  margin: 0; padding: 28px 16px; color: var(--muted);
+  font: 400 10px/1.6 'IBM Plex Mono', monospace; text-align: center;
+}
+.picker-state.error { display: grid; justify-items: center; gap: 10px; color: var(--muted); }
+.picker-state.error strong { color: var(--text); font: 600 12px/1.4 'IBM Plex Sans', sans-serif; }
+.picker-state.error button {
+  min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface-2); color: var(--text); cursor: pointer;
+}
+.picker-state.error button:hover, .picker-state.error button:focus-visible { border-color: var(--blue); }
 .picker-row {
   width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
   padding: 10px 16px; border: 0; border-bottom: 1px solid #1b2024;

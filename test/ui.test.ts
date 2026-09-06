@@ -6,12 +6,14 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { deriveClaims } from "../src/claim/derive.ts";
 import {
+  entitySearchIndex,
   evolutionOf,
   listEntities,
   ostracisedFor,
   repoSummary,
 } from "../src/ui/data.ts";
 import {
+  ENTITY_SEARCH_PATH,
   ENTITIES_PATH,
   OSTRACISED_PATH,
   RATIONALES_PATH,
@@ -324,9 +326,10 @@ describe("整批理由要標示而不是收回", () => {
     const entities: string[] = [];
     const revs: string[] = [];
     const changes: string[] = [];
+    const stableKey = (id: number) => id.toString(16).padStart(64, "0");
     for (let i = 1; i <= n; i++) {
       slots.push(`(${i}, 1, 1, 'sym${i}', 'function')`);
-      entities.push(`(${i}, 1, 'k${i}', 1)`);
+      entities.push(`(${i}, 1, '${stableKey(i)}', 1)`);
       revs.push(revisionValues({ id: i, commitId: 1, slotId: i, entityId: i }));
       changes.push(`(${i}, ${i}, 1, ${i}, 'shape')`);
     }
@@ -377,7 +380,7 @@ describe("整批理由要標示而不是收回", () => {
         `INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
            VALUES (${i}, 1, 1, 'extra${i}', 'function');
          INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
-           VALUES (${i}, 1, 'k${i}', 1);
+           VALUES (${i}, 1, '${stableKey(i)}', 1);
          INSERT INTO revision ${REVISION_COLUMNS}
          VALUES ${revisionValues({ id: i, commitId: 1, slotId: i, entityId: i })};
          INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
@@ -387,6 +390,71 @@ describe("整批理由要標示而不是收回", () => {
     db.close();
     return dbPath;
   }
+
+  it("**搜尋目錄不受 400 筆策展上限限制**", () => {
+    // 可達性缺陷就是這個差值：pip 只有 1.9%、playwright 只有 0.94% 能從 picker
+    // 找到。測試必須跨過 400，否則把搜尋重新接回 listEntities 也會綠。
+    const db = open(batchDb(1, 404));
+    assert.equal(listEntities(db, 1).length, 400);
+    const catalog = entitySearchIndex(db, 1);
+    assert.equal(catalog.length, 405);
+    assert.equal(new Set(catalog.map((row) => row.stableKey)).size, 405);
+    assert.ok(catalog.some((row) => row.symbol === "extra405"));
+    db.close();
+  });
+
+  it("**本機 server 的 discoverable 等於 indexed，搜尋結果全都能開**", async () => {
+    const dbPath = batchDb(1, 404);
+    const { url, server } = await startUiServer({ dbPath, port: 0 });
+    try {
+      const summary = await (await fetch(`${url}api/summary.json`)).json() as {
+        coverage: { indexed: number; discoverable: number; inspectable: number };
+      };
+      assert.equal(summary.coverage.indexed, 405);
+      assert.equal(summary.coverage.discoverable, 405);
+      assert.equal(summary.coverage.inspectable, 405);
+
+      const catalog = await (await fetch(`${url}api/entity-search.json`)).json() as
+        Array<{ stableKey: string }>;
+      assert.equal(catalog.length, 405);
+      const last = catalog.at(-1);
+      assert.ok(last);
+      assert.equal(
+        (await fetch(`${url}api/evolution/${last.stableKey}.json`)).status,
+        200,
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  it("**靜態搜尋只列這趟確實匯出的宣告**", () => {
+    const db = open(batchDb(1, 404));
+    const out = mkdtempSync(path.join(tmpdir(), "ostracon-search-export-"));
+    exportStaticSite(db, out, { label: "static", limit: 1 });
+    const catalog = JSON.parse(
+      readFileSync(path.join(out, "api/entity-search.json"), "utf8"),
+    ) as Array<{ stableKey: string }>;
+    const summary = JSON.parse(
+      readFileSync(path.join(out, "api/summary.json"), "utf8"),
+    ) as { coverage: { indexed: number; discoverable: number } };
+    assert.ok(catalog.length < 405, "靜態目錄不得把未匯出的宣告冒充成可搜尋");
+    assert.equal(summary.coverage.indexed, 405);
+    assert.equal(summary.coverage.discoverable, catalog.length);
+    const searchableKeys = new Set(catalog.map((row) => row.stableKey));
+    const hotspots = JSON.parse(
+      readFileSync(path.join(out, "api/hotspots.json"), "utf8"),
+    ) as { rows: Array<{ stableKey: string }> };
+    for (const row of hotspots.rows) {
+      assert.ok(searchableKeys.has(row.stableKey), "可點的熱點必須也能被搜尋與深連結解析");
+    }
+    for (const row of catalog) {
+      assert.ok(existsSync(path.join(
+        out, evolutionPath(row.stableKey).replace(/^\//, ""),
+      )));
+    }
+    db.close();
+  });
 
   it("只改到一個宣告時，理由是那個宣告專屬的", () => {
     const db = open(batchDb(1));
@@ -555,11 +623,26 @@ describe("靜態匯出", () => {
     const report = exportStaticSite(db, out, { label: "demo repo" });
     assert.equal(report.entities, 1);
     for (const relative of [
-      SUMMARY_PATH, ENTITIES_PATH, RATIONALES_PATH, evolutionPath(K1), "/index.html",
+      SUMMARY_PATH, ENTITIES_PATH, ENTITY_SEARCH_PATH, RATIONALES_PATH,
+      evolutionPath(K1), "/index.html",
     ]) {
       assert.ok(
         existsSync(path.join(out, relative.replace(/^\//, ""))),
         `${relative} 應該被寫出來`,
+      );
+    }
+    const searchCatalog = JSON.parse(
+      readFileSync(path.join(out, "api/entity-search.json"), "utf8"),
+    ) as Array<{ stableKey: string; path: string; symbol: string; dead: boolean }>;
+    const searchByKey = new Map(searchCatalog.map((row) => [row.stableKey, row]));
+    const entityCatalog = JSON.parse(
+      readFileSync(path.join(out, "api/entities.json"), "utf8"),
+    ) as Array<{ stableKey: string; path: string; symbol: string; dead: boolean }>;
+    for (const { stableKey, path: entityPath, symbol, dead } of entityCatalog) {
+      assert.deepEqual(
+        searchByKey.get(stableKey),
+        { stableKey, path: entityPath, symbol, dead },
+        "策展清單裡的宣告不得從靜態搜尋消失",
       );
     }
     db.close();

@@ -1,6 +1,6 @@
 # 扇出、排序與可達性：資料與互動規格
 
-**狀態**：第 1–3 步已實作；搜尋尚未實作。
+**狀態**：第 1–4 步已實作。
 **來源**：兩套陌生 repo 的實測（pypa/pip 16,241 commit、microsoft/playwright
 17,815 commit），量測腳本 `reports/probe/profile.mjs`，兩套共用同一支。
 **這份文件先定資料與互動規格，不畫版面。**
@@ -187,7 +187,7 @@ playwright 是 **45 個**。**小到可以整份列出**，所以第一級不需
 ### 4.1 三種部署的目標
 
 - **本機 server**：所有 indexed 都應 discoverable 且 inspectable。
-  現況 `listEntities` 預設 400 是個 cap，要換成搜尋。
+  `listEntities` 預設 400 保留作策展入口；`entity-search.json` 另提供全索引搜尋。
 - **靜態匯出**：允許只匯出子集，但**必須公開涵蓋率、選取規則與缺席原因**。
 - **UI**：任何顯示為可點擊的 entity 必須有 timeline；任何未匯出的 entity
   **不得偽裝成不存在**。
@@ -242,6 +242,26 @@ playwright 有 42,512 條 timeline。是否全部靜態化是**體積與載入�
    沒有拿群組數假裝它能在列之間跳轉。
 3. **已完成**：Best explained 入口（字典序），Most changed 加逐列標示；兩套
    陌生 repo 的前十名實測見 §3.4。
-4. 搜尋：本機 server 先做，靜態匯出的方案另議（可能是預先產生的索引檔）。
+4. **已完成**：獨立、延遲載入的 `entity-search.json`。本機 server 回全部 indexed；
+   靜態匯出回這趟確實有 timeline 的集合。空搜尋仍用策展清單，輸入文字才跨到目錄。
 
 每一步都要能在 pip 與 playwright 上各跑一次並記下數字。
+
+### 6.1 搜尋實作後的獨立驗收（2026-09-06）
+
+完整目錄刻意不沿用 `listEntities(..., MAX_SAFE_INTEGER)`：那份查詢會替每個宣告
+計算逐列理由統計，pip 是 5.6 MB／1.2 秒、playwright 是 11.4 MB／5.1 秒。
+搜尋只需要 stable key、最後的 path／symbol 與存活狀態；理由群組仍從
+`rationales.json` 的同一份資料導出。
+
+| | pypa/pip | microsoft/playwright |
+|---|---:|---:|
+| indexed／搜尋目錄 | 21,272／21,272 | 42,512／42,512 |
+| 策展入口 | 400 | 400 |
+| 未壓縮／gzip | 4.02 MB／約 1.0 MB | 7.71 MB／2.01 MB |
+| 首次生成 | 0.59 秒 | 0.69 秒 |
+| 快取後 | 3.5 ms | — |
+| 記憶體內關鍵字篩選 | 約 4 ms | 2–4 ms |
+
+兩套各抽一筆策展清單外結果開 timeline：pip `EnvBuilder`、playwright
+`BrowserContext` 都回 200。split identity 偵測仍是 0／0。

@@ -154,17 +154,24 @@ export interface HotspotView {
   hiddenTests: number
 }
 
-/** 宣告清單的一列。picker 用它，所以要看得出「值不值得點進去」。 */
-export interface EntityListItem {
+/** 能打開時間軸的最小身分；搜尋目錄刻意不背負策展統計。 */
+export interface EntityTarget {
   stableKey: string
   symbol: string
   path: string
+  dead: boolean
+}
+
+/** 全索引搜尋的一列。名稱搜尋不需要為了改動數掃完整 revision_change。 */
+export type EntitySearchItem = EntityTarget
+
+/** 宣告清單的一列。picker 用它，所以要看得出「值不值得點進去」。 */
+export interface EntityListItem extends EntityTarget {
   /** 這個宣告出現在幾次改動裡（含完全沒變的那些）。 */
   revisions: number
   /** 有幾次改動附帶專屬理由。**這是稀有的訊號，picker 要標出來。** */
   withEntityIntent: number
   withBatchIntent: number
-  dead: boolean
 }
 
 /** 一段引文在一顆 commit 裡形成的一個理由群組；扇出只改 reach，不複製理由。 */

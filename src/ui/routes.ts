@@ -14,6 +14,11 @@
 
 export const SUMMARY_ROUTE = "api/summary.json";
 export const ENTITIES_ROUTE = "api/entities.json";
+/**
+ * 宣告搜尋目錄。`entities.json` 是策展入口，這一份才回答「我那個宣告在哪」。
+ * 伺服器回全索引；靜態匯出只回確實有 timeline 的集合，兩者都由 coverage 說明。
+ */
+export const ENTITY_SEARCH_ROUTE = "api/entity-search.json";
 export const OSTRACISED_ROUTE = "api/ostracised.json";
 export const LADDER_ROUTE = "api/ladder.json";
 export const DISCONTINUITIES_ROUTE = "api/discontinuities.json";
@@ -27,6 +32,7 @@ export const evolutionRoute = (stableKey: string) =>
 export const FIXED_ROUTES = [
   SUMMARY_ROUTE,
   ENTITIES_ROUTE,
+  ENTITY_SEARCH_ROUTE,
   OSTRACISED_ROUTE,
   LADDER_ROUTE,
   DISCONTINUITIES_ROUTE,

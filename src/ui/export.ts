@@ -17,6 +17,7 @@ import { entityCoverage } from "./data.ts";
 import {
   DISCONTINUITIES_PATH,
   ENTITIES_PATH,
+  ENTITY_SEARCH_PATH,
   HOTSPOTS_PATH,
   LADDER_PATH,
   OSTRACISED_PATH,
@@ -124,6 +125,39 @@ export function exportStaticSite(
   // 完整匯出：折疊與搜尋是呈現層的事，資料層不得先截掉 shared scope 的 entity。
   write(RATIONALES_PATH, JSON.stringify(rationaleGroups(db, repoId)));
 
+  // 靜態站台沒有伺服器可按需產生 timeline，所以搜尋只能列出這趟真的匯出的
+  // 宣告。這裡必須是下方三份可點名單的聯集，不能只抄 `entities`：熱點或被推翻
+  // 的做法可能不在策展窗口內，但它們一樣有固定網址。端點與本機 schema 相同，
+  // coverage 明示它是子集；頁面不需要長出部署分支。
+  const searchable = new Map(entities.map((entity) => [entity.stableKey, {
+    stableKey: entity.stableKey,
+    path: entity.path,
+    symbol: entity.symbol,
+    dead: entity.dead,
+  }]));
+  for (const row of ostracised.rows) {
+    searchable.set(row.stableKey, {
+      stableKey: row.stableKey,
+      path: row.path,
+      symbol: row.symbol,
+      dead: true,
+    });
+  }
+  for (const row of hotspots.rows) {
+    searchable.set(row.stableKey, {
+      stableKey: row.stableKey,
+      path: row.path,
+      symbol: row.symbol,
+      // SQLite 的布林在這一層仍可能是 0／1；搜尋端點的公開 schema 一律是 boolean。
+      dead: Boolean(row.dead),
+    });
+  }
+  const searchEntities = [...searchable.values()]
+    .sort((a, b) => a.path.localeCompare(b.path)
+      || a.symbol.localeCompare(b.symbol)
+      || a.stableKey.localeCompare(b.stableKey));
+  write(ENTITY_SEARCH_PATH, JSON.stringify(searchEntities));
+
   // **三份名單的聯集才是「訪客點得到的一切」。**
   //
   // 熱點原本不在這個聯集裡。真實語料看不出來——前 50 名熱點的改動數本來就高，
@@ -134,11 +168,7 @@ export function exportStaticSite(
   //
   // **檔名用 `stable_key`**：rowid 會隨全量重建漂移，而漂移最壞的後果不是 404，
   // 是舊網址在重建後成功回傳另一個 entity。
-  const needed = new Set<string>([
-    ...entities.map((e) => e.stableKey),
-    ...ostracised.rows.map((r) => r.stableKey),
-    ...hotspots.rows.map((r) => r.stableKey),
-  ]);
+  const needed = new Set(searchEntities.map((entity) => entity.stableKey));
   let inspectable = 0;
   for (const key of needed) {
     const entityId = entityIdForStableKey(db, repoId, key);
@@ -150,15 +180,16 @@ export function exportStaticSite(
   // **summary 最後才寫**，因為 coverage 要報的是「這一趟真的匯出了什麼」，
   // 而那要等時間軸寫完才知道。先寫的話只能填一個猜的數字，而猜的數字正是
   // 先前「任何一個宣告都查得到」那句假宣稱的形狀。
+  const summary = repoSummary(db, repoId);
   write(SUMMARY_PATH, JSON.stringify({
-    ...repoSummary(db, repoId),
+    ...summary,
     rootPath: options.label,
     coverage: entityCoverage(db, repoId, {
-      discoverable: entities.length,
+      discoverable: searchEntities.length,
       inspectable,
       rule: "entities with a rationale, topped up by change count, "
         + "plus every ostracised approach and churn hotspot",
-      absentReason: inspectable < entities.length
+      absentReason: inspectable < summary.counts.entities
         ? "not included in this export"
         : null,
     }),

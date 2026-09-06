@@ -152,6 +152,58 @@ export function listEntities(
 }
 
 /**
+ * 全索引搜尋的一列。刻意不帶逐列 claim 計數：picker 顯示與排序的理由數來自
+ * `RationaleGroup`，再抄一份會讓扇出與群組數重新分岔。
+ */
+export interface EntitySearchRow {
+  stableKey: string;
+  path: string;
+  symbol: string;
+  dead: boolean;
+}
+
+/**
+ * 所有 indexed 宣告的輕量目錄。
+ *
+ * 不能用 `listEntities(..., Number.MAX_SAFE_INTEGER)` 代替：playwright 實測那份
+ * payload 是 11.4 MB、查詢 5.1 秒，而且多算了搜尋不需要的逐列理由統計。這裡
+ * 只取最後位置；42,512 筆實測查詢約 0.8 秒、gzip 約 2.0 MB。改動數刻意不放：
+ * 它要掃 234 萬筆 change，讓第一次搜尋從 0.8 秒升到 5.7 秒，而名稱搜尋不需要它。
+ */
+export function entitySearchIndex(
+  db: DatabaseSync,
+  repoId: number,
+): EntitySearchRow[] {
+  const rows = db.prepare(
+    `SELECT e.stable_key AS stableKey, latest.path AS path,
+            s.qualified_name AS symbol,
+            (e.death_commit_id IS NOT NULL) AS dead
+       FROM entity e
+       JOIN revision latest ON latest.id = (
+         SELECT r.id FROM revision r
+          WHERE r.entity_id = e.id
+          ORDER BY r.id DESC LIMIT 1
+       )
+       JOIN slot s ON s.id = latest.slot_id
+      WHERE e.repo_id = ?
+      ORDER BY latest.path, s.qualified_name, e.stable_key`,
+  ).all(repoId).map((row) => ({
+    ...(row as unknown as EntitySearchRow),
+    dead: Number((row as { dead: number }).dead) === 1,
+  }));
+
+  const indexed = (db.prepare(
+    "SELECT COUNT(*) AS n FROM entity WHERE repo_id = ?",
+  ).get(repoId) as { n: number }).n;
+  if (rows.length !== indexed) {
+    throw new Error(
+      `搜尋目錄漏掉 indexed 宣告：catalog=${rows.length}，indexed=${indexed}`,
+    );
+  }
+  return rows;
+}
+
+/**
  * `stable_key` → rowid。**只在程序內部用**：rowid 是儲存細節，
  * 對外一律用 `stable_key`（不變量 1）。查詢綁 repo——同一把鍵在別的 repo
  * 是別的東西。

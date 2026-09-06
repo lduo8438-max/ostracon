@@ -16,6 +16,7 @@
 |---|---|
 | `summary.json` | 語料規模、schema 版本、改動層級分佈、稀疏度 |
 | `entities.json` | 宣告清單 |
+| `entity-search.json` | 宣告搜尋目錄；本機全索引，靜態版只含已匯出的 timeline |
 | `ladder.json` | 匹配階梯 L1–L5 的分佈，與跨檔案搬移的逐條清單 |
 | `discontinuities.json` | 身份斷層 |
 | `hotspots.json` | 攪動熱點（只算真的動到結構的改動） |

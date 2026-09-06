@@ -19,6 +19,8 @@ import {
   startUiServer,
 } from "../src/ui/server.ts";
 import { exportStaticSite } from "../src/ui/export.ts";
+import { entityCoverage, rationaleGroups } from "../src/ui/data.ts";
+import { affectedEntityCounts } from "../src/claim/scope.ts";
 import { declarationScopeOf } from "../src/index/repo-pass.ts";
 import { APP_DIR, appBuilt, appFiles } from "../src/ui/app-assets.ts";
 import { sha256 } from "../src/evidence/span.ts";
@@ -308,7 +310,7 @@ describe("整批理由要標示而不是收回", () => {
    * 歸給 72 個宣告；Osiris 被當成健康基準的 74 條其實只是 3 條引文，其中一條
    * 掛在 70 個宣告上。
    */
-  function batchDb(n: number): string {
+  function batchDb(n: number, unclaimed = 0): string {
     const body = "refactor: split the module\n\nMoved them to avoid the cycle.";
     const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "ostracon-batch-")), "i.db");
     const db = new DatabaseSync(dbPath);
@@ -362,6 +364,22 @@ describe("整批理由要標示而不是收回", () => {
                'rule-rationale-0.5.0/causal:to avoid', 'promoted', ?, '2026-01-01')`,
     ).run(at, at + quote.length, quote, sha256(body), Number(ev.lastInsertRowid));
     deriveClaims(db, 1);
+    // **同一顆 commit 動到、但沒有被理由涵蓋的宣告。** 在 `deriveClaims` 之後才
+    // 插入，所以 `affectedEntityCounts` 會數到它們而理由不會——沒有這一段，
+    // 「reach 從 entities 導出」那條測試咬不動（兩個數字剛好相等，改成另算
+    // 一份也照樣通過，實測過）。
+    for (let i = n + 1; i <= n + unclaimed; i++) {
+      db.exec(
+        `INSERT INTO slot (id, repo_id, lineage_id, qualified_name, kind)
+           VALUES (${i}, 1, 1, 'extra${i}', 'function');
+         INSERT INTO entity (id, repo_id, stable_key, birth_commit_id)
+           VALUES (${i}, 1, 'k${i}', 1);
+         INSERT INTO revision ${REVISION_COLUMNS}
+         VALUES ${revisionValues({ id: i, commitId: 1, slotId: i, entityId: i })};
+         INSERT INTO revision_change (id, next_revision, commit_id, entity_id, change_level)
+           VALUES (${i}, ${i}, 1, ${i}, 'shape');`,
+      );
+    }
     db.close();
     return dbPath;
   }
@@ -433,6 +451,93 @@ describe("整批理由要標示而不是收回", () => {
   // 「**整批理由不進逐列的暖色格**」：那一條真的把元件掛起來，斷言整批列
   // 拿到的是 `.honest-blank` 而不是 `.literal-evidence`——比釘一條 CSS 選擇器
   // 接近契約本身。
+
+  /**
+   * 扇出是 scope，不是品質。規格見 `docs/plan-rationale-scope.md`。
+   */
+  describe("理由以引文分組", () => {
+    it("**扇出增加，理由數不得增加**", () => {
+      // 這是整條線的核心驗收。先前畫面逐列顯示，於是同一句話被印 N 次——
+      // 實測 pypa/pip 6,859 列只來自 814 個群組（9 倍），
+      // microsoft/playwright 6,975 列只來自 531 個（14 倍）。
+      const three = open(batchDb(3));
+      const thirty = open(batchDb(30));
+      assert.equal(rationaleGroups(three, 1).length, 1);
+      assert.equal(rationaleGroups(thirty, 1).length, 1, "扇出變大讓理由看起來變多了");
+      assert.equal(rationaleGroups(three, 1)[0]!.reach, 3);
+      assert.equal(rationaleGroups(thirty, 1)[0]!.reach, 30);
+      three.close();
+      thirty.close();
+    });
+
+    it("**`reach` 與 `entities` 是同一個陣列導出的**", () => {
+      // 兩邊各算一次的話，標頭會說 20 而清單只展得開 12——這個專案已經被
+      // 同型的分岔咬過（CLI 說 5 顆聚合 commit、UI 說 6 顆）。
+      //
+      // **這顆 commit 動到 20 個宣告，理由只涵蓋 12 個。** 兩個數字必須不同，
+      // 否則「改成用 affectedEntityCounts 算 reach」這個錯誤照樣會通過。
+      const db = open(batchDb(12, 8));
+      assert.equal(affectedEntityCounts(db, 1).get("aaaaaaaaaaaa"), 20);
+      const groups = rationaleGroups(db, 1);
+      assert.equal(groups.length, 1);
+      for (const group of groups) {
+        assert.equal(group.reach, group.entities.length);
+        assert.equal(group.reach, 12, "理由涵蓋的不是被 commit 動到的全部");
+        assert.equal(new Set(group.entities).size, group.entities.length, "entities 有重複");
+      }
+      db.close();
+    });
+
+    it("scope 由涵蓋數決定，不由別處算", () => {
+      const single = open(batchDb(1));
+      const many = open(batchDb(5));
+      assert.equal(rationaleGroups(single, 1)[0]!.scope, "entity");
+      assert.equal(rationaleGroups(many, 1)[0]!.scope, "batch");
+      single.close();
+      many.close();
+    });
+
+    it("quoteId 穩定且唯一", () => {
+      // 它會進網址。同一份索引重算兩次必須相同。
+      const db = open(batchDb(4));
+      const first = rationaleGroups(db, 1);
+      const second = rationaleGroups(db, 1);
+      assert.deepEqual(first.map((g) => g.quoteId), second.map((g) => g.quoteId));
+      assert.equal(new Set(first.map((g) => g.quoteId)).size, first.length);
+      db.close();
+    });
+  });
+
+  describe("可達性的三個契約", () => {
+    it("indexed 由資料庫算，discoverable 與 inspectable 由呼叫端報", () => {
+      const db = open(batchDb(7));
+      const coverage = entityCoverage(db, 1, {
+        discoverable: 4,
+        inspectable: 7,
+        rule: "test",
+        absentReason: "test",
+      });
+      assert.equal(coverage.indexed, 7);
+      assert.equal(coverage.discoverable, 4);
+      db.close();
+    });
+
+    it("**報出比索引總數還大的可達數要吵**", () => {
+      // 一個看起來合理的錯數字比一個錯誤訊息危險得多——「任何一個宣告都
+      // 查得到」那句假宣稱就是這樣上線的。
+      const db = open(batchDb(2));
+      assert.throws(
+        () => entityCoverage(db, 1, {
+          discoverable: 99,
+          inspectable: 2,
+          rule: "test",
+          absentReason: null,
+        }),
+        /可達性數字大於索引總數/,
+      );
+      db.close();
+    });
+  });
 });
 
 describe("靜態匯出", () => {

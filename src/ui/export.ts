@@ -12,6 +12,7 @@ import {
 } from "./data.ts";
 import { APP_DIR, appBuilt, appFiles } from "./app-assets.ts";
 import { hotspotsView } from "./hotspots-view.ts";
+import { entityCoverage } from "./data.ts";
 import {
   DISCONTINUITIES_PATH,
   ENTITIES_PATH,
@@ -90,11 +91,6 @@ export function exportStaticSite(
     bytes += Buffer.byteLength(body);
   };
 
-  write(SUMMARY_PATH, JSON.stringify({
-    ...repoSummary(db, repoId),
-    rootPath: options.label,
-  }));
-
   // **有意圖的一律收，再用改動量補滿。** 只取「改動最多的前 N 筆」的話，
   // demo 會被一個與內容無關的排序決定內容——實測 vuejs/core 那樣會把訊噪比
   // 最好的 `generateCodeFrame` 擠掉（它只有 10 次改動，門檻是 11）。
@@ -139,11 +135,30 @@ export function exportStaticSite(
     ...ostracised.rows.map((r) => r.stableKey),
     ...hotspots.rows.map((r) => r.stableKey),
   ]);
+  let inspectable = 0;
   for (const key of needed) {
     const entityId = entityIdForStableKey(db, repoId, key);
     if (entityId === undefined) continue;
     write(evolutionPath(key), JSON.stringify(evolutionOf(db, repoId, entityId)));
+    inspectable += 1;
   }
+
+  // **summary 最後才寫**，因為 coverage 要報的是「這一趟真的匯出了什麼」，
+  // 而那要等時間軸寫完才知道。先寫的話只能填一個猜的數字，而猜的數字正是
+  // 先前「任何一個宣告都查得到」那句假宣稱的形狀。
+  write(SUMMARY_PATH, JSON.stringify({
+    ...repoSummary(db, repoId),
+    rootPath: options.label,
+    coverage: entityCoverage(db, repoId, {
+      discoverable: entities.length,
+      inspectable,
+      rule: "entities with a rationale, topped up by change count, "
+        + "plus every ostracised approach and churn hotspot",
+      absentReason: inspectable < entities.length
+        ? "not included in this export"
+        : null,
+    }),
+  }));
   // **與伺服器同一份產物。** 先前這裡寫的是一個字串常數，而伺服器回的是同一個
   // 字串；現在兩邊都指向 dist/ui/app，所以「本機看到的」與「發佈出去的」是同
   // 一份程式碼，不是兩份剛好一樣的東西。

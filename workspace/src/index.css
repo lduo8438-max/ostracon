@@ -371,20 +371,35 @@ code { overflow-wrap: anywhere; }
   border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
   box-shadow: 0 30px 90px rgba(0,0,0,.55);
 }
+.picker-controls { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); }
 .picker-input {
-  height: 46px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--line);
+  width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px;
   outline: 0; background: transparent; color: var(--text); font-size: 13px;
 }
-.picker-list { overflow: auto; }
+.picker-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent); }
+.picker-order {
+  width: fit-content; display: grid; grid-template-columns: 1fr 1fr;
+  margin-top: 10px; padding: 2px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--canvas);
+}
+.picker-order button {
+  min-height: 30px; padding: 0 11px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 10px; cursor: pointer;
+}
+.picker-order button:hover, .picker-order button:focus-visible { color: var(--text); }
+.picker-order button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+.picker-order-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; }
+.picker-list { overflow-y: auto; overflow-x: hidden; }
 .picker-row {
   width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
   padding: 10px 16px; border: 0; border-bottom: 1px solid #1b2024;
   background: none; color: inherit; text-align: left; cursor: pointer;
 }
+.picker-row > span:first-child { min-width: 0; }
 .picker-row:hover, .picker-row:focus-visible { background: var(--surface-2); }
 .picker-row.current { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--blue); }
-.picker-row strong { font-size: 12px; }
-.picker-row code { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.picker-row strong { font-size: 12px; overflow-wrap: anywhere; }
+.picker-row code { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .picker-meta { flex: none; color: var(--muted); font-size: 10px; text-align: right; }
 .picker-meta b { color: var(--text); font-weight: 600; }
 .picker-meta em { display: block; margin-top: 3px; font-style: normal; }

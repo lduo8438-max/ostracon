@@ -8,6 +8,7 @@ import {
   ladderStats,
   listEntities,
   ostracisedFor,
+  rationaleGroups,
   repoSummary,
 } from "./data.ts";
 import { APP_DIR, appBuilt, appFiles } from "./app-assets.ts";
@@ -19,6 +20,7 @@ import {
   HOTSPOTS_PATH,
   LADDER_PATH,
   OSTRACISED_PATH,
+  RATIONALES_PATH,
   SUMMARY_PATH,
   evolutionPath,
 } from "./server.ts";
@@ -27,8 +29,8 @@ import {
  * 把一個索引匯出成**純靜態檔**，不需要 node、不需要 SQLite。
  *
  * 線上 demo 的散布方式。實測過的替代方案是託管一台伺服器，但那要搬 284 MB 的
- * SQLite、要 Node 24 加 FTS5、還多一個會壞掉的執行期——而 API 只有三個端點，
- * 其中兩個是單例、一個以 entity 分片，本來就對得上靜態檔。
+ * SQLite、要 Node 24 加 FTS5、還多一個會壞掉的執行期——而 API 是少量固定 JSON
+ * 加 entity 分片，本來就對得上靜態檔。
  *
  * **頁面與 `src/ui/server.ts` 共用同一份實作**：兩邊的 URL 都是
  * `/api/<name>.json`，所以匯出只是把同名檔案寫到磁碟。頁面裡沒有任何
@@ -119,6 +121,8 @@ export function exportStaticSite(
   );
   const hotspots = hotspotsView(db, repoId);
   write(HOTSPOTS_PATH, JSON.stringify(hotspots));
+  // 完整匯出：折疊與搜尋是呈現層的事，資料層不得先截掉 shared scope 的 entity。
+  write(RATIONALES_PATH, JSON.stringify(rationaleGroups(db, repoId)));
 
   // **三份名單的聯集才是「訪客點得到的一切」。**
   //

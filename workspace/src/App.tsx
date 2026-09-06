@@ -9,9 +9,14 @@ import {
   fetchEvolution,
   fetchOstracised,
   fetchOstracisedTargets,
+  fetchRationales,
   fetchSummary,
   featuredKey,
+  orderDeclarations,
+  rationaleCountsFor,
+  rationaleSummaryByEntity,
 } from './api'
+import type { DeclarationOrder } from './api'
 // **直接用後端那一份，不抄。** page-logic.ts 是零相依的純函式，Vite 只會把
 // 用到的那兩個打包進來，不會把後端拖進前端的建置圖。舊頁面與新前端共用同一組
 // 網址，任何一邊改了編碼規則另一邊的連結就失效——所以它必須只有一份。
@@ -29,6 +34,7 @@ import type {
   OstracisedEntity,
   OstracisedView,
   Repository,
+  RationaleGroup,
   TimelineRow,
   TimelineView,
   ViewId,
@@ -398,8 +404,9 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
  * 每一列顯示改動數與**專屬理由數**——理由是稀有的，所以「值不值得點進去」
  * 這件事必須在點進去之前就看得到。
  */
-function DeclarationPicker({ entities, total, current, onPick, onClose }: {
+function DeclarationPicker({ entities, rationales, total, current, onPick, onClose }: {
   entities: EntityListItem[]
+  rationales: RationaleGroup[]
   /** 這個語料一共有幾個宣告。**清單通常比它少**，見下方頁尾。 */
   total: number
   current?: string
@@ -407,6 +414,7 @@ function DeclarationPicker({ entities, total, current, onPick, onClose }: {
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
+  const [order, setOrder] = useState<DeclarationOrder>('explained')
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -438,15 +446,16 @@ function DeclarationPicker({ entities, total, current, onPick, onClose }: {
   }
 
   const needle = query.trim().toLowerCase()
+  const rationaleSummaries = useMemo(
+    () => rationaleSummaryByEntity(rationales),
+    [rationales],
+  )
   const matches = useMemo(() => {
-    const scored = needle === ''
+    const candidates = needle === ''
       ? entities
       : entities.filter(e => `${e.symbol} ${e.path}`.toLowerCase().includes(needle))
-    // 有專屬理由的排前面：那是這個工具唯一稀有的東西，藏在第 300 名沒有意義。
-    return [...scored].sort((a, b) =>
-      (b.withEntityIntent > 0 ? 1 : 0) - (a.withEntityIntent > 0 ? 1 : 0)
-      || b.revisions - a.revisions).slice(0, 60)
-  }, [entities, needle])
+    return orderDeclarations(candidates, rationales, order).slice(0, 60)
+  }, [entities, needle, order, rationales])
 
   return (
     <div className="picker-backdrop" onClick={onClose} role="presentation">
@@ -459,44 +468,60 @@ function DeclarationPicker({ entities, total, current, onPick, onClose }: {
         aria-modal="true"
         aria-label="Choose a declaration"
       >
-        <input
-          ref={inputRef}
-          className="picker-input"
-          type="search"
-          value={query}
-          placeholder="Filter by symbol or path"
-          onChange={event => setQuery(event.target.value)}
-          // Escape 由對話框那一層處理，這裡只留「Enter 選第一筆」。
-          onKeyDown={event => { if (event.key === 'Enter' && matches[0]) onPick(matches[0]) }}
-        />
+        <div className="picker-controls">
+          <input
+            ref={inputRef}
+            className="picker-input"
+            type="search"
+            value={query}
+            aria-label="Filter declarations"
+            placeholder="Filter by symbol or path"
+            onChange={event => setQuery(event.target.value)}
+            // Escape 由對話框那一層處理，這裡只留「Enter 選第一筆」。
+            onKeyDown={event => { if (event.key === 'Enter' && matches[0]) onPick(matches[0]) }}
+          />
+          <div className="picker-order" role="group" aria-label="Declaration order">
+            <button type="button" aria-pressed={order === 'explained'} onClick={() => setOrder('explained')}>Best explained</button>
+            <button type="button" aria-pressed={order === 'changed'} onClick={() => setOrder('changed')}>Most changed</button>
+          </div>
+          <p className="picker-order-note">
+            {order === 'explained'
+              ? 'Entity-only groups first; narrower shared groups break the remaining ties.'
+              : 'Highest change count first; rationale scope remains visible on every row.'}
+          </p>
+        </div>
         <div className="picker-list">
           {matches.length === 0
             ? <p className="honest-blank">Nothing matches these {format(entities.length)} declarations. The list is curated — it is not the whole corpus.</p>
-            : matches.map(entity => (
-              <button
-                key={entity.stableKey}
-                className={entity.stableKey === current ? 'picker-row current' : 'picker-row'}
-                onClick={() => onPick(entity)}
-              >
-                <span>
-                  <strong className="mono">{entity.symbol}</strong>
-                  {entity.dead ? <i className="tag-dead">removed</i> : null}
-                  <code>{entity.path}</code>
-                </span>
-                <span className="picker-meta">
-                  <b>{format(entity.revisions)}</b> changes
-                  {entity.withEntityIntent > 0
-                    ? <em className="has-rationale">{entity.withEntityIntent} rationale{entity.withEntityIntent === 1 ? '' : 's'}</em>
-                    : entity.withBatchIntent > 0
-                      ? <em>{entity.withBatchIntent} batch-only</em>
-                      : <em className="quiet">no rationale</em>}
-                </span>
-              </button>
-            ))}
+            : matches.map(entity => {
+              const counts = rationaleSummaries.get(entity.stableKey) ?? { entity: 0, shared: 0 }
+              return (
+                <button
+                  key={entity.stableKey}
+                  className={entity.stableKey === current ? 'picker-row current' : 'picker-row'}
+                  onClick={() => onPick(entity)}
+                >
+                  <span>
+                    <strong className="mono">{entity.symbol}</strong>
+                    {entity.dead ? <i className="tag-dead">removed</i> : null}
+                    <code>{entity.path}</code>
+                  </span>
+                  <span className="picker-meta">
+                    <b>{format(entity.revisions)}</b> changes
+                    {counts.entity > 0
+                      ? <em className="has-rationale">{counts.entity} entity-only group{counts.entity === 1 ? '' : 's'}</em>
+                      : counts.shared > 0
+                        ? <em>{counts.shared} shared group{counts.shared === 1 ? '' : 's'}</em>
+                        : <em className="quiet">no rationale</em>}
+                  </span>
+                </button>
+              )
+            })}
         </div>
         <p className="picker-foot">
-          Showing {matches.length} of {format(entities.length)} · declarations with an
-          entity-specific rationale come first
+          Showing {matches.length} of {format(entities.length)} · {order === 'explained'
+            ? 'ranked by explanation quality'
+            : 'ranked by change count'}
           {entities.length < total
             ? <><br /><b>This list is curated, not complete.</b> {format(total)} declarations
               are indexed; the list keeps those with a rationale and tops up by change count.
@@ -515,8 +540,13 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
   onSelect: (key: string) => void
 }) {
   const list = useQuery({ queryKey: ['entities'], queryFn: fetchEntities })
+  // 預設入口由真正的引文群組決定，所以不能等選好 entity 才抓。否則初始選取只
+  // 能退回舊的逐列 claim 計數，畫面標示一套、排序又是另一套。
+  const rationales = useQuery({ queryKey: ['rationales'], queryFn: fetchRationales })
   const entities = list.data
-  const key = stableKey ?? (entities ? featuredKey(entities) : undefined)
+  const key = stableKey ?? (entities && rationales.data
+    ? featuredKey(entities, rationales.data)
+    : undefined)
   const inEntities = entities?.find(item => item.stableKey === key)
   // **被推翻的做法不在 entities.json 裡，但它們的時間軸一定被匯出。**
   // 只在第一份名單裡找，會讓 Ostracised 的「Open its timeline」指向錯誤頁。
@@ -535,10 +565,11 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
     enabled: entity !== undefined,
   })
   const query = {
-    isPending: list.isPending || stillLooking || (entity !== undefined && evolution.isPending),
-    error: list.error ?? fallback.error ?? evolution.error,
-    data: entities && evolution.data
-      ? { entities, timeline: evolution.data }
+    isPending: list.isPending || rationales.isPending || stillLooking
+      || (entity !== undefined && (evolution.isPending || rationales.isPending)),
+    error: list.error ?? fallback.error ?? evolution.error ?? rationales.error,
+    data: entities && evolution.data && rationales.data
+      ? { entities, timeline: evolution.data, rationales: rationales.data }
       : undefined,
   }
   // 兩份名單都找過了還是沒有——網址寫錯或匯出範圍不含它。**要說出來，不要
@@ -558,6 +589,7 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
         <TimelineBody
           data={data.timeline}
           entities={data.entities}
+          rationales={data.rationales}
           totalEntities={totalEntities}
           onSelect={onSelect}
         />
@@ -566,9 +598,10 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
   )
 }
 
-export function TimelineBody({ data, entities, totalEntities, onSelect }: {
+export function TimelineBody({ data, entities, rationales, totalEntities, onSelect }: {
   data: TimelineView
   entities: EntityListItem[]
+  rationales: RationaleGroup[]
   /** 語料裡的宣告總數。**清單是策展過的**，兩者不同時 picker 要說出來。 */
   totalEntities: number
   onSelect: (key: string) => void
@@ -579,6 +612,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
   // `selected.sha` 都在 render 本體裡——osiris 的時間軸與 vue 那條只帶 key 的
   // 精選深連結（`Dep.ts:hasBit`，零專屬理由）因此整頁全黑。
   const hits = data.rows.filter(row => row.rationale)
+  const rationaleCounts = rationaleCountsFor(rationales, data.stableKey)
   // 深連結指定的那一列。**不限於有理由的列**：先前用 `hits.findIndex` 找不到
   // 就退回第 0 個命中，於是 `#key/sha` 會靜默捲到別的地方——把「找不到」
   // 偽裝成「找到了」。
@@ -633,6 +667,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
       {picking ? (
         <DeclarationPicker
           entities={entities}
+          rationales={rationales}
           total={totalEntities}
           current={data.stableKey}
           onPick={entity => { setPicking(false); onSelect(entity.stableKey) }}
@@ -642,7 +677,7 @@ export function TimelineBody({ data, entities, totalEntities, onSelect }: {
       <PageIntro
         eyebrow={<button className="picker-open" onClick={() => setPicking(true)}>Timeline · <b>change declaration</b> <kbd>/</kbd></button>}
         title={<span className="mono">{data.symbol}{data.dead ? <i className="tag-dead">removed</i> : null}</span>}
-        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{hits.length}</b><span>entity rationales<small>{data.batchRationales} batch-only</small></span><code>{hitIndex + 1} / {hits.length}</code></button>} />
+        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{rationaleCounts.entity}</b><span>entity quote groups<small>{rationaleCounts.shared} shared groups</small></span><code>{hitIndex + 1} / {hits.length} rows</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
         <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === focusSha} />)}</div>
@@ -836,7 +871,7 @@ export function Workspace({ repository }: { repository: Repository }) {
 
 export default function App() {
   // **外殼只等 summary。** 它是唯一每一頁都要的資料（語料身分與規模），
-  // 而且只有 0.3 KB——其餘五個端點合計 154 KB，一起等就是讓使用者為了看
+  // 而且只有 0.3 KB——其餘端點合計遠大於它，一起等就是讓使用者為了看
   // 一頁而下載五頁。
   const { data, error, isPending } = useQuery({ queryKey: ['summary'], queryFn: fetchSummary })
   if (isPending) return <div className="load-state"><div className="brand"><i /><strong>ostracon</strong></div><p>Reading the index</p></div>

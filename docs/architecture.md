@@ -165,7 +165,7 @@ repo scope 下誕生於 `src/app/api/scanner/route.ts`（6 次改動），在 li
 
 | 順序 | 結果 |
 |---|---|
-| repo → lineage | 正確。既有列全部命中，快路徑一列都插不進去 |
+| repo → lineage | **舊版看似正確，實際可製造 ghost entity。** 詳見下段。 |
 | lineage → repo | 全 repo 的跨檔案血緣全數丟失 |
 
 `excursion` pass 早就把 scope 編進版本字串了；宣告層沒有。**規則寫在衍生層上，
@@ -195,6 +195,35 @@ repo scope 下誕生於 `src/app/api/scanner/route.ts`（6 次改動），在 li
 `src/golden/materialize.ts` 自己就在跑這個壞掉的順序（discontinuity 案例走
 `indexLineage`、excursion 案例走 `indexRepoStructure`，同一個資料庫）。修正後
 Osiris 的 golden 實際會觸發一次重建，33/33 不變。
+
+#### repo scope 之後不得再疊 lineage scope
+
+後續在 requests、pip、playwright 證實，上一段的「repo → lineage 既有列全部命中」
+只對 revision 數量成立，不對 identity 成立。跨檔案搬進來的宣告在 lineage 候選池
+看不到原檔，會用搬移 commit、搬入後路徑再鑄一個 `stable_key`；接著
+`ensureRevision` 以 `(commit_id, slot_id)` 命中 repo pass 的既有 revision，卻沒有
+檢查它屬於另一個 entity。結果是沒有自己 revision 的 ghost entity 持有
+`revision_change`，而 change 的前／後 revision 都屬於原 owner。
+
+requests 的最小案例是 `MockRequest.has_header`：全 repo pass 後 0 筆，跑一次預設
+`why` 後變成 12 個 ghost。追蹤 `createEntity` 的兩個誕生點，owner 是
+`fed6cfbf… / requests/packages/oreos/cookiejar.py`，ghost 是
+`4d6871d… / requests/cookies.py`；分岔來自兩個候選池餵入不同 birth 座標，不是
+`ensureEntity`。
+
+修法有三層：
+
+- repo-scoped DB 上的 `why` 沿用 `indexRepoStructure` 的增量水位線；已到 HEAD 時
+  結構表逐位元不變。直接呼叫 `indexLineage` 也在寫入前拒絕 repo scope。
+- `ensureRevision` 命中既有 `(commit, slot)` 時必須同時驗 `entity_id`；不同就以
+  不變量 1 拒絕，而不是把 owner revision 借給 ghost。
+- `assertNoSplitEntityRows` 同時檢查 change 的 prev／next revision ownership。
+  repo pass 續跑、`why`、本機 UI 與靜態匯出都走這道守門；所以舊污染 DB 即使水位線
+  仍謊稱 `scope:repo`，也不能再被續跑或發佈。
+
+scope 沒被降級的原因也已確認：舊 lineage pass 只有在 revision 總數增加時才寫
+`scope:lineage`；這個 bug 重用 owner revision，revision 數不變，但 entity 與
+revision_change 已經改變。水位線因此不是偵測器，identity ownership 才是。
 
 SQLite driver 使用 Node 內建 `node:sqlite`，所有呼叫集中在單一 persistence 模組。
 完整 schema 依賴 FTS5；啟動時必須先做 capability probe，缺少時明確失敗，不能等到
@@ -1139,8 +1168,8 @@ vuejs/core 752 → 1,245 筆、31.7 MB → 34.6 MB。
 `src/ui/export.ts` 把一個索引寫成純靜態檔，**不需要 node、不需要 SQLite**。
 
 散布方式是量出來的，不是挑的。託管一台伺服器要搬整個 SQLite、要 Node 24
-加 FTS5、還多一個會壞掉的執行期；而 API 只有三個端點，其中兩個是單例、一個以
-entity 分片，本來就對得上靜態檔。實測訪客實際下載（gzip）：**頁面 5 KB ＋清單
+加 FTS5、還多一個會壞掉的執行期；而 API 是少量固定 JSON 加 entity 分片，
+本來就對得上靜態檔。實測訪客實際下載（gzip）：**頁面 5 KB ＋清單
 17 KB ＋點開一條時間軸約 5 KB**。
 
 當初這個決定寫的是「要搬 284 MB 的 SQLite」。內容定址（schema v2）之後同一份
@@ -1148,8 +1177,9 @@ entity 分片，本來就對得上靜態檔。實測訪客實際下載（gzip）
 執行期，而 93 MB 依然遠大於訪客實際需要的那幾十 KB。把數字更新在這裡是為了
 不讓一個過期的量測繼續替一個仍然正確的決定背書。
 
-**端點因此改成路徑式並帶 `.json`**（`/api/summary.json`、`/api/entities.json`、
-`/api/evolution/<id>.json`）。原本的 `?entity=7` 沒有辦法變成靜態檔，保留就得替
+**端點因此改成路徑式並帶 `.json`**（例如 `/api/summary.json`、
+`/api/rationales.json`、`/api/evolution/<stable_key>.json`）。原本的 `?entity=7`
+沒有辦法變成靜態檔，保留就得替
 頁面寫第二套取數邏輯——而「同一個東西兩份實作」在這個專案已經出過好幾次事。
 改成路徑之後匯出只是把同名檔案寫到磁碟，**頁面一個字都不用改**，測試也直接
 比對「伺服器回的」與「匯出的」是否一字不差。

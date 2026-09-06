@@ -14,6 +14,7 @@ import {
 import {
   ENTITIES_PATH,
   OSTRACISED_PATH,
+  RATIONALES_PATH,
   SUMMARY_PATH,
   evolutionPath,
   startUiServer,
@@ -254,6 +255,9 @@ describe("三欄 UI 的伺服器", () => {
         `${url}api/evolution/${entities[0]!.stableKey}.json`,
       )).json() as Array<{ intent: unknown[] }>;
       assert.deepEqual(rows.map((r) => r.intent.length), [1, 0]);
+      const rationales = await (await fetch(`${url}api/rationales.json`)).json() as
+        Array<{ quoteId: string; reach: number }>;
+      assert.deepEqual(rationales.map((r) => r.reach), [1]);
     } finally {
       server.close();
     }
@@ -551,7 +555,7 @@ describe("靜態匯出", () => {
     const report = exportStaticSite(db, out, { label: "demo repo" });
     assert.equal(report.entities, 1);
     for (const relative of [
-      SUMMARY_PATH, ENTITIES_PATH, evolutionPath(K1), "/index.html",
+      SUMMARY_PATH, ENTITIES_PATH, RATIONALES_PATH, evolutionPath(K1), "/index.html",
     ]) {
       assert.ok(
         existsSync(path.join(out, relative.replace(/^\//, ""))),

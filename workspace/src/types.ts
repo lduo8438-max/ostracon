@@ -115,7 +115,7 @@ export interface OstracisedEntity {
 /**
  * 每個畫面各自的資料。
  *
- * **先前是一個 `WorkspaceData` 一次抓齊六個端點**，那是量出來被否決的：
+ * **先前是一個 `WorkspaceData` 一次抓齊所有端點**，那是量出來被否決的：
  * `ostracon ui` 的後端是同步的單執行緒，並行請求只會排隊（1,434 ms，
  * 比序列還慢）；靜態站台雖然快，但首屏會多下載 154 KB 的 JSON，其中
  * 一半在當下那一頁用不到。拆開之後兩種後端各自受益。
@@ -167,14 +167,24 @@ export interface EntityListItem {
   dead: boolean
 }
 
+/** 一段引文在一顆 commit 裡形成的一個理由群組；扇出只改 reach，不複製理由。 */
+export interface RationaleGroup {
+  quoteId: string
+  text: string
+  kind: string
+  commitSha: string
+  subject: string
+  scope: 'entity' | 'batch'
+  entities: string[]
+  reach: number
+}
+
 export interface TimelineView {
   symbol: string
   path: string
   stableKey: string
   dead: boolean
   total: number
-  entityRationales: number
-  batchRationales: number
   rows: TimelineRow[]
 }
 
@@ -198,8 +208,6 @@ export interface WorkspaceData {
     path: string
     stableKey: string
     total: number
-    entityRationales: number
-    batchRationales: number
     rows: TimelineRow[]
   }
   hotspots: Hotspot[]

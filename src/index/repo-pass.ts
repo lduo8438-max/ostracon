@@ -4,6 +4,7 @@ import { GRAMMARS, grammarForPath } from "../ast/parser.ts";
 import { SIGNATURE_VERSION } from "../match/signature.ts";
 import {
   buildPool,
+  assertNoSplitEntityRows,
   changeLevel,
   commitId,
   createEntity,
@@ -353,6 +354,9 @@ function resolveResumePoint(
 
   const expected = declarationIndexerVersion(structuralVersion, "repo");
   if (state.version === expected) {
+    // 舊版 `why` 可能留下 revision_change 指向別的 entity 的 revision，卻仍把
+    // 水位線標成 repo。這種資料不能當成可續跑的 repo scope。
+    assertNoSplitEntityRows(db, repoId);
     return {
       after: state.topoOrder,
       mode: state.topoOrder === undefined ? "full" : "incremental",

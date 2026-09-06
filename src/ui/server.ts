@@ -9,6 +9,7 @@ import {
   ladderStats,
   listEntities,
   ostracisedFor,
+  rationaleGroups,
   repoSummary,
 } from "./data.ts";
 import {
@@ -23,6 +24,7 @@ import {
   HOTSPOTS_ROUTE,
   LADDER_ROUTE,
   OSTRACISED_ROUTE,
+  RATIONALES_ROUTE,
   SUMMARY_ROUTE,
   absolute,
   evolutionRoute,
@@ -67,6 +69,8 @@ export const LADDER_PATH = absolute(LADDER_ROUTE);
 export const DISCONTINUITIES_PATH = absolute(DISCONTINUITIES_ROUTE);
 /** 攪動熱點。**與 CLI 共用 `listHotspots`**，不另寫一份查詢。 */
 export const HOTSPOTS_PATH = absolute(HOTSPOTS_ROUTE);
+/** 理由群組。引文只出現一次，涵蓋範圍由 entities / reach 說明。 */
+export const RATIONALES_PATH = absolute(RATIONALES_ROUTE);
 export const evolutionPath = (stableKey: string) =>
   absolute(evolutionRoute(stableKey));
 
@@ -171,6 +175,11 @@ export function createUiServer(options: UiOptions): Server {
         // 兩邊各數一次的話，畫面與 CLI 遲早會給出不同的數字。
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(hotspotsView(db, repoId)));
+        return;
+      }
+      if (url.pathname === RATIONALES_PATH) {
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify(rationaleGroups(db, repoId)));
         return;
       }
       const key = stableKeyFromPath(url.pathname);

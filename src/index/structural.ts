@@ -553,6 +553,51 @@ export function assertNoCrossRepoRows(db: DatabaseSync, repoId: number): void {
   );
 }
 
+/**
+ * 一筆 change 所指的前後 revision 必須都屬於 change 的 entity。
+ *
+ * `(commit_id, slot_id)` 是 revision 的唯一座標，不是 entity 身份。若呼叫端先用
+ * 另一個 birth 座標建出新 entity，再由 `ensureRevision` 命中同一 slot 上的既有
+ * revision，就會留下「沒有 revision 的 ghost entity，卻持有別人的 change」。
+ * 外鍵全部合法，SQLite 不會替我們擋；這道才是身份不變量本身。
+ */
+export function assertNoSplitEntityRows(db: DatabaseSync, repoId: number): void {
+  const row = prep(db,
+    `SELECT side, change_id AS changeId, change_entity AS changeEntity,
+            revision_id AS revisionId, revision_entity AS revisionEntity
+       FROM (
+         SELECT 'prev' AS side, rc.id AS change_id,
+                rc.entity_id AS change_entity, r.id AS revision_id,
+                r.entity_id AS revision_entity
+           FROM revision_change rc
+           JOIN entity e ON e.id = rc.entity_id
+           JOIN revision r ON r.id = rc.prev_revision
+          WHERE e.repo_id = ? AND r.entity_id <> rc.entity_id
+         UNION ALL
+         SELECT 'next' AS side, rc.id AS change_id,
+                rc.entity_id AS change_entity, r.id AS revision_id,
+                r.entity_id AS revision_entity
+           FROM revision_change rc
+           JOIN entity e ON e.id = rc.entity_id
+           JOIN revision r ON r.id = rc.next_revision
+          WHERE e.repo_id = ? AND r.entity_id <> rc.entity_id
+       )
+      LIMIT 1`,
+  ).get(repoId, repoId) as {
+    side: string;
+    changeId: number;
+    changeEntity: number;
+    revisionId: number;
+    revisionEntity: number;
+  } | undefined;
+  if (row === undefined) return;
+  throw new Error(
+    `repo ${repoId} 的 revision_change ${row.changeId}（entity ${row.changeEntity}）`
+    + `在 ${row.side} 指向 entity ${row.revisionEntity} 的 revision ${row.revisionId}。\n`
+    + "同一段程式碼已分裂成兩個身份（不變量 1）；請重建此 repo 的索引。",
+  );
+}
+
 export function ensureSlot(
   db: DatabaseSync,
   repoId: number,
@@ -963,10 +1008,19 @@ export function ensureRevision(
     observed.kind,
     String(observed.occurrence),
   );
-  const existing = prep(db, 
-    "SELECT id FROM revision WHERE commit_id = ? AND slot_id = ?",
-  ).get(commitId(db, repoId, observed.commit), slotId) as { id: number } | undefined;
-  if (existing) return existing.id;
+  const existing = prep(db,
+    "SELECT id, entity_id AS entityId FROM revision WHERE commit_id = ? AND slot_id = ?",
+  ).get(commitId(db, repoId, observed.commit), slotId) as
+    { id: number; entityId: number } | undefined;
+  if (existing) {
+    if (existing.entityId !== entityId) {
+      throw new Error(
+        `revision ${existing.id} 已屬於 entity ${existing.entityId}，`
+        + `不可再交給 entity ${entityId}（不變量 1）。`,
+      );
+    }
+    return existing.id;
+  }
 
   const bytes = utf8ByteRange(observed.node, observed.source);
   const { startLine: lineStart, endLine: lineEnd } = lineRange(observed);

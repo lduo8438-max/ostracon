@@ -18,6 +18,8 @@ export const OSTRACISED_ROUTE = "api/ostracised.json";
 export const LADDER_ROUTE = "api/ladder.json";
 export const DISCONTINUITIES_ROUTE = "api/discontinuities.json";
 export const HOTSPOTS_ROUTE = "api/hotspots.json";
+/** 以（引文、commit、kind）為單位的理由；不再把扇出誤算成理由數。 */
+export const RATIONALES_ROUTE = "api/rationales.json";
 export const evolutionRoute = (stableKey: string) =>
   `api/evolution/${stableKey}.json`;
 
@@ -29,6 +31,7 @@ export const FIXED_ROUTES = [
   LADDER_ROUTE,
   DISCONTINUITIES_ROUTE,
   HOTSPOTS_ROUTE,
+  RATIONALES_ROUTE,
 ] as const;
 
 /**

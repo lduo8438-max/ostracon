@@ -1,6 +1,6 @@
 # 扇出、排序與可達性：資料與互動規格
 
-**狀態**：提案。尚未實作。
+**狀態**：第 1–3 步已實作；搜尋尚未實作。
 **來源**：兩套陌生 repo 的實測（pypa/pip 16,241 commit、microsoft/playwright
 17,815 commit），量測腳本 `reports/probe/profile.mjs`，兩套共用同一支。
 **這份文件先定資料與互動規格，不畫版面。**
@@ -38,7 +38,8 @@ API  "due to UnhandledPromiseRejection, the related error should be…"
 | 有可呈現 claim 的 entity | 4,243 | 4,155 |
 | **有「專屬」理由的 entity** | **125** | **45** |
 | 逐列 claim（現在畫面數的） | 6,866 | 6,982 |
-| **相異引文（該數的單位）** | **762** | **490** |
+| **相異引文文字** | **762** | **490** |
+| **引文群組（文字＋commit＋kind）** | **814** | **531** |
 | 縮小倍率 | 9.0× | 14.2× |
 | 專屬引文 ／ 整批引文 | 152 ／ 610 | 54 ／ 436 |
 | 最大扇出 | 790 | 341 |
@@ -72,7 +73,7 @@ interface RationaleGroup {
   text: string             // 已過 unwrapQuote
   kind: 'why' | 'constraint' | 'tradeoff' | 'abandoned_reason'
   commitSha: string        // 說這句話的那顆 commit
-  scope: 'entity' | 'shared'
+  scope: 'entity' | 'batch'
   entities: string[]       // stable_key；**完整清單，不截斷**
   reach: number            // = entities.length，與 entities 同一個陣列導出
 }
@@ -81,9 +82,9 @@ interface RationaleGroup {
 `reach` **必須從 `entities` 導出**，不得另算——標頭數字與清單分岔在這個專案
 已經出過事（CLI 說 5 顆聚合 commit、UI 說 6 顆）。
 
-端點：`api/rationales.json`。**體積要先量**：pip 762 條 × 平均 9 個 entity，
-playwright 490 × 14；估計 100–200 KB（gzip 前）。若超過就分片，分片規則要與
-`evolution/<key>.json` 一致。
+端點：`api/rationales.json`。進入時間軸畫面時載入；首頁與另外四個畫面不付這份
+資料的成本。**不能等 entity 選定後才載入**：未指定深連結時，預設 entity 本身就
+要由 Best explained 根據群組決定。指定深連結時仍可先解析 key，再與 timeline 並行。
 
 ### 2.2 呈現與統計
 
@@ -96,8 +97,11 @@ playwright 490 × 14；估計 100–200 KB（gzip 前）。若超過就分片，
 
 | | 現在（列） | 改後（引文） |
 |---|---:|---:|
-| pip | 6,866 | 762 |
-| playwright | 6,982 | 490 |
+| pip | 6,866 | 814 |
+| playwright | 6,982 | 531 |
+
+762／490 是去重後的**文字**數；畫面依資料契約數的是（文字、commit、kind）群組。
+同一句話在兩顆 commit 出現是兩次陳述，不可為了追求較小的數字合併歸屬。
 
 ### 2.3 核心驗收
 
@@ -151,6 +155,22 @@ Most changed 的每一列要逐列標示 `專屬` / `整批` / `無理由`——
 
 集合大小已知：Best explained 的「第一級」（有專屬理由）在 pip 是 **125 個**、
 playwright 是 **45 個**。**小到可以整份列出**，所以第一級不需要分頁。
+
+### 3.4 實作後的獨立驗收（2026-09-06）
+
+修掉分裂身份並用 fresh DB 重建後，第一級實際是 pip **161** 個、playwright
+**85** 個；先前的 125／45 來自受汙染索引，保留在上方只作當時選方向的量測記錄。
+
+以靜態匯出的實際候選集合（有 claim 的全部收，再以 churn 補足）跑同一份前端排序：
+
+- pip：Best explained 前四名是 `_create_svn_initools_repo`、`generate_metadata`、
+  `TestData`、`installer`，全都有 1:1 引文；`InstallRequirement` 不在前十。
+  Most changed 第一名則正是 `InstallRequirement`（484 次改動）。
+- playwright：Best explained 前十沒有 `Frame`／`Page`；Most changed 前兩名則是
+  `Frame`（453）與 `Page`（421）。
+
+兩套都讓兩個入口在第一屏產生可見差異。排序是明示的字典序，沒有合成分數；列上
+無論在哪個入口都顯示 entity-only／shared／no rationale。
 
 ---
 
@@ -218,8 +238,10 @@ playwright 有 42,512 條 timeline。是否全部靜態化是**體積與載入�
 
 1. **資料層先行**：`RationaleGroup` 與 `coverage`，兩者都可以在沒有畫面的
    情況下用 pip／playwright 驗證數字。
-2. 標頭與統計改成數引文群組（**這一步就能驗核心驗收**）。
-3. Best explained 入口（字典序），Most changed 加逐列標示。
+2. **已完成**：標頭與 picker 統計改成數引文群組；逐列游標仍明示為 rows，
+   沒有拿群組數假裝它能在列之間跳轉。
+3. **已完成**：Best explained 入口（字典序），Most changed 加逐列標示；兩套
+   陌生 repo 的前十名實測見 §3.4。
 4. 搜尋：本機 server 先做，靜態匯出的方案另議（可能是預先產生的索引檔）。
 
 每一步都要能在 pip 與 playwright 上各跑一次並記下數字。

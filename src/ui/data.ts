@@ -454,7 +454,7 @@ export function entityCoverage(
  * playwright 是 0 條——**分開的代價是 9 列，合併的代價是一類錯誤。**
  */
 export interface RationaleGroup {
-  /** 穩定且可放進網址：`sha256(text + NUL + sha)` 的前 16 個十六進位字元。 */
+  /** 穩定且可放進網址：`sha256(text + NUL + sha + NUL + kind)` 的前 16 個十六進位字元。 */
   quoteId: string;
   /** 已過 `unwrapQuote`。儲存層仍然逐字。 */
   text: string;

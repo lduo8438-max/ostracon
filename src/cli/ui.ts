@@ -8,6 +8,7 @@ import {
   PARTIAL_INDEX_NOTICE,
 } from "../index/repo-pass.ts";
 import { startUiServer } from "../ui/server.ts";
+import { assertNoSplitEntityRows } from "../index/structural.ts";
 
 /**
  * `ostracon ui` — 三欄畫面：結構 → 演化 → 意圖。
@@ -38,8 +39,13 @@ export async function main(args: string[]): Promise<void> {
   // 本機檢視不擋，但要說出來——降級過的索引會少掉跨檔案搬移、多出假誕生。
   // 匯出那一支是直接拒絕的：它的產出會被發佈出去，收不回來。
   const probe = new DatabaseSync(dbPath, { readOnly: true });
-  const scope = declarationScopeOf(probe, repoId);
-  probe.close();
+  let scope: ReturnType<typeof declarationScopeOf>;
+  try {
+    assertNoSplitEntityRows(probe, repoId);
+    scope = declarationScopeOf(probe, repoId);
+  } finally {
+    probe.close();
+  }
 
   const { url } = await startUiServer({ dbPath, repoId, port });
   if (scope === "lineage") console.log(`注意：${PARTIAL_INDEX_NOTICE}`);

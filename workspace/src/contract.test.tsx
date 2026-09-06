@@ -5,7 +5,8 @@ import { describe, expect, it, beforeAll } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MotionConfig } from 'framer-motion'
 import { DiscontinuitiesBody, HotspotsBody, LadderBody, OstracisedBody, TimelineBody, TimelineView, Workspace } from './App'
-import type { DiscontinuityView, OstracisedView, TimelineRow, TimelineView as TimelineViewData } from './types'
+import { featuredKey, orderDeclarations } from './api'
+import type { DiscontinuityView, OstracisedView, RationaleGroup, TimelineRow, TimelineView as TimelineViewData } from './types'
 
 /**
  * **這幾條要的是「真的渲染起來」，不是「純函式回對值」。**
@@ -55,9 +56,22 @@ const timeline = (rows: TimelineRow[]): TimelineViewData => ({
   stableKey: KEY,
   dead: true,
   total: rows.length,
-  entityRationales: rows.filter(r => r.rationale).length,
-  batchRationales: 0,
   rows,
+})
+
+const rationale = (
+  scope: RationaleGroup['scope'] = 'entity',
+  entities = [KEY],
+  quoteId = 'quote-1',
+): RationaleGroup => ({
+  quoteId,
+  text: 'to prevent RangeError',
+  kind: 'why',
+  commitSha: 'sha2',
+  subject: 'fix: cap the range',
+  scope,
+  entities,
+  reach: entities.length,
 })
 
 describe('空資料是合法輸入', () => {
@@ -114,7 +128,7 @@ describe('時間軸沒有專屬理由時', () => {
     // 理由是稀有的（Osiris 4.0%）。「一條都沒有」是常態，不是例外。
     window.location.hash = ''
     const { html, container } = render(
-      <TimelineBody data={timeline(rows)} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline(rows)} entities={[]} rationales={[]} totalEntities={0} onSelect={() => {}} />,
     )
     expect(container.querySelectorAll('.timeline-row')).toHaveLength(3)
     expect(html).toContain('0 / 0')
@@ -129,7 +143,7 @@ describe('時間軸沒有專屬理由時', () => {
     // 而那個網址已經公開、被存起來、被貼給別人。
     window.location.hash = `#${KEY}`
     const { container } = render(
-      <TimelineBody data={timeline(rows)} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline(rows)} entities={[]} rationales={[]} totalEntities={0} onSelect={() => {}} />,
     )
     expect(container.querySelectorAll('.timeline-row')).toHaveLength(3)
   })
@@ -139,9 +153,10 @@ describe('時間軸沒有專屬理由時', () => {
     // 不是同一個母體——這個專案已經被同型的兩個分母咬過一次。
     window.location.hash = ''
     const { html, container } = render(
-      <TimelineBody data={timeline([row(1), row(2, 'to prevent RangeError')])} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1), row(2, 'to prevent RangeError')])} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
     )
-    expect(html).toContain('1 / 1')
+    expect(html).toContain('1 / 1 rows')
+    expect(html).toContain('1</b><span>entity quote groups')
     expect(container.querySelector<HTMLButtonElement>('.jump-control')?.disabled).toBe(false)
     expect(container.querySelectorAll('.timeline-row.selected')).toHaveLength(1)
   })
@@ -151,12 +166,24 @@ describe('時間軸沒有專屬理由時', () => {
     // 捲到別的地方——把「找不到」偽裝成「找到了」。
     window.location.hash = `#${KEY}/sha1`
     const { html, container } = render(
-      <TimelineBody data={timeline([row(1), row(2, 'because X')])} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1), row(2, 'because X')])} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
     )
     const selected = container.querySelectorAll('.timeline-row.selected')
     expect(selected).toHaveLength(1)
     expect(selected[0]!.querySelector('strong')?.textContent).toBe('sha1')
-    expect(html).toContain('0 / 1')
+    expect(html).toContain('0 / 1 rows')
+  })
+
+  it('**同一引文扇出到多列，標頭仍只算一個群組**', () => {
+    window.location.hash = ''
+    const rows = Array.from({ length: 30 }, (_, index) => row(index + 1, 'same quote'))
+    const { container } = render(
+      <TimelineBody data={timeline(rows)} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
+    )
+    const jump = container.querySelector('.jump-control')!
+    expect(jump.querySelector(':scope > b')?.textContent).toBe('1')
+    expect(jump.textContent).toContain('entity quote groups')
+    expect(jump.textContent).toContain('1 / 30 rows')
   })
 })
 
@@ -175,7 +202,7 @@ describe('從舊頁面搬過來的契約', () => {
     window.location.hash = ''
     const rows = [row(1), row(2, 'to prevent RangeError')]
     const { container } = render(
-      <TimelineBody data={{ ...timeline(rows), batchRationales: 1 }} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline(rows)} entities={[]} rationales={[rationale(), rationale('batch', [KEY, 'b'.repeat(64)], 'quote-2')]} totalEntities={0} onSelect={() => {}} />,
     )
     const cells = container.querySelectorAll('.timeline-evidence')
     expect(cells).toHaveLength(2)
@@ -190,7 +217,7 @@ describe('從舊頁面搬過來的契約', () => {
     window.location.hash = ''
     const before = history.length
     const { container } = render(
-      <TimelineBody data={timeline([row(1), row(2, 'because X')])} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1), row(2, 'because X')])} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
     )
     act(() => { container.querySelector<HTMLButtonElement>('.jump-control')!.click() })
     expect(window.location.hash).toBe(`#${KEY}/sha2`)
@@ -206,7 +233,7 @@ describe('從舊頁面搬過來的契約', () => {
       { stableKey: 'b'.repeat(64), symbol: 'live', path: 'a.ts', revisions: 9, withEntityIntent: 2, withBatchIntent: 0, dead: false },
     ]
     const { container } = render(
-      <TimelineBody data={timeline([row(1)])} entities={entities} totalEntities={entities.length} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1)])} entities={entities} rationales={[]} totalEntities={entities.length} onSelect={() => {}} />,
     )
     act(() => { container.querySelector<HTMLButtonElement>('.picker-open')!.click() })
     const picker = container.querySelector('.picker')!
@@ -242,6 +269,7 @@ describe('深連結解析（真的發請求）', () => {
       if (url.includes('api/evolution/')) {
         return serve([{ shortSha: 'sha1', committedAt: '2026-01-01', changeLevel: 'raw', hunkEvidence: 'touched', tier: 'L1', path: 'dep.ts', lineStart: 1, lineEnd: 2, intent: [] }])
       }
+      if (url.endsWith('api/rationales.json')) return serve([])
       return Promise.resolve(new Response('nope', { status: 404 }))
     }) as typeof fetch
     return seen
@@ -299,12 +327,12 @@ describe('深連結解析（真的發請求）', () => {
 describe('宣告選單是一個真的 modal', () => {
   const entities = [
     { stableKey: 'a'.repeat(64), symbol: 'alpha', path: 'a.ts', revisions: 3, withEntityIntent: 1, withBatchIntent: 0, dead: false },
-    { stableKey: 'b'.repeat(64), symbol: 'beta', path: 'b.ts', revisions: 2, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+    { stableKey: 'b'.repeat(64), symbol: 'beta', path: 'b.ts', revisions: 20, withEntityIntent: 0, withBatchIntent: 0, dead: false },
   ]
   const openPicker = (total = entities.length) => {
     window.location.hash = ''
     const { container } = render(
-      <TimelineBody data={timeline([row(1)])} entities={entities} totalEntities={total} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1)])} entities={entities} rationales={[rationale()]} totalEntities={total} onSelect={() => {}} />,
     )
     const opener = container.querySelector<HTMLButtonElement>('.picker-open')!
     opener.focus()
@@ -366,6 +394,51 @@ describe('宣告選單是一個真的 modal', () => {
     const { container } = openPicker(entities.length)
     expect(container.querySelector('.picker-foot')!.textContent).not.toContain('curated, not complete')
   })
+
+  it('picker 顯示的是引文群組數，不是逐列 claim 數', () => {
+    const { container } = openPicker()
+    const alpha = [...container.querySelectorAll('.picker-row')]
+      .find(item => item.textContent?.includes('alpha'))!
+    expect(alpha.textContent).toContain('1 entity-only group')
+    expect(alpha.textContent).not.toContain('1 rationale')
+  })
+
+  it('預設看解釋品質，切換後才按改動量排序', () => {
+    // beta 改得更多，但 alpha 有一個真正的 entity-only 引文群組。舊排序讀的是
+    // EntityListItem.withEntityIntent；這條直接驗畫面使用 RationaleGroup。
+    const { container } = openPicker()
+    const symbols = () => [...container.querySelectorAll('.picker-row strong')]
+      .map(item => item.textContent)
+    expect(symbols().slice(0, 2)).toEqual(['alpha', 'beta'])
+    const changed = [...container.querySelectorAll<HTMLButtonElement>('.picker-order button')]
+      .find(button => button.textContent === 'Most changed')!
+    expect(changed.getAttribute('aria-pressed')).toBe('false')
+    act(() => { changed.click() })
+    expect(changed.getAttribute('aria-pressed')).toBe('true')
+    expect(symbols().slice(0, 2)).toEqual(['beta', 'alpha'])
+    expect(container.querySelector('.picker-order-note')?.textContent)
+      .toContain('rationale scope remains visible')
+  })
+
+  it('Best explained 完整遵守群組數、共用範圍、改動量的字典序', () => {
+    const rows = [
+      { stableKey: 'a'.repeat(64), symbol: 'one-wide', path: 'a.ts', revisions: 99, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'b'.repeat(64), symbol: 'one-narrow', path: 'b.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'c'.repeat(64), symbol: 'two-entity', path: 'c.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false },
+      { stableKey: 'd'.repeat(64), symbol: 'no-reason', path: 'd.ts', revisions: 200, withEntityIntent: 9, withBatchIntent: 0, dead: false },
+    ]
+    const groups = [
+      rationale('entity', [rows[0]!.stableKey], 'entity-a'),
+      rationale('entity', [rows[1]!.stableKey], 'entity-b'),
+      rationale('entity', [rows[2]!.stableKey], 'entity-c1'),
+      rationale('entity', [rows[2]!.stableKey], 'entity-c2'),
+      rationale('batch', [rows[0]!.stableKey, rows[2]!.stableKey, 'e'.repeat(64), 'f'.repeat(64)], 'wide'),
+      rationale('batch', [rows[1]!.stableKey, rows[2]!.stableKey], 'narrow'),
+    ]
+    expect(orderDeclarations(rows, groups, 'explained').map(item => item.symbol))
+      .toEqual(['two-entity', 'one-narrow', 'one-wide', 'no-reason'])
+    expect(featuredKey(rows, groups)).toBe(rows[2]!.stableKey)
+  })
 })
 
 describe('看起來可按的東西必須真的可按', () => {
@@ -375,7 +448,7 @@ describe('看起來可按的東西必須真的可按', () => {
     // 所以逐個釘住實際出過問題的那幾個。
     window.location.hash = ''
     const { container } = render(
-      <TimelineBody data={timeline([row(1)])} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline([row(1)])} entities={[]} rationales={[]} totalEntities={0} onSelect={() => {}} />,
     )
     const badge = container.querySelector('.tier-badge')!
     expect(badge.tagName).not.toBe('BUTTON')
@@ -413,7 +486,7 @@ describe('理由跳轉的第一下', () => {
     window.location.hash = ''
     const rows = [row(1, 'because A'), row(2), row(3, 'because C')]
     const { container } = render(
-      <TimelineBody data={timeline(rows)} entities={[]} totalEntities={0} onSelect={() => {}} />,
+      <TimelineBody data={timeline(rows)} entities={[]} rationales={[rationale(), rationale('entity', [KEY], 'quote-2')]} totalEntities={0} onSelect={() => {}} />,
     )
     act(() => { container.querySelector<HTMLButtonElement>('.jump-control')!.click() })
     expect(window.location.hash).toBe(`#${KEY}/sha1`)
@@ -446,6 +519,7 @@ describe('上一頁要回得去', () => {
       if (url.includes('api/evolution/')) {
         return serveJson([{ shortSha: 'sha1', committedAt: '2026-01-01', changeLevel: 'raw', hunkEvidence: 'touched', tier: 'L1', path: 'c.ts', lineStart: 1, lineEnd: 2, intent: [] }])
       }
+      if (url.endsWith('api/rationales.json')) return serveJson([])
       if (url.endsWith('api/ladder.json')) return serveJson({ tiers: [], crossFileTotal: 0, moves: [] })
       if (url.endsWith('api/discontinuities.json')) return serveJson({ total: 0, incomparable: 0, snippets: 'not-requested', rows: [] })
       if (url.endsWith('api/ostracised.json')) return serveJson({ rows: [], hiddenTests: 0, suspected: 0 })

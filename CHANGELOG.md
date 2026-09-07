@@ -11,16 +11,53 @@
 
 ---
 
-## [Unreleased]
+## [0.1.3] — 2026-09-07
 
-### 新增：全索引宣告搜尋
+**W10：理由的份量與宣告的可達性。** 這一版由兩套未調過的陌生 repo 驗出：
+pypa/pip（16,241 commit）與 microsoft/playwright（17,815 commit）。schema 仍是
+v3，沒有新增或移除 CLI 旗標。
 
-- `ostracon ui` 的宣告 picker 現在能依 symbol 或 path 搜尋資料庫裡的**全部**宣告，
-  不再只篩選前 400 筆策展清單；清單外結果與固定網址都能打開完整 timeline。
-- 空搜尋仍保留 Best explained／Most changed 兩個策展入口。輸入搜尋時改按名稱命中度
-  排序，不為了顯示改動量而掃完整 `revision_change`。
-- 靜態匯出只讓確實帶有 timeline 的宣告進搜尋目錄，並由 coverage 明示它是子集；
-  不會產生看得到、點下去卻 404 的結果。
+### 理由群組與扇出
+
+- 同一條引文扇出到多個宣告時，現在只算**一個引文群組**，並標示它是 entity-only
+  或 shared、實際涵蓋幾個宣告；不再把資料庫裡每一列 claim 都顯示成一條獨立理由。
+  實測 pip 的 6,866 列收斂成 814 個群組，playwright 的 6,982 列收斂成 531 個；
+  若只按引文文字去重，則分別是 762 與 490 條。
+- 時間軸標頭與宣告 picker 都改數引文群組；逐列的暖色理由仍只顯示真正專屬於該
+  宣告的引文。整批理由保留在標頭，不會被收回，也不會冒充專屬理由。
+- 新增 `api/rationales.json`，以（引文、commit、kind）為單位公開群組、scope、
+  reach 與 entity 集合。server 與靜態匯出共用同一個 schema。
+
+### 宣告排序與全索引搜尋
+
+- 宣告 picker 有兩個不同入口：**Best explained** 先列專屬理由，再依 shared reach
+  與改動量打破平手；**Most changed** 直接依改動次數排序，每列仍標示理由範圍。
+- `ostracon ui` 現在能依 symbol 或 path 搜尋資料庫裡的**全部**宣告，不再只篩選
+  前 400 筆策展清單；清單外結果與固定網址都能打開完整 timeline。空搜尋仍保留
+  兩個策展入口，文字搜尋按 exact symbol、prefix、substring、path hit 排序。
+- 新增延遲載入的 `api/entity-search.json`。搜尋目錄只帶 stable key、最後位置與
+  存活狀態，不為名稱搜尋掃完整 `revision_change`；playwright 的 42,512 筆首次
+  生成實測 0.69 秒、gzip 2.01 MB，之後由 server 快取。
+- 靜態匯出只讓確實帶有 timeline 的宣告進搜尋目錄，並由 `summary.coverage` 明示
+  indexed／discoverable／inspectable 與選取規則；不會產生看得到、點下去卻 404
+  的結果。
+
+### 修正：repo-scoped `why` 不再分裂身份
+
+- 已完成全 repo pass 的索引再跑 `why` 時，舊版會疊上一趟單一血緣快路徑；跨檔案
+  搬移的 birth 座標因此可能不同，同一段程式碼會長出兩個 stable key，並留下
+  `revision_change` 指向另一個 entity revision 的 ghost。現在 repo-scoped 索引
+  一律沿用 repo pass 的增量水位線，不再混入 lineage pass。
+- `why`、`ui`、`export` 與 repo pass 新增身份不變量守門：一旦讀到既有 split row
+  就明確拒絕並要求重建，不再讓錯誤的 entity 分母、coverage 或靜態站台流出去。
+
+### 資料庫與安裝相容性
+
+- **schema 仍是 v3。** 健康的 0.1.2 索引可直接使用，不需要遷移；只有已被舊版
+  `why` 寫入 split identity 的索引會被拒絕，必須從空 DB 重建。
+- 執行期相依與封裝檔案數不變，仍是三份 tree-sitter 相依與 207 個檔案。
+
+---
 
 ## [0.1.2] — 2026-09-03
 

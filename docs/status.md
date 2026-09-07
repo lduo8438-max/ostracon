@@ -20,8 +20,8 @@ Best explained／Most changed 雙入口，以及獨立的全索引宣告搜尋�
 
 W10 的交付也已收束：三套 demo 都由釘死的 commit 以空 DB 重建，split identity
 偵測為 0，stable key 指紋與修前健康索引相同。`ostracon@0.1.3` 已於 2026-09-07
-發布；`origin/main`、annotated tag `v0.1.3`、GitHub Release 與 npm `gitHead` 都指向
-`5b926c5`，registry tarball 的 shasum
+發布；annotated tag `v0.1.3`、GitHub Release 的 target 與 npm `gitHead` 都指向
+發布 commit `5b926c5`，registry tarball 的 shasum
 `a89cec7f8ed17e5e83cb3d24b91cb0f350a54adf` 與 dry-run 相同。從公開 npm registry
 全新安裝後，版本與 help smoke test 均通過。
 

@@ -3,7 +3,7 @@
 > 這份文件記錄「現在長什麼樣」，隨程式碼變動更新。定義與理由在 `architecture.md`，
 > 規則在 `../CLAUDE.md`，資料模型的唯一真相是 `../db/schema.sql`。
 >
-> 最後更新：2026-09-06
+> 最後更新：2026-09-07
 
 ---
 
@@ -17,6 +17,13 @@ Best explained／Most changed 雙入口，以及獨立的全索引宣告搜尋�
 皆回 200。playwright 搜尋目錄首次生成 0.69 秒、gzip 2.01 MB，記憶體內篩選
 2–4 ms。靜態匯出仍只列確實有 timeline 的集合，不製造壞連結。完整契約與兩套
 語料的前後數字見 `plan-rationale-scope.md`。
+
+W10 的交付也已收束：三套 demo 都由釘死的 commit 以空 DB 重建，split identity
+偵測為 0，stable key 指紋與修前健康索引相同。`ostracon@0.1.3` 已於 2026-09-07
+發布；`origin/main`、annotated tag `v0.1.3`、GitHub Release 與 npm `gitHead` 都指向
+`5b926c5`，registry tarball 的 shasum
+`a89cec7f8ed17e5e83cb3d24b91cb0f350a54adf` 與 dry-run 相同。從公開 npm registry
+全新安裝後，版本與 help smoke test 均通過。
 
 ---
 
@@ -48,9 +55,10 @@ git 原生座標，不得引用索引器產生的 ID。
 
 ## 2. 模組地圖
 
-套件 `ostracon`（版本 `0.1.0`，可發布；`files` 白名單只有 `dist`、`db/schema.sql`、
-README、LICENSE，`src/golden/` 不進封裝）。2026-08-03 實跑全部測試 **237/237 通過**、
-`tsc --noEmit` **零錯誤**。
+套件 `ostracon`（版本 `0.1.3`，已發布；`files` 白名單只有 `dist`、`db/schema.sql`、
+README、CHANGELOG、LICENSE，`src/golden/` 不進封裝）。2026-09-07 發布閘門實跑核心
+測試 **483/483 通過**、前端契約測試 **33/33 通過**、`tsc --noEmit` **零錯誤**，
+完整 build 通過。
 
 **Node 24 以上，且內建 SQLite 必須含 FTS5。** 實測 v24.14.1／CI 的 v24.18.0 可用、
 v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。這是 runtime 差異，
@@ -102,9 +110,15 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/claim/aggregate.ts` | 聚合訊息偵測（squash merge 把 N 個 PR 壓成一顆） | 判準是結構不是數量；CRLF 一併處理 |
 | `src/claim/scope.ts` | 一條理由的尺度：專講這個宣告，還是整批改動共用 | **CLI 與畫面共用**，不各算一次 |
 | `src/ui/data.ts` | 組裝結構／時間軸／意圖／被推翻的做法 | 一律讀 `v_presentable_claim`；`ostracisedFor` 走 CLI 的同一支查詢 |
-| `src/ui/page.ts` | 三欄 HTML／CSS／JS | 列高逐列量測、雙向同步捲動；**整份是一個樣板字串，註解裡的反引號會截斷它** |
-| `src/ui/server.ts` | 唯讀本機 HTTP server | 只綁 `127.0.0.1`，零外部資源；端點是路徑式 `.json` |
-| `src/ui/export.ts` | 把索引匯出成純靜態站台（線上 demo） | `--label` 必填，否則會公開匯出者的本機路徑 |
+| `src/ui/routes.ts` | server／export／前端共用的 API 路由常數 | 前端相對於 `document.baseURI` 解析，子目錄部署不另寫一套 |
+| `src/ui/page-logic.ts` | 時間軸 hash 與理由跳轉的共用純函式 | 由 React 前端直接 import；固定網址與計數 predicate 沒有副本 |
+| `src/ui/app-assets.ts` | 定位、讀取建置後的前端資產 | server 與 export 共用；含路徑穿越守門與 MIME 判定 |
+| `src/ui/server.ts` | 唯讀本機 HTTP server 與 JSON API | 只綁 `127.0.0.1`；前端資產與靜態匯出共用同一份 build 產物 |
+| `src/ui/export.ts` | 把索引與前端資產匯出成純靜態站台（線上 demo） | `--label` 必填；搜尋目錄只列確實有 timeline 的宣告 |
+| `workspace/src/App.tsx` | React 工作台：階梯、斷層、時間軸、熱點、被推翻的做法 | 載入、錯誤、空資料與鍵盤互動都有掛載式契約測試 |
+| `workspace/src/api.ts` | 前端資料邊界、view model 與宣告排序 | 路由與理由 predicate 直接引用 `src/ui/` 的唯一來源 |
+| `workspace/src/contract.test.tsx` | 前端渲染與互動契約 | 33 條；真的 mount 元件、跑 effect、發請求與點按控制 |
+| `workspace/src/index.css` | 工作台的排版、狀態與響應式規則 | Tailwind 只掃產品入口，不把測試識別字誤收進正式 CSS |
 | `src/cli/main.ts` | 子指令分派 | 各支直接執行時走的是同一個 `main(args)` |
 | `src/cli/ui.ts` ／ `src/cli/export-site.ts` | `ostracon ui` ／ `ostracon export` | — |
 | `src/golden/corpus.ts` | 依 fixture 的 `clone_url` / `index_until` 取回語料 | `readdirSync` 掃整個 `fixtures/`，新 fixture 自動被認得 |

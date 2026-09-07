@@ -1184,6 +1184,18 @@ vuejs/core 752 → 1,245 筆、31.7 MB → 34.6 MB。
 改成路徑之後匯出只是把同名檔案寫到磁碟，**頁面一個字都不用改**，測試也直接
 比對「伺服器回的」與「匯出的」是否一字不差。
 
+`api/entity-search.json` 仍遵守「同一路徑、同一份頁面」，但涵蓋範圍由部署能力
+決定：本機 server 旁邊有 SQLite，可以讓全部 indexed 宣告都 discoverable 且
+inspectable；靜態匯出只能列出這趟真的寫了 timeline 的宣告。兩邊的 payload schema
+相同，差異由 `summary.coverage` 明示，前端沒有 `server/static` 分支。
+
+這份端點是**延遲載入的輕量目錄**，不是把 `entities.json` 的 400 cap 拿掉。
+後者帶逐列理由與改動統計，playwright 全量實測 11.4 MB／5.1 秒；搜尋目錄只帶
+stable key、最後的 path／symbol 與存活狀態，42,512 筆為 7.71 MB（gzip 2.01 MB）、
+首次生成 0.69 秒，之後由本機 server 快取。輸入關鍵字後在記憶體篩選約 2–4 ms。
+空搜尋仍顯示 Best explained／Most changed 策展入口；名稱搜尋按 exact symbol、
+symbol prefix、symbol substring、path hit 的次序，不把搜尋相關性硬併進品質分數。
+
 兩個匯出專屬的判準：
 
 - **`--label` 是必填。** `summary.rootPath` 存的是匯出者的本機路徑，實測會印出

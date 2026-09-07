@@ -6,6 +6,7 @@ import {
   fetchHotspots,
   fetchLadder,
   fetchEntities,
+  fetchEntitySearch,
   fetchEvolution,
   fetchOstracised,
   fetchOstracisedTargets,
@@ -25,6 +26,8 @@ import type {
   Discontinuity,
   DiscontinuityView,
   EntityListItem,
+  EntitySearchItem,
+  EntityTarget,
   Snippet,
   Hotspot,
   HotspotView,
@@ -404,17 +407,41 @@ function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolea
  * 每一列顯示改動數與**專屬理由數**——理由是稀有的，所以「值不值得點進去」
  * 這件事必須在點進去之前就看得到。
  */
+/** 名稱命中優先於路徑命中；搜尋是在找東西，不是第三種品質分數。 */
+function orderSearchMatches(rows: EntitySearchItem[], needle: string): EntitySearchItem[] {
+  const rank = (row: EntitySearchItem) => {
+    const symbol = row.symbol.toLowerCase()
+    if (symbol === needle) return 0
+    if (symbol.startsWith(needle)) return 1
+    if (symbol.includes(needle)) return 2
+    return 3
+  }
+  return [...rows].sort((a, b) => rank(a) - rank(b)
+    || a.symbol.localeCompare(b.symbol)
+    || a.path.localeCompare(b.path)
+    || a.stableKey.localeCompare(b.stableKey))
+}
+
 function DeclarationPicker({ entities, rationales, total, current, onPick, onClose }: {
   entities: EntityListItem[]
   rationales: RationaleGroup[]
   /** 這個語料一共有幾個宣告。**清單通常比它少**，見下方頁尾。 */
   total: number
   current?: string
-  onPick: (entity: EntityListItem) => void
+  onPick: (entity: EntityTarget) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
   const [order, setOrder] = useState<DeclarationOrder>('explained')
+  // 搜尋目錄可能有四萬多筆。只在 picker 真正打開時抓，而且由 QueryClient 快取；
+  // 關掉再開不會重新掃那份大索引。
+  const catalog = useQuery({
+    queryKey: ['entity-search'],
+    queryFn: fetchEntitySearch,
+    // 策展清單先讓 modal 立刻可用；完整目錄在背景補上。使用者真的輸入搜尋時，
+    // 下方會等它完成，不會把「尚未載完」說成「沒有結果」。
+    initialData: entities,
+  })
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -451,11 +478,14 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
     [rationales],
   )
   const matches = useMemo(() => {
-    const candidates = needle === ''
-      ? entities
-      : entities.filter(e => `${e.symbol} ${e.path}`.toLowerCase().includes(needle))
-    return orderDeclarations(candidates, rationales, order).slice(0, 60)
-  }, [entities, needle, order, rationales])
+    if (needle === '') return orderDeclarations(entities, rationales, order).slice(0, 60)
+    const candidates = (catalog.data ?? [])
+      .filter(e => `${e.symbol} ${e.path}`.toLowerCase().includes(needle))
+    return orderSearchMatches(candidates, needle).slice(0, 60)
+  }, [catalog.data, entities, needle, order, rationales])
+  const searching = needle !== '' && catalog.isFetching
+  const searchFailed = needle !== '' && catalog.error !== null
+  const searchedCount = needle === '' ? entities.length : (catalog.data?.length ?? 0)
 
   return (
     <div className="picker-backdrop" onClick={onClose} role="presentation">
@@ -474,25 +504,31 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
             className="picker-input"
             type="search"
             value={query}
-            aria-label="Filter declarations"
-            placeholder="Filter by symbol or path"
+            aria-label="Search declarations"
+            placeholder="Search by symbol or path"
             onChange={event => setQuery(event.target.value)}
             // Escape 由對話框那一層處理，這裡只留「Enter 選第一筆」。
             onKeyDown={event => { if (event.key === 'Enter' && matches[0]) onPick(matches[0]) }}
           />
           <div className="picker-order" role="group" aria-label="Declaration order">
-            <button type="button" aria-pressed={order === 'explained'} onClick={() => setOrder('explained')}>Best explained</button>
-            <button type="button" aria-pressed={order === 'changed'} onClick={() => setOrder('changed')}>Most changed</button>
+            <button type="button" disabled={needle !== ''} aria-pressed={order === 'explained'} onClick={() => setOrder('explained')}>Best explained</button>
+            <button type="button" disabled={needle !== ''} aria-pressed={order === 'changed'} onClick={() => setOrder('changed')}>Most changed</button>
           </div>
           <p className="picker-order-note">
-            {order === 'explained'
+            {needle !== ''
+              ? 'Search matches rank exact and prefix symbol hits before path hits.'
+              : order === 'explained'
               ? 'Entity-only groups first; narrower shared groups break the remaining ties.'
               : 'Highest change count first; rationale scope remains visible on every row.'}
           </p>
         </div>
         <div className="picker-list">
-          {matches.length === 0
-            ? <p className="honest-blank">Nothing matches these {format(entities.length)} declarations. The list is curated — it is not the whole corpus.</p>
+          {searching
+            ? <p className="picker-state" role="status">Loading the declaration search index…</p>
+            : searchFailed
+              ? <div className="picker-state error" role="alert"><strong>The search index could not be read.</strong><button type="button" onClick={() => void catalog.refetch()}>Try again</button></div>
+            : matches.length === 0
+            ? <p className="picker-state">Nothing matches {format(catalog.data?.length ?? entities.length)} searchable declarations.</p>
             : matches.map(entity => {
               const counts = rationaleSummaries.get(entity.stableKey) ?? { entity: 0, shared: 0 }
               return (
@@ -507,7 +543,9 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
                     <code>{entity.path}</code>
                   </span>
                   <span className="picker-meta">
-                    <b>{format(entity.revisions)}</b> changes
+                    {'revisions' in entity && typeof entity.revisions === 'number'
+                      ? <><b>{format(entity.revisions)}</b> changes</>
+                      : null}
                     {counts.entity > 0
                       ? <em className="has-rationale">{counts.entity} entity-only group{counts.entity === 1 ? '' : 's'}</em>
                       : counts.shared > 0
@@ -519,14 +557,19 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
             })}
         </div>
         <p className="picker-foot">
-          Showing {matches.length} of {format(entities.length)} · {order === 'explained'
-            ? 'ranked by explanation quality'
-            : 'ranked by change count'}
-          {entities.length < total
-            ? <><br /><b>This list is curated, not complete.</b> {format(total)} declarations
-              are indexed; the list keeps those with a rationale and tops up by change count.
-              Use <code>ostracon why &lt;path&gt;:&lt;symbol&gt;</code> to reach any of them.</>
-            : null}
+          Showing {matches.length} of {format(searchedCount)} · {order === 'explained'
+            ? needle === '' ? 'ranked by explanation quality' : 'ranked by symbol and path match'
+            : needle === '' ? 'ranked by change count' : 'ranked by symbol and path match'}
+          <br />
+          {catalog.isFetching
+            ? entities.length < total
+              ? <><b>This list is curated, not complete.</b> Loading search coverage for {format(total)} indexed declarations…</>
+              : <>Loading search coverage for all {format(total)} indexed declarations…</>
+            : catalog.error
+              ? <><b>Curated list still available.</b> Full search failed to load.</>
+              : catalog.data && catalog.data.length === total
+                ? <><b>Full-index search ready.</b> All {format(total)} declarations are discoverable and inspectable.</>
+                : <><b>This export is curated, not complete.</b> {format(catalog.data?.length ?? entities.length)} of {format(total)} indexed declarations are searchable here.</>}
         </p>
       </div>
     </div>
@@ -548,17 +591,24 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
     ? featuredKey(entities, rationales.data)
     : undefined)
   const inEntities = entities?.find(item => item.stableKey === key)
+  const needsSearch = entities !== undefined && key !== undefined && inEntities === undefined
+  const search = useQuery({
+    queryKey: ['entity-search'],
+    queryFn: fetchEntitySearch,
+    enabled: needsSearch,
+  })
+  const inSearch = search.data?.find(item => item.stableKey === key)
   // **被推翻的做法不在 entities.json 裡，但它們的時間軸一定被匯出。**
   // 只在第一份名單裡找，會讓 Ostracised 的「Open its timeline」指向錯誤頁。
   // 只有找不到時才抓第二份——那份 50.9 KB，沒必要每次都付。
   const fallback = useQuery({
     queryKey: ['ostracised-targets'],
     queryFn: fetchOstracisedTargets,
-    enabled: entities !== undefined && key !== undefined && inEntities === undefined,
+    enabled: needsSearch && search.isSuccess && inSearch === undefined,
   })
-  const entity = inEntities ?? fallback.data?.find(item => item.stableKey === key)
-  const stillLooking = entities !== undefined && inEntities === undefined
-    && key !== undefined && fallback.isPending
+  const entity = inEntities ?? inSearch ?? fallback.data?.find(item => item.stableKey === key)
+  const stillLooking = needsSearch && (search.isPending
+    || (search.isSuccess && inSearch === undefined && fallback.isPending))
   const evolution = useQuery({
     queryKey: ['evolution', entity?.stableKey],
     queryFn: () => fetchEvolution(entity!),
@@ -567,19 +617,26 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
   const query = {
     isPending: list.isPending || rationales.isPending || stillLooking
       || (entity !== undefined && (evolution.isPending || rationales.isPending)),
-    error: list.error ?? fallback.error ?? evolution.error ?? rationales.error,
+    error: list.error ?? (needsSearch ? search.error : null)
+      ?? fallback.error ?? evolution.error ?? rationales.error,
     data: entities && evolution.data && rationales.data
       ? { entities, timeline: evolution.data, rationales: rationales.data }
       : undefined,
   }
   // 兩份名單都找過了還是沒有——網址寫錯或匯出範圍不含它。**要說出來，不要
   // 靜默退回精選**，否則使用者以為自己看的是他要的那一個。
-  if (entities && stableKey !== undefined && entity === undefined && !stillLooking) {
+  if (entities && stableKey !== undefined && entity === undefined
+    && !stillLooking && query.error === null) {
+    const searchedEverything = search.data?.length === totalEntities
     return (
       <div className="view-state error" role="alert">
-        <strong>That declaration is not in this export.</strong>
+        <strong>{searchedEverything
+          ? 'That declaration is not in this index.'
+          : 'That declaration is not in this export.'}</strong>
         <code>{stableKey}</code>
-        <p>Neither the declaration list nor the ostracised list contains it.</p>
+        <p>{searchedEverything
+          ? `All ${format(totalEntities)} indexed declarations were searched.`
+          : 'Neither the searchable declaration list nor the ostracised list contains it.'}</p>
       </div>
     )
   }

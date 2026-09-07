@@ -3,7 +3,20 @@
 > 這份文件記錄「現在長什麼樣」，隨程式碼變動更新。定義與理由在 `architecture.md`，
 > 規則在 `../CLAUDE.md`，資料模型的唯一真相是 `../db/schema.sql`。
 >
-> 最後更新：2026-08-17
+> 最後更新：2026-09-06
+
+---
+
+## W10：理由群組、雙排序與全索引搜尋
+
+W10 四步已完成：`RationaleGroup` 與 coverage 資料契約、標頭／picker 改數引文群組、
+Best explained／Most changed 雙入口，以及獨立的全索引宣告搜尋。
+
+本機 `entity-search.json` 實測完整涵蓋 pip 21,272 與 playwright 42,512 個 entity，
+兩套 `discoverable === indexed === inspectable`；各抽一筆策展清單外結果，timeline
+皆回 200。playwright 搜尋目錄首次生成 0.69 秒、gzip 2.01 MB，記憶體內篩選
+2–4 ms。靜態匯出仍只列確實有 timeline 的集合，不製造壞連結。完整契約與兩套
+語料的前後數字見 `plan-rationale-scope.md`。
 
 ---
 

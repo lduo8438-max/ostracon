@@ -32,7 +32,14 @@ function render(node: React.ReactNode): { html: string; root: Root; container: H
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  act(() => { root.render(<StrictMode>{node}</StrictMode>) })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  act(() => {
+    root.render(
+      <StrictMode>
+        <QueryClientProvider client={client}>{node}</QueryClientProvider>
+      </StrictMode>,
+    )
+  })
   return { html: container.innerHTML, root, container }
 }
 
@@ -250,12 +257,13 @@ describe('從舊頁面搬過來的契約', () => {
 describe('深連結解析（真的發請求）', () => {
   const ENTITY_KEY = 'e'.repeat(64)
   const GONE_KEY = 'f'.repeat(64)
+  const SEARCH_KEY = 'd'.repeat(64)
 
   const serve = (body: unknown) => Promise.resolve(
     new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
   )
 
-  function stubFetch() {
+  function stubFetch(search: unknown[] = []) {
     const seen: string[] = []
     globalThis.fetch = ((input: RequestInfo | URL) => {
       const url = String(input)
@@ -263,6 +271,7 @@ describe('深連結解析（真的發請求）', () => {
       if (url.endsWith('api/entities.json')) {
         return serve([{ stableKey: ENTITY_KEY, symbol: 'live', path: 'a.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false }])
       }
+      if (url.endsWith('api/entity-search.json')) return serve(search)
       if (url.endsWith('api/ostracised.json')) {
         return serve({ rows: [{ stableKey: GONE_KEY, symbol: 'hasBit', path: 'dep.ts', durationDays: 0, strength: 'A', method: 'inverse-diff', bornAt: '2026-01-01', diedAt: '2026-01-01', diedSha: 'abc1234567', diedSubject: 'refactor: reduce bundle size' }], hiddenTests: 0, suspected: 0 })
       }
@@ -311,12 +320,43 @@ describe('深連結解析（真的發請求）', () => {
     expect(seen.some(u => u.endsWith('api/ostracised.json'))).toBe(false)
   })
 
+  it('**只在完整搜尋目錄裡的 key 也能冷開**', async () => {
+    const seen = stubFetch([{
+      stableKey: SEARCH_KEY, symbol: 'searched', path: 'search.ts', revisions: 1, dead: false,
+    }])
+    const c = await mount(SEARCH_KEY)
+    expect(c.querySelector('.view-state.error')).toBeNull()
+    expect(c.querySelectorAll('.timeline-row')).toHaveLength(1)
+    expect(seen.some(u => u.endsWith('api/entity-search.json'))).toBe(true)
+    expect(seen.some(u => u.endsWith('api/ostracised.json'))).toBe(false)
+  })
+
   it('**兩份都沒有時要說出來，不得靜默退回精選**', async () => {
     stubFetch()
     const c = await mount('9'.repeat(64))
     expect(c.querySelector('.view-state.error')).not.toBeNull()
     expect(c.textContent).toContain('not in this export')
     expect(c.querySelectorAll('.timeline-row')).toHaveLength(0)
+  })
+
+  it('**搜尋目錄讀取失敗時不得把錯誤說成宣告不存在**', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('api/summary.json')) {
+        return serve({ rootPath: 'repo', changes: 1, untouched: 0, changesWithEntityIntent: 0, changesWithBatchIntent: 0, counts: { commits: 1, revisions: 1, entities: 2 }, schemaVersion: 3, changeLevels: {}, ostracised: { shown: 0, hiddenTests: 0, suspected: 0 } })
+      }
+      if (url.endsWith('api/entities.json')) {
+        return serve([{ stableKey: ENTITY_KEY, symbol: 'live', path: 'a.ts', revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false }])
+      }
+      if (url.endsWith('api/rationales.json')) return serve([])
+      if (url.endsWith('api/entity-search.json')) {
+        return Promise.resolve(new Response('broken', { status: 500 }))
+      }
+      return serve({ rows: [], hiddenTests: 0, suspected: 0 })
+    }) as typeof fetch
+    const c = await mount('8'.repeat(64))
+    expect(c.querySelector('.view-state.error')?.textContent).toContain('HTTP 500')
+    expect(c.querySelector('.view-state.error')?.textContent).not.toContain('not in this export')
   })
 })
 
@@ -330,6 +370,12 @@ describe('宣告選單是一個真的 modal', () => {
     { stableKey: 'b'.repeat(64), symbol: 'beta', path: 'b.ts', revisions: 20, withEntityIntent: 0, withBatchIntent: 0, dead: false },
   ]
   const openPicker = (total = entities.length) => {
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      if (String(input).endsWith('api/entity-search.json')) {
+        return Promise.resolve(new Response(JSON.stringify(entities), { status: 200 }))
+      }
+      return Promise.resolve(new Response('nope', { status: 404 }))
+    }) as typeof fetch
     window.location.hash = ''
     const { container } = render(
       <TimelineBody data={timeline([row(1)])} entities={entities} rationales={[rationale()]} totalEntities={total} onSelect={() => {}} />,
@@ -438,6 +484,68 @@ describe('宣告選單是一個真的 modal', () => {
     expect(orderDeclarations(rows, groups, 'explained').map(item => item.symbol))
       .toEqual(['two-entity', 'one-narrow', 'one-wide', 'no-reason'])
     expect(featuredKey(rows, groups)).toBe(rows[2]!.stableKey)
+  })
+
+  it('**搜尋會越過策展清單，空字串仍只顯示精選入口**', async () => {
+    const outside = {
+      stableKey: 'c'.repeat(64), symbol: 'outsideCatalog', path: 'deep/outside.ts',
+      revisions: 1, withEntityIntent: 0, withBatchIntent: 0, dead: false,
+    }
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      if (String(input).endsWith('api/entity-search.json')) {
+        return Promise.resolve(new Response(JSON.stringify([...entities, outside]), { status: 200 }))
+      }
+      return Promise.resolve(new Response('nope', { status: 404 }))
+    }) as typeof fetch
+    window.location.hash = ''
+    const { container } = render(
+      <TimelineBody data={timeline([row(1)])} entities={entities} rationales={[]}
+        totalEntities={3} onSelect={() => {}} />,
+    )
+    act(() => { container.querySelector<HTMLButtonElement>('.picker-open')!.click() })
+    expect(container.querySelector('.picker')?.textContent).not.toContain('outsideCatalog')
+
+    const input = container.querySelector<HTMLInputElement>('.picker-input')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(input, 'outside')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    for (let i = 0; i < 10 && !container.textContent?.includes('outsideCatalog'); i += 1) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    expect(container.querySelector('.picker')?.textContent).toContain('outsideCatalog')
+    expect(container.querySelector('.picker-foot')?.textContent).toContain('Full-index search ready')
+    expect([...container.querySelectorAll<HTMLButtonElement>('.picker-order button')]
+      .every(button => button.disabled)).toBe(true)
+    expect(container.querySelector('.picker-order-note')?.textContent)
+      .toContain('exact and prefix symbol hits')
+  })
+
+  it('**完整搜尋失敗時精選仍可用，且錯誤有復原動作**', async () => {
+    globalThis.fetch = (() => Promise.resolve(new Response('broken', { status: 500 }))) as typeof fetch
+    window.location.hash = ''
+    const { container } = render(
+      <TimelineBody data={timeline([row(1)])} entities={entities} rationales={[]}
+        totalEntities={3} onSelect={() => {}} />,
+    )
+    act(() => { container.querySelector<HTMLButtonElement>('.picker-open')!.click() })
+    for (let i = 0; i < 10 && !container.textContent?.includes('Full search failed'); i += 1) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    expect(container.querySelectorAll('.picker-row')).toHaveLength(2)
+    expect(container.querySelector('.picker-foot')?.textContent).toContain('Curated list still available')
+
+    const input = container.querySelector<HTMLInputElement>('.picker-input')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    act(() => {
+      setValue.call(input, 'outside')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('.picker-state.error')?.textContent)
+      .toContain('The search index could not be read')
+    expect(container.querySelector<HTMLButtonElement>('.picker-state.error button')?.textContent)
+      .toBe('Try again')
   })
 })
 

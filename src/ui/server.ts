@@ -5,6 +5,7 @@ import {
   discontinuitiesFor,
   entityCoverage,
   entityIdForStableKey,
+  entitySearchIndex,
   evolutionOf,
   ladderStats,
   listEntities,
@@ -20,6 +21,7 @@ import {
 } from "./app-assets.ts";
 import {
   DISCONTINUITIES_ROUTE,
+  ENTITY_SEARCH_ROUTE,
   ENTITIES_ROUTE,
   HOTSPOTS_ROUTE,
   LADDER_ROUTE,
@@ -62,6 +64,8 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as co
  */
 export const SUMMARY_PATH = absolute(SUMMARY_ROUTE);
 export const ENTITIES_PATH = absolute(ENTITIES_ROUTE);
+/** 全索引宣告搜尋；與策展過的 `entities.json` 分開。 */
+export const ENTITY_SEARCH_PATH = absolute(ENTITY_SEARCH_ROUTE);
 export const OSTRACISED_PATH = absolute(OSTRACISED_ROUTE);
 /** 匹配階梯的分佈與跨檔案搬移清單。 */
 export const LADDER_PATH = absolute(LADDER_ROUTE);
@@ -98,6 +102,9 @@ function repoRootOf(db: DatabaseSync, repoId: number): string | undefined {
 
 export function createUiServer(options: UiOptions): Server {
   const repoId = options.repoId ?? 1;
+  // 索引在 UI 程序存活期間是唯讀的。playwright 的完整目錄約 2 MB gzip；只在第一個
+  // 搜尋請求生成一次，避免使用者每打一輪搜尋都重掃 234 萬筆 revision。
+  let searchIndexJson: string | undefined;
   return createServer((request, response) => {
     // 每一條連線都要自己設 foreign_keys（不變量 13）。這裡是唯讀，但開著
     // 才不會在將來加入寫入時忘記。
@@ -129,19 +136,18 @@ export function createUiServer(options: UiOptions): Server {
         return;
       }
       if (url.pathname === SUMMARY_PATH) {
+        const summary = repoSummary(db, repoId);
+        const indexed = summary.counts.entities;
         response.writeHead(200, JSON_HEADERS);
-        // **可達性由送出的那一層報。** 這台伺服器的清單有上限（`listEntities`
-        // 預設 400），而任何一個 `stable_key` 都打得開時間軸——兩個數字不同，
-        // 所以要分開報，不能共用一句「都查得到」。
+        // 搜尋目錄涵蓋全部 indexed 宣告，而任意 stable_key 都能開 timeline。
+        // `entities.json` 的 400 筆仍是策展入口，不再被拿來冒充可達範圍。
         response.end(JSON.stringify({
-          ...repoSummary(db, repoId),
+          ...summary,
           coverage: entityCoverage(db, repoId, {
-            discoverable: listEntities(db, repoId).length,
-            inspectable: (db.prepare(
-              "SELECT COUNT(*) AS n FROM entity WHERE repo_id = ?",
-            ).get(repoId) as { n: number }).n,
-            rule: "entities with a rationale, topped up by change count",
-            absentReason: "reachable with `ostracon why <path>:<symbol>`",
+            discoverable: indexed,
+            inspectable: indexed,
+            rule: "all indexed declarations through the search catalog",
+            absentReason: null,
           }),
         }));
         return;
@@ -149,6 +155,12 @@ export function createUiServer(options: UiOptions): Server {
       if (url.pathname === ENTITIES_PATH) {
         response.writeHead(200, JSON_HEADERS);
         response.end(JSON.stringify(listEntities(db, repoId)));
+        return;
+      }
+      if (url.pathname === ENTITY_SEARCH_PATH) {
+        searchIndexJson ??= JSON.stringify(entitySearchIndex(db, repoId));
+        response.writeHead(200, JSON_HEADERS);
+        response.end(searchIndexJson);
         return;
       }
       if (url.pathname === OSTRACISED_PATH) {

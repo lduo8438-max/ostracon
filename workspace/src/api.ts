@@ -2,6 +2,8 @@ import type {
   Discontinuity,
   DiscontinuityView,
   EntityListItem,
+  EntitySearchItem,
+  EntityTarget,
   Hotspot,
   HotspotView,
   LadderTier,
@@ -21,6 +23,7 @@ import type {
 // 打包進來；抄一份的代價已經付過一次了（見上方 `get` 的註解）。
 import {
   DISCONTINUITIES_ROUTE,
+  ENTITY_SEARCH_ROUTE,
   ENTITIES_ROUTE,
   HOTSPOTS_ROUTE,
   LADDER_ROUTE,
@@ -76,6 +79,13 @@ interface ApiEntity {
   revisions: number
   withEntityIntent: number
   withBatchIntent: number
+  dead: boolean
+}
+
+interface ApiSearchEntity {
+  stableKey: string
+  path: string
+  symbol: string
   dead: boolean
 }
 
@@ -323,6 +333,14 @@ export async function fetchEntities(): Promise<EntityListItem[]> {
   }))
 }
 
+/**
+ * 完整搜尋目錄。與策展過的 `entities.json` 分開，而且只在 picker 打開或未知
+ * 深連結需要解析時載入。理由群組數仍由 `rationales.json` 導出，不在這裡抄一份。
+ */
+export async function fetchEntitySearch(): Promise<EntitySearchItem[]> {
+  return get<ApiSearchEntity[]>(ENTITY_SEARCH_ROUTE)
+}
+
 export async function fetchRationales(): Promise<RationaleGroup[]> {
   return get<ApiRationaleGroup[]>(RATIONALES_ROUTE)
 }
@@ -449,7 +467,7 @@ export async function fetchOstracisedTargets(): Promise<EntityListItem[]> {
 
 /** 一個宣告的完整時間軸。 */
 export async function fetchEvolution(
-  entity: EntityListItem,
+  entity: EntityTarget,
 ): Promise<TimelineView> {
   const rows = await get<ApiEvolutionRow[]>(evolutionRoute(entity.stableKey))
   // **專屬／整批的分法只有一份**，在 `src/ui/page-logic.ts`。這裡原本自己抄了

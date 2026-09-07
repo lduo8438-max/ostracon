@@ -1208,15 +1208,18 @@ symbol prefix、symbol substring、path hit 的次序，不把搜尋相關性硬
 靜態版**不能用 `file://` 開**（瀏覽器會擋同源 `fetch`），所以 CLI 會印出本機
 預覽的指令。
 
-### 三欄畫面：結構 → 演化 → 意圖
+### 工作台：結構 → 演化 → 意圖
 
-`src/ui/`。`node:http` 加手寫 HTML/CSS/JS，**零新相依、零建置流程、不連外**。
-「不增加執行期相依」是禁令，而 roadmap 把這一版叫「最醜的 UI」——它的工作是把
-端到端跑通，一個框架加一套建置流程換到的東西這裡沒有一項用得上。
+W9 已把原本 `page.ts` 的 579 行樣板頁面換成 `workspace/` 裡的 React／Vite 工作台；
+畫面有匹配階梯、身份斷層、時間軸、攪動熱點與被推翻的做法五個入口。框架與建置
+工具都是 devDependency，安裝後執行期相依仍只有 tree-sitter 與三份 grammar，前端
+則以預先建好的靜態資產隨 `dist` 封裝，**不從外部載入字體、腳本或樣式**。
 
-頁面寫成 TypeScript 模組（`page.ts` 匯出一個字串）而不是獨立的 `.html`，
-是為了讓 `tsc` 直接把它帶進 `dist`：`package.json` 的 `files` 白名單只有 `dist`，
-額外的資產檔要另接一套複製步驟，而那就是安裝摩擦的開始。
+本機 server 與靜態 export 都透過 `src/ui/app-assets.ts` 使用同一份 build 產物；
+API 路由來自 `src/ui/routes.ts`，前端相對於 `document.baseURI` 解析，所以網域根與
+子目錄部署不分叉。固定網址與理由計數的純函式留在 `src/ui/page-logic.ts`，由前端
+直接 import。`workspace/src/contract.test.tsx` 真的 mount 元件、執行 effect 與互動；
+截至 0.1.3 有 33 條契約測試，覆蓋載入、錯誤、空資料、深連結與理由群組。
 
 **只綁 `127.0.0.1`。** 資料庫裡是使用者整個 repo 的歷史，包括私有程式碼的路徑
 與 commit 訊息；預設對外開放等於預設外洩。這也是專案唯一一處 `node:http` 的

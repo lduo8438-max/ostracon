@@ -20,8 +20,8 @@ export interface ExtractedSpan {
   rule: string;
 }
 
-export const EXTRACTOR_VERSION = "rule-rationale-0.5.0";
-export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.5.0";
+export const EXTRACTOR_VERSION = "rule-rationale-0.6.0";
+export const MARKDOWN_EXTRACTOR_VERSION = "rule-rationale-markdown-0.6.0";
 
 export interface ExtractRationaleOptions {
   /** linked 文件是 Markdown；排除程式碼 fence 與引用行，避免引用別人的理由。 */
@@ -85,9 +85,15 @@ const CAUSAL_MARKERS = [
  * 數字只認四位數年份與帶 `v`／`version` 的版本號。裸數字太寬——
  * `since 3 people complained` 是真的理由，把它當成時間義丟掉就是這個修正
  * 本身要消滅的那種靜默錯誤。
+ *
+ * `since Python <版本>` 只在版本後立刻收句時算時間義。pip／playwright 的完整
+ * 可見引文裁決中，窄形狀命中 9 種引文／10 個來源 occurrence，全部是時間義；
+ * `since Python 3.9 was dropped`、`since Python 3.10 has two digits` 仍是因果義，
+ * 不能整批排除。小數點後的 `(?!\d)` 防止 regex 回溯把 `3.10` 偷切成版本 `3`
+ * 加句點。
  */
 const TEMPORAL_SINCE =
-  /^(?:\d{4}\b|v\d|version\b|then\b|last\b|early\b|late\b|yesterday\b|today\b|launch\b|the\s+(?:last|beginning|start)\b|jan(?:uary)?\b|feb(?:ruary)?\b|mar(?:ch)?\b|apr(?:il)?\b|may\b|jun(?:e)?\b|jul(?:y)?\b|aug(?:ust)?\b|sep(?:t|tember)?\b|oct(?:ober)?\b|nov(?:ember)?\b|dec(?:ember)?\b)/i;
+  /^(?:\d{4}\b|v\d|version\b|python\s+\d+(?:\.\d+)*(?:[a-z]\d*)?(?:\s*[,!?]|\s*\.(?!\d)|\s*$)|then\b|last\b|early\b|late\b|yesterday\b|today\b|launch\b|the\s+(?:last|beginning|start)\b|jan(?:uary)?\b|feb(?:ruary)?\b|mar(?:ch)?\b|apr(?:il)?\b|may\b|jun(?:e)?\b|jul(?:y)?\b|aug(?:ust)?\b|sep(?:t|tember)?\b|oct(?:ober)?\b|nov(?:ember)?\b|dec(?:ember)?\b)/i;
 
 /**
  * `so that` 後面接繫詞時是「所以，那個是……」，不是表目的的 `so that`。

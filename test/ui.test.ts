@@ -27,6 +27,7 @@ import { affectedEntityCounts } from "../src/claim/scope.ts";
 import { declarationScopeOf } from "../src/index/repo-pass.ts";
 import { APP_DIR, appBuilt, appFiles } from "../src/ui/app-assets.ts";
 import { sha256 } from "../src/evidence/span.ts";
+import { EXTRACTOR_VERSION } from "../src/evidence/extract.ts";
 import { INSERT_CONTENT_FIXTURE, REVISION_COLUMNS, revisionValues } from "./db-fixture.ts";
 
 /** SQLite 的字串字面量是單引號；雙引號會被當成識別子。 */
@@ -368,7 +369,7 @@ describe("整批理由要標示而不是收回", () => {
           proposed_quoted_text, expected_doc_body_sha, proposed_tier, generator_kind,
           generator_version, status, promoted_evidence_id, created_at)
        VALUES (1, 1, ?, ?, ?, ?, 'stated', 'rule',
-               'rule-rationale-0.5.0/causal:to avoid', 'promoted', ?, '2026-01-01')`,
+               '${EXTRACTOR_VERSION}/causal:to avoid', 'promoted', ?, '2026-01-01')`,
     ).run(at, at + quote.length, quote, sha256(body), Number(ev.lastInsertRowid));
     deriveClaims(db, 1);
     // **同一顆 commit 動到、但沒有被理由涵蓋的宣告。** 在 `deriveClaims` 之後才

@@ -35,6 +35,21 @@ describe("因果標記的詞義", () => {
     assert.deepEqual(quotes("A few things landed since then which I'd like in."), []);
     assert.deepEqual(quotes("We've used T3 since launch. The founder is a fan."), []);
     assert.deepEqual(quotes("Nothing has changed since 2024."), []);
+
+    // 兩套陌生 repo 的 17 條 `since Python` 已全部裁決。版本號後立刻收句的
+    // 9 種引文（10 個來源 occurrence）全是「自 Python x 起」；這不是因果義，
+    // 也不能靠後面的第二句把它偽裝成一條理由。
+    assert.deepEqual(quotes("Available since Python 3.5."), []);
+    assert.deepEqual(quotes("Available since Python 3.12"), []);
+    assert.deepEqual(quotes("Available since Python 3.12!"), []);
+    assert.deepEqual(
+      quotes("Available since Python 2.6. This removes an unnecessary shim."),
+      [],
+    );
+    assert.deepEqual(
+      quotes("Merged since Python 3.3, with aliases kept for compatibility."),
+      [],
+    );
   });
 
   it("since 的因果義照常抽出", () => {
@@ -59,6 +74,17 @@ describe("因果標記的詞義", () => {
       quotes("Reverted it since 3 people complained about the output"),
       ["since 3 people complained about the output"],
     );
+
+    // 不能把 `since Python` 整批排除。版本後面仍有謂語時，since 可以是
+    // 「因為」；這四種形狀就是窄規則刻意不碰的價格標籤。
+    for (const line of [
+      "Pinned it since Python 3.9 was dropped.",
+      "Special-case it since Python 3.10 has two digits in the minor version.",
+      "Keep the import since Python imports have higher precedence.",
+      "Deprecated it since Python 3.15 for being impure.",
+    ]) {
+      assert.deepEqual(quotes(line), [line.slice(line.toLowerCase().indexOf("since "))]);
+    }
   });
 
   it("**被否決的標記不連累整行**", () => {
@@ -67,6 +93,10 @@ describe("因果標記的詞義", () => {
     assert.deepEqual(
       quotes("Broken since August. Pinned the version to avoid the CI flake."),
       ["to avoid the CI flake."],
+    );
+    assert.deepEqual(
+      quotes("Available since Python 3.5. Removed the guard since dropping Python 2."),
+      ["since dropping Python 2."],
     );
   });
 

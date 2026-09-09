@@ -576,11 +576,13 @@ function DeclarationPicker({ entities, rationales, total, current, onPick, onClo
   )
 }
 
-export function TimelineView({ stableKey, totalEntities, onSelect }: {
+export function TimelineView({ stableKey, totalEntities, onSelect, openPicker, onPickerOpened }: {
   stableKey?: string
   /** 語料裡的宣告總數，只為了讓 picker 說得出「這份清單不是全部」。 */
   totalEntities: number
   onSelect: (key: string) => void
+  openPicker?: boolean
+  onPickerOpened?: () => void
 }) {
   const list = useQuery({ queryKey: ['entities'], queryFn: fetchEntities })
   // 預設入口由真正的引文群組決定，所以不能等選好 entity 才抓。否則初始選取只
@@ -649,21 +651,26 @@ export function TimelineView({ stableKey, totalEntities, onSelect }: {
           rationales={data.rationales}
           totalEntities={totalEntities}
           onSelect={onSelect}
+          openPicker={openPicker}
+          onPickerOpened={onPickerOpened}
         />
       )}
     </ViewQuery>
   )
 }
 
-export function TimelineBody({ data, entities, rationales, totalEntities, onSelect }: {
+export function TimelineBody({ data, entities, rationales, totalEntities, onSelect, openPicker = false, onPickerOpened }: {
   data: TimelineView
   entities: EntityListItem[]
   rationales: RationaleGroup[]
   /** 語料裡的宣告總數。**清單是策展過的**，兩者不同時 picker 要說出來。 */
   totalEntities: number
   onSelect: (key: string) => void
+  /** 外殼可從任何畫面要求打開同一個 picker；消費後由外殼把請求清掉。 */
+  openPicker?: boolean
+  onPickerOpened?: () => void
 }) {
-  const [picking, setPicking] = useState(false)
+  const [picking, setPicking] = useState(openPicker)
   // **理由是稀有的**（Osiris 4.0%），所以「一條都沒有」是常態而不是例外。
   // 先前 `hits[hitIndex] ?? hits[0]` 在空陣列上是 `undefined`，而每一列的
   // `selected.sha` 都在 render 本體裡——osiris 的時間軸與 vue 那條只帶 key 的
@@ -689,16 +696,12 @@ export function TimelineBody({ data, entities, rationales, totalEntities, onSele
   const [pendingFirst, setPendingFirst] = useState(deepRow === undefined && hits.length > 0)
   const rowRef = useRef<HTMLDivElement>(null)
 
-  // 「/」開 picker：命令列的慣例，而且不與瀏覽器既有快捷鍵衝突。
+  // 全域入口從別的畫面切進 Timeline 時，仍打開這一個既有 picker，不複製搜尋。
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
-      if (event.key === '/') { event.preventDefault(); setPicking(true) }
-    }
-    addEventListener('keydown', onKey)
-    return () => removeEventListener('keydown', onKey)
-  }, [])
+    if (!openPicker) return
+    setPicking(true)
+    onPickerOpened?.()
+  }, [openPicker, onPickerOpened])
 
   const jump = () => {
     if (hits.length === 0) return // 按鈕已 disabled；`% 0` 會是 NaN，這裡是第二道
@@ -866,6 +869,23 @@ export function Workspace({ repository }: { repository: Repository }) {
   const [hash, setHash] = useState(() => window.location.hash)
   const timelineKey = parseTimelineHash(hash).key || undefined
   const [view, setView] = useState<ViewId>(() => timelineKey ? 'timeline' : 'ladder')
+  const [findRequested, setFindRequested] = useState(false)
+
+  const findDeclaration = () => {
+    setFindRequested(true)
+    setView('timeline')
+  }
+
+  // 「/」是全域的 find action，不再只在使用者已經找到 Timeline 之後才有效。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+      if (event.key === '/') { event.preventDefault(); findDeclaration() }
+    }
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     const onHash = () => setHash(window.location.hash)
@@ -911,12 +931,28 @@ export function Workspace({ repository }: { repository: Repository }) {
       </aside>
       <main className="workspace-main">
         <div className="mobile-nav"><div className="brand"><i /><strong>ostracon</strong></div><select value={view} onChange={event => setView(event.target.value as ViewId)} aria-label="Choose view">{navItems.map(item => <option value={item.id} key={item.id}>{item.index} · {item.label}</option>)}</select></div>
-        <div className="topbar"><span className="mono">{navItems.find(item => item.id === view)?.label.toUpperCase()} / {repository.name.split('/').pop()}</span><span className="top-status"><i />output verified</span></div>
+        <div className="topbar">
+          <span className="mono">{navItems.find(item => item.id === view)?.label.toUpperCase()} / {repository.name.split('/').pop()}</span>
+          <div className="topbar-actions">
+            <button className="global-find" type="button" onClick={findDeclaration} aria-haspopup="dialog" aria-keyshortcuts="/">
+              Find declaration <kbd>/</kbd>
+            </button>
+            <span className="top-status"><i />output verified</span>
+          </div>
+        </div>
         <AnimatePresence mode="wait">
           <motion.div key={view} className="view-wrap" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}>
             {view === 'ladder' ? <LadderView /> : null}
             {view === 'discontinuities' ? <DiscontinuitiesView /> : null}
-            {view === 'timeline' ? <TimelineView stableKey={timelineKey} totalEntities={repository.entities} onSelect={openTimeline} /> : null}
+            {view === 'timeline' ? (
+              <TimelineView
+                stableKey={timelineKey}
+                totalEntities={repository.entities}
+                onSelect={openTimeline}
+                openPicker={findRequested}
+                onPickerOpened={() => setFindRequested(false)}
+              />
+            ) : null}
             {view === 'hotspots' ? <HotspotsView onOpen={openTimeline} /> : null}
             {view === 'ostracised' ? <OstracisedView onOpen={openTimeline} /> : null}
           </motion.div>

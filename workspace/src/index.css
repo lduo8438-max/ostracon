@@ -112,6 +112,19 @@ code { overflow-wrap: anywhere; }
 .workspace-main { min-width: 0; }
 .topbar { position: sticky; z-index: 20; top: 0; display: flex; height: 72px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 92%, transparent); padding: 0 40px; backdrop-filter: blur(18px); }
 .topbar > span { color: var(--muted); font-size: 10px; letter-spacing: .02em; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.global-find {
+  display: inline-flex; min-height: 38px; align-items: center; gap: 10px;
+  border: 1px solid var(--blue); border-radius: 10px; background: var(--blue-soft);
+  padding: 0 11px 0 13px; color: var(--text);
+  font: 600 10px/1 'IBM Plex Mono', monospace; letter-spacing: .015em;
+}
+.global-find:hover { background: color-mix(in srgb, var(--blue-soft) 78%, var(--blue)); }
+.global-find kbd {
+  display: grid; min-width: 22px; height: 22px; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--blue) 52%, var(--line)); border-radius: 5px;
+  background: var(--surface); color: var(--blue); font: 600 10px/1 'IBM Plex Mono', monospace;
+}
 .top-status, .verified-pill, .count-pill { display: inline-flex; min-height: 32px; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 0 15px; color: var(--text); font: 600 9px/1 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
 .top-status i, .verified-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
 .mobile-nav { display: none; }
@@ -325,7 +338,8 @@ code { overflow-wrap: anywhere; }
 }
 
 @media (max-width: 460px) {
-  .topbar > span:first-child { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar > span:first-child { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .global-find { gap: 7px; padding-inline: 9px; font-size: 9px; }
   .page-intro h1 { font-size: 34px; }
   .page-lede { font-size: 14px; }
   .tier-row { min-height: 68px; grid-template-columns: 40px 72px 1fr; padding-inline: 11px; }

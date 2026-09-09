@@ -649,6 +649,47 @@ describe('上一頁要回得去', () => {
     throw new Error(`等不到：${label}`)
   }
 
+  it('**從任何畫面都找得到 declaration，而且按鈕與斜線走同一個 picker**', async () => {
+    stub()
+    window.location.hash = ''
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    await act(async () => {
+      createRoot(container).render(
+        <QueryClientProvider client={client}>
+          <MotionConfig transition={{ duration: 0 }}>
+            <Workspace repository={{ name: 'x/y', commits: 1, revisions: 2, entities: 1, schema: 'v3' }} />
+          </MotionConfig>
+        </QueryClientProvider>,
+      )
+    })
+    await waitFor('預設階梯', () => container.textContent?.includes('No match was accepted') === true)
+
+    const globalFind = container.querySelector<HTMLButtonElement>('.global-find')!
+    expect(globalFind.textContent).toContain('Find declaration')
+    expect(globalFind.getAttribute('aria-keyshortcuts')).toBe('/')
+    await act(async () => { globalFind.click() })
+    await waitFor('全域按鈕打開 picker', () => container.querySelector('.picker') !== null)
+    expect(document.activeElement).toBe(container.querySelector('.picker-input'))
+
+    await act(async () => {
+      container.querySelector('.picker')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(container.querySelector('.picker')).toBeNull()
+
+    const ladderTab = [...container.querySelectorAll<HTMLButtonElement>('.app-rail nav button')]
+      .find(button => /match ladder/i.test(button.textContent ?? ''))!
+    await act(async () => { ladderTab.click() })
+    await waitFor('回到階梯', () => container.textContent?.includes('No match was accepted') === true)
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }))
+    })
+    await waitFor('斜線打開同一個 picker', () => container.querySelector('.picker') !== null)
+    expect(document.activeElement).toBe(container.querySelector('.picker-input'))
+  })
+
   it('**從熱點點進時間軸之後，上一頁要回到熱點**', async () => {
     // 先前 `openTimeline` 用 `replaceState`，所以那一跳沒有留下歷史：
     // 使用者按上一頁會直接離開站台。而時間軸內部的理由跳轉仍然用

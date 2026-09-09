@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { hotspotsView } from "./hotspots-view.ts";
 import {
@@ -53,6 +53,17 @@ export interface UiOptions {
 }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" } as const;
+
+/**
+ * 先把 payload 完整算完才送 header。資料查詢或序列化若在 `writeHead(200)` 之後
+ * 丟錯，外層 catch 只能再寫一次 header，Node 會用 `ERR_HTTP_HEADERS_SENT`
+ * 結束整個 UI 程序；一個壞 view 不該把其他四個畫面一起關掉。
+ */
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
+  const body = JSON.stringify(value);
+  response.writeHead(status, JSON_HEADERS);
+  response.end(body);
+}
 
 /**
  * 端點以**路徑**定位，而且帶 `.json` 副檔名。
@@ -127,8 +138,7 @@ export function createUiServer(options: UiOptions): Server {
           : url.pathname;
         const asset = readAsset(file);
         if (asset === undefined) {
-          response.writeHead(404, JSON_HEADERS);
-          response.end(JSON.stringify({ error: "找不到" }));
+          sendJson(response, 404, { error: "找不到" });
           return;
         }
         response.writeHead(200, { "content-type": contentTypeOf(file) });
@@ -138,10 +148,9 @@ export function createUiServer(options: UiOptions): Server {
       if (url.pathname === SUMMARY_PATH) {
         const summary = repoSummary(db, repoId);
         const indexed = summary.counts.entities;
-        response.writeHead(200, JSON_HEADERS);
         // 搜尋目錄涵蓋全部 indexed 宣告，而任意 stable_key 都能開 timeline。
         // `entities.json` 的 400 筆仍是策展入口，不再被拿來冒充可達範圍。
-        response.end(JSON.stringify({
+        sendJson(response, 200, {
           ...summary,
           coverage: entityCoverage(db, repoId, {
             discoverable: indexed,
@@ -149,12 +158,11 @@ export function createUiServer(options: UiOptions): Server {
             rule: "all indexed declarations through the search catalog",
             absentReason: null,
           }),
-        }));
+        });
         return;
       }
       if (url.pathname === ENTITIES_PATH) {
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(listEntities(db, repoId)));
+        sendJson(response, 200, listEntities(db, repoId));
         return;
       }
       if (url.pathname === ENTITY_SEARCH_PATH) {
@@ -164,61 +172,51 @@ export function createUiServer(options: UiOptions): Server {
         return;
       }
       if (url.pathname === OSTRACISED_PATH) {
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(ostracisedFor(db, repoId)));
+        sendJson(response, 200, ostracisedFor(db, repoId));
         return;
       }
       if (url.pathname === LADDER_PATH) {
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(ladderStats(db, repoId)));
+        sendJson(response, 200, ladderStats(db, repoId));
         return;
       }
       if (url.pathname === DISCONTINUITIES_PATH) {
         // 本機伺服器旁邊就是語料，所以片段直接讀。讀不到時 payload 會說
         // `repo-unavailable`，不是靜默留白。
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(
+        sendJson(response, 200,
           discontinuitiesFor(db, repoId, 500, repoRootOf(db, repoId)),
-        ));
+        );
         return;
       }
       if (url.pathname === HOTSPOTS_PATH) {
         // 測試檔的排除與 CLI 用同一個 predicate，而且**排除不得靜默**——
         // 兩邊各數一次的話，畫面與 CLI 遲早會給出不同的數字。
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(hotspotsView(db, repoId)));
+        sendJson(response, 200, hotspotsView(db, repoId));
         return;
       }
       if (url.pathname === RATIONALES_PATH) {
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(rationaleGroups(db, repoId)));
+        sendJson(response, 200, rationaleGroups(db, repoId));
         return;
       }
       const key = stableKeyFromPath(url.pathname);
       if (key !== undefined) {
         if (key === null) {
-          response.writeHead(400, JSON_HEADERS);
-          response.end(JSON.stringify({ error: "entity 必須是 64 位十六進位的 stable_key" }));
+          sendJson(response, 400, { error: "entity 必須是 64 位十六進位的 stable_key" });
           return;
         }
         const id = entityIdForStableKey(db, repoId, key);
         if (id === undefined) {
           // 格式對但這個 repo 沒有——那是「沒有這個東西」，不是參數錯。
-          response.writeHead(404, JSON_HEADERS);
-          response.end(JSON.stringify({ error: "這個 repo 沒有這個 stable_key" }));
+          sendJson(response, 404, { error: "這個 repo 沒有這個 stable_key" });
           return;
         }
-        response.writeHead(200, JSON_HEADERS);
-        response.end(JSON.stringify(evolutionOf(db, repoId, id)));
+        sendJson(response, 200, evolutionOf(db, repoId, id));
         return;
       }
-      response.writeHead(404, JSON_HEADERS);
-      response.end(JSON.stringify({ error: "沒有這個路徑" }));
+      sendJson(response, 404, { error: "沒有這個路徑" });
     } catch (error) {
       // 錯誤要說出來而不是回空陣列——空陣列在這個 UI 裡的意思是
       // 「查過了，真的沒有」，拿它當失敗值就是讓畫面說謊。
-      response.writeHead(500, JSON_HEADERS);
-      response.end(JSON.stringify({ error: String(error) }));
+      sendJson(response, 500, { error: String(error) });
     } finally {
       db.close();
     }

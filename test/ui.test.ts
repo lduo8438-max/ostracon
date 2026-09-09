@@ -287,6 +287,25 @@ describe("三欄 UI 的伺服器", () => {
     }
   });
 
+  it("**一個 view 的查詢失敗要回 500，不得用第二次 writeHead 殺掉整個 server**", async () => {
+    // 真實驗收用一份舊索引打開 Timeline：查詢在 `writeHead(200)` 後丟錯，catch
+    // 再寫 500，Node 直接以 ERR_HTTP_HEADERS_SENT 結束程序。先算完 payload，
+    // 失敗才有機會回誠實的 500，而且其他畫面仍然活著。
+    const dbPath = fixtureDb();
+    const broken = new DatabaseSync(dbPath);
+    broken.exec("DROP TABLE claim_evidence");
+    broken.close();
+    const { url, server } = await startUiServer({ dbPath, port: 0 });
+    try {
+      const failed = await fetch(`${url}api/rationales.json`);
+      assert.equal(failed.status, 500);
+      assert.match(JSON.stringify(await failed.json()), /claim_evidence/);
+      assert.equal((await fetch(url)).status, 200, "單一 API 失敗後 server 仍要存活");
+    } finally {
+      server.close();
+    }
+  });
+
   it("**只綁 127.0.0.1**", async () => {
     // 資料庫裡是整個 repo 的歷史，包括私有程式碼的路徑與 commit 訊息。
     const { server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });

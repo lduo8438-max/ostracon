@@ -7,6 +7,26 @@
 
 ---
 
+## 真實使用觀察：全域 declaration 入口
+
+2026-09-09 以線上 demo 走完 landing → corpus → declaration 搜尋 → timeline → literal
+evidence → Back，核心搜尋與返回都可靠，但首次進 corpus 預設落在 Match ladder，
+「找我的 declaration」藏在 Timeline 裡。這是目前最高優先的 UI 問題：資料能力已經
+存在，只是入口晚於方法學。
+
+工作區現在於每一個畫面的 sticky topbar 都提供 **Find declaration**；按鈕與 `/`
+共用同一個請求、切到 Timeline 並打開既有 picker，不另造搜尋。桌面與 390 px 手機
+成品均驗過：入口第一屏可見、modal 自動聚焦，topbar 與 picker 沒有頁面級橫向溢出。
+前端契約新增一條，專門守住「從 Match ladder 點按鈕」與「在非 Timeline 畫面按 `/`」
+兩種執行方式。
+
+這次驗收另用舊索引觸發一個 server 錯誤路徑：API 先送 `200` header 才執行查詢，
+查詢丟錯後 catch 再送 `500`，Node 以 `ERR_HTTP_HEADERS_SENT` 結束整個程序。JSON
+回應現在一律先完成查詢與序列化才送 header；回歸測試確認單一 view 回 500 後首頁
+仍回 200。
+
+---
+
 ## 引文邊界裁決：廣泛規則被否決，窄詞義規則已實作
 
 pip／playwright 的跨句與孤兒括號候選已逐條裁決。跨句 176 條只有 29 條應截短，

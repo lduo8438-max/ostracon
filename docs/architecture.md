@@ -1221,7 +1221,7 @@ W9 已把原本 `page.ts` 的 579 行樣板頁面換成 `workspace/` 裡的 Reac
 API 路由來自 `src/ui/routes.ts`，前端相對於 `document.baseURI` 解析，所以網域根與
 子目錄部署不分叉。固定網址與理由計數的純函式留在 `src/ui/page-logic.ts`，由前端
 直接 import。`workspace/src/contract.test.tsx` 真的 mount 元件、執行 effect 與互動；
-截至 0.1.3 有 33 條契約測試，覆蓋載入、錯誤、空資料、深連結與理由群組。
+截至 0.1.4 有 35 條契約測試，覆蓋載入、錯誤、空資料、全域搜尋、深連結與理由群組。
 
 **只綁 `127.0.0.1`。** 資料庫裡是使用者整個 repo 的歷史，包括私有程式碼的路徑
 與 commit 訊息；預設對外開放等於預設外洩。這也是專案唯一一處 `node:http` 的

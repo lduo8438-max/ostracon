@@ -945,6 +945,25 @@ describe("反白不得改變版面", () => {
   });
 });
 
+describe("手機時間軸不能把核心證據放在畫面外", () => {
+  it("**920px 以下是直排卡片，不是 1000px 三欄表格**", () => {
+    // 線上 demo 實測：理由捷徑會正確跳到第 25 列，但 Evidence 整欄
+    // 在手機畫面右邊。這不是純視覺問題，是核心結果不可見。
+    const css = readFileSync(
+      new URL("../workspace/src/index.css", import.meta.url),
+      "utf8",
+    );
+    const start = css.indexOf("@media (max-width: 920px)");
+    const end = css.indexOf("@media (max-width: 680px)");
+    assert.ok(start >= 0 && end > start, "找不到手機媒體查詢");
+    const mobile = css.slice(start, end);
+    assert.match(mobile, /\.timeline-head\s*\{[^}]*display:\s*none/);
+    assert.match(mobile, /\.timeline-rows\s*\{[^}]*min-width:\s*0/);
+    assert.match(mobile, /\.timeline-row\s*\{[^}]*height:\s*auto[^}]*grid-template-columns:\s*1fr/);
+    assert.doesNotMatch(mobile, /\.timeline-panel\s*\{[^}]*overflow-x:\s*auto/);
+  });
+});
+
 describe("降級過的索引不得靜默地被讀出去", () => {
   const scopedDb = (scope: "repo" | "lineage") => {
     const dbPath = fixtureDb();

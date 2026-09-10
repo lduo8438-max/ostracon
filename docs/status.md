@@ -179,7 +179,7 @@ v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。�
 | `src/ui/export.ts` | 把索引與前端資產匯出成純靜態站台（線上 demo） | `--label` 必填；搜尋目錄只列確實有 timeline 的宣告 |
 | `workspace/src/App.tsx` | React 工作台：階梯、斷層、時間軸、熱點、被推翻的做法 | 載入、錯誤、空資料與鍵盤互動都有掛載式契約測試 |
 | `workspace/src/api.ts` | 前端資料邊界、view model 與宣告排序 | 路由與理由 predicate 直接引用 `src/ui/` 的唯一來源 |
-| `workspace/src/contract.test.tsx` | 前端渲染與互動契約 | 33 條；真的 mount 元件、跑 effect、發請求與點按控制 |
+| `workspace/src/contract.test.tsx` | 前端渲染與互動契約 | 35 條；真的 mount 元件、跑 effect、發請求與點按控制 |
 | `workspace/src/index.css` | 工作台的排版、狀態與響應式規則 | Tailwind 只掃產品入口，不把測試識別字誤收進正式 CSS |
 | `src/cli/main.ts` | 子指令分派 | 各支直接執行時走的是同一個 `main(args)` |
 | `src/cli/ui.ts` ／ `src/cli/export-site.ts` | `ostracon ui` ／ `ostracon export` | — |

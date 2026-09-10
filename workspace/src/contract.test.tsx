@@ -163,9 +163,22 @@ describe('時間軸沒有專屬理由時', () => {
       <TimelineBody data={timeline([row(1), row(2, 'to prevent RangeError')])} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
     )
     expect(html).toContain('1 / 1 rows')
-    expect(html).toContain('1</b><span>entity quote groups')
+    expect(container.querySelector('.jump-control')?.textContent).toContain('Next direct rationale')
+    expect(container.querySelector('.jump-control')?.textContent).toContain('0 shared quote groups')
     expect(container.querySelector<HTMLButtonElement>('.jump-control')?.disabled).toBe(false)
     expect(container.querySelectorAll('.timeline-row.selected')).toHaveLength(1)
+  })
+
+  it('**每列自己帶著三欄標籤，手機改成直排後仍讀得懂**', () => {
+    // 桌面版的標頭與內容可以水平對齊，手機改成卡片後不行。
+    // 只改 CSS 會讓 commit／結構／證據變成三塊沒有名字的文字。
+    window.location.hash = ''
+    const { container } = render(
+      <TimelineBody data={timeline([row(1, 'because X')])} entities={[]} rationales={[rationale()]} totalEntities={0} onSelect={() => {}} />,
+    )
+    const labels = [...container.querySelectorAll('.timeline-field-label')]
+      .map(label => label.textContent)
+    expect(labels).toEqual(['Commit / location', 'Structural change', 'Evidence'])
   })
 
   it('深連結指到沒有理由的那一列時，反白的是那一列，游標是 0', () => {
@@ -189,7 +202,7 @@ describe('時間軸沒有專屬理由時', () => {
     )
     const jump = container.querySelector('.jump-control')!
     expect(jump.querySelector(':scope > b')?.textContent).toBe('1')
-    expect(jump.textContent).toContain('entity quote groups')
+    expect(jump.textContent).toContain('Next direct rationale')
     expect(jump.textContent).toContain('1 / 30 rows')
   })
 })

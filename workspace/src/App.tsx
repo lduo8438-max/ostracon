@@ -392,9 +392,9 @@ export function DiscontinuitiesBody({ data }: { data: DiscontinuityView }) {
 function TimelineRowView({ row, selected }: { row: TimelineRow; selected: boolean }) {
   return (
     <article id={`timeline-${row.sha}`} className={selected ? 'timeline-row selected' : 'timeline-row'}>
-      <div className="timeline-commit"><small>{String(row.index).padStart(3, '0')}</small><strong>{row.sha}</strong><span>{row.date}</span><code>{row.location}</code></div>
-      <div className="timeline-change"><span className="tier-badge" title="The first hash layer that differs">{row.tier} · {row.firstDifference}</span><span className={`hunk-${row.hunkEvidence}`} title={HUNK_TITLE[row.hunkEvidence]}>{HUNK_LABEL[row.hunkEvidence]}</span><p>{row.change}</p></div>
-      <div className="timeline-evidence">{row.rationale ? <LiteralEvidence>{row.rationale}</LiteralEvidence> : <p className="honest-blank">— no entity-level or batch-level rationale</p>}</div>
+      <div className="timeline-commit"><span className="timeline-field-label">Commit / location</span><small>{String(row.index).padStart(3, '0')}</small><strong>{row.sha}</strong><span>{row.date}</span><code>{row.location}</code></div>
+      <div className="timeline-change"><span className="timeline-field-label">Structural change</span><span className="tier-badge" title="The first hash layer that differs">{row.tier} · {row.firstDifference}</span><span className={`hunk-${row.hunkEvidence}`} title={HUNK_TITLE[row.hunkEvidence]}>{HUNK_LABEL[row.hunkEvidence]}</span><p>{row.change}</p></div>
+      <div className="timeline-evidence"><span className="timeline-field-label">Evidence</span>{row.rationale ? <LiteralEvidence>{row.rationale}</LiteralEvidence> : <p className="honest-blank">— no entity-level or batch-level rationale</p>}</div>
     </article>
   )
 }
@@ -737,11 +737,11 @@ export function TimelineBody({ data, entities, rationales, totalEntities, onSele
       <PageIntro
         eyebrow={<button className="picker-open" onClick={() => setPicking(true)}>Timeline · <b>change declaration</b> <kbd>/</kbd></button>}
         title={<span className="mono">{data.symbol}{data.dead ? <i className="tag-dead">removed</i> : null}</span>}
-        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No entity-level rationale on this timeline' : 'Jump to the next entity rationale'}><b>{rationaleCounts.entity}</b><span>entity quote groups<small>{rationaleCounts.shared} shared groups</small></span><code>{hitIndex + 1} / {hits.length} rows</code></button>} />
+        body={data.path} aside={<button className="jump-control" onClick={jump} disabled={hits.length === 0} title={hits.length === 0 ? 'No rationale is tied directly to this declaration' : 'Jump to the next rationale tied directly to this declaration'}><b>{rationaleCounts.entity}</b><span>{hits.length === 0 ? 'No direct rationale' : 'Next direct rationale'}<small>{rationaleCounts.shared} shared quote groups</small></span><code>{hitIndex + 1} / {hits.length} rows</code></button>} />
       <section className="panel timeline-panel">
         <div className="timeline-head"><span>Commit / location</span><span>Structural change</span><span>Evidence — blank is honest</span></div>
         <div className="timeline-rows">{data.rows.map(row => <TimelineRowView key={row.sha} row={row} selected={row.sha === focusSha} />)}</div>
-        <p className="panel-foot">Rows use a fixed block size. Selection is an inset box-shadow; it never changes border, padding, or alignment.</p>
+        <p className="panel-foot">Desktop rows align in three columns. Smaller screens stack the same commit, change, and evidence inside each revision.</p>
       </section>
       <MethodNote><p>The tier badge names the first hash layer that differs and whether the commit hunk touched the declaration. Cold-open instrumentation for fetch / render / alignRows is intentionally marked as not yet measured.</p></MethodNote>
     </div>

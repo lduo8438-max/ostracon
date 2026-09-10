@@ -3,7 +3,25 @@
 > 這份文件記錄「現在長什麼樣」，隨程式碼變動更新。定義與理由在 `architecture.md`，
 > 規則在 `../CLAUDE.md`，資料模型的唯一真相是 `../db/schema.sql`。
 >
-> 最後更新：2026-09-08
+> 最後更新：2026-09-10
+
+---
+
+## 任務式使用觀察：手機時間軸的證據不可見
+
+專案沒有 analytics，所以這輪不冒充真實使用者完成率；而是在線上 demo
+重跑三條可重現任務：已知宣告直達證據、未知宣告從 Hotspots 探索，
+以及窄螢幕上的直達。全域 declaration picker 與 Hotspots 的入口都可以把人
+送到正確時間軸，真正斷裂在抵達後：手機版仍保留至少 1000 px 的三欄格，
+Evidence 整欄位於螢幕外。`compileScript` 的捷徑會正確跳到第 25 列並反白，
+但畫面只看得到 commit 與 structural change。
+
+920 px 以下現在改成真正的直排 revision 卡片；每列自己帶
+Commit / location、Structural change、Evidence 標籤，不依賴桌面欄頭。
+原本的 `entity quote groups` 捷徑也改成動作語句 **Next direct rationale**，
+共用引文數保留為次要訊息。線上同一條第 25 列在本機成品復驗後，逐字引文已
+出現在反白卡片內。修法拿掉時新增的掛載式與 CSS 契約都會紅；目前完整
+核心測試 **485/485**、前端契約 **35/35**，正式 build 通過。
 
 ---
 

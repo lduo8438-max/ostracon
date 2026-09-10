@@ -223,6 +223,7 @@ code { overflow-wrap: anywhere; }
 .timeline-row.selected { border-color: var(--line); background: var(--blue-soft); box-shadow: inset 0 0 0 2px var(--text); }
 .timeline-row > div { min-width: 0; padding: 14px; }
 .timeline-row > div + div { border-left: 1px solid var(--line); }
+.timeline-field-label { display: none; }
 .timeline-commit { display: grid; align-content: start; gap: 5px; font-family: 'IBM Plex Mono', monospace; }
 .timeline-commit small { color: var(--blue); font-size: 9px; }
 .timeline-row:not(.selected) .timeline-commit small { color: var(--muted); }
@@ -321,7 +322,13 @@ code { overflow-wrap: anywhere; }
   .page-intro { min-height: 0; grid-template-columns: 1fr; gap: 20px; margin-bottom: 28px; }
   .intro-aside { justify-content: flex-start; }
   .split-layout { grid-template-columns: 1fr; }
-  .timeline-panel { overflow-x: auto; }
+  .timeline-head { display: none; }
+  .timeline-rows { min-width: 0; padding: 0 12px 12px; }
+  .timeline-row { height: auto; grid-template-columns: 1fr; gap: 0; overflow: visible; }
+  .timeline-row > div { padding: 16px; }
+  .timeline-row > div + div { border-top: 1px solid var(--line); border-left: 0; }
+  .timeline-row .timeline-field-label { display: block; margin: 0 0 10px; color: var(--muted); font: 500 8px/1.4 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+  .timeline-evidence { min-height: 82px; align-items: start; }
 }
 
 @media (max-width: 680px) {

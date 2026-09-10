@@ -87,6 +87,12 @@ W10 的交付也已收束：三套 demo 都由釘死的 commit 以空 DB 重建�
 `a89cec7f8ed17e5e83cb3d24b91cb0f350a54adf` 與 dry-run 相同。從公開 npm registry
 全新安裝後，版本與 help smoke test 均通過。
 
+後續的抽取器 0.6.0、全域 declaration 入口、手機時間軸與視覺收斂已隨
+`ostracon@0.1.4` 於 2026-09-10 發布。annotated tag `v0.1.4`、GitHub Release、
+npm `gitHead` 都指向 `51f1f1f`；registry shasum
+`02bd006ece9e063db64a07ac7c08d80fd798e4a3` 與 dry-run／本機 tarball 相同。
+從官方 registry 全新安裝後讀到 0.1.4，CLI help smoke test 通過。
+
 ---
 
 ## 1. 怎麼在你的機器上重建語料
@@ -117,10 +123,10 @@ git 原生座標，不得引用索引器產生的 ID。
 
 ## 2. 模組地圖
 
-套件 `ostracon`（版本 `0.1.3`，已發布；`files` 白名單只有 `dist`、`db/schema.sql`、
-README、CHANGELOG、LICENSE，`src/golden/` 不進封裝）。2026-09-07 發布閘門實跑核心
-測試 **483/483 通過**、前端契約測試 **33/33 通過**、`tsc --noEmit` **零錯誤**，
-完整 build 通過。
+套件 `ostracon`（版本 `0.1.4`，已發布；`files` 白名單只有 `dist`、`db/schema.sql`、
+README、CHANGELOG、LICENSE，`src/golden/` 不進封裝）。2026-09-10 發布閘門實跑核心
+測試 **487/487 通過**、前端契約測試 **35/35 通過**、`tsc --noEmit` **零錯誤**，
+完整 build 通過；封裝為 517,102 bytes／解包 1,421,948 bytes／207 檔。
 
 **Node 24 以上，且內建 SQLite 必須含 FTS5。** 實測 v24.14.1／CI 的 v24.18.0 可用、
 v23.11.0 不可用（`no such module: fts5`，完整 schema 建不起來）。這是 runtime 差異，

@@ -964,6 +964,36 @@ describe("手機時間軸不能把核心證據放在畫面外", () => {
   });
 });
 
+describe("手機時間軸的視覺層級", () => {
+  it("**選中列不以整片藍底壓過引文，無理由控制也不冒充可點動作**", () => {
+    // 暖色只給逐字引文；冷色負責導覽與選取。即使如此，整張卡片鋪滿藍底仍會
+    // 與真正要讀的引文框搶注意力。零理由時若還保留藍色動作外觀，也會讓 disabled
+    // 只剩程式狀態、沒有視覺狀態。
+    const css = readFileSync(
+      new URL("../workspace/src/index.css", import.meta.url),
+      "utf8",
+    );
+    const selected = css.match(/\.timeline-row\.selected\s*\{([^}]*)\}/)?.[1] ?? "";
+    const disabled = css.match(/\.jump-control:disabled\s*\{([^}]*)\}/)?.[1] ?? "";
+    assert.doesNotMatch(selected, /background:\s*var\(--blue-soft\)/);
+    assert.match(selected, /inset\s+3px\s+0\s+0\s+var\(--blue\)/);
+    assert.match(disabled, /border-color:\s*var\(--line\)/);
+    assert.match(disabled, /background:\s*var\(--surface\)/);
+  });
+
+  it("**窄螢幕的欄名與引文不能縮成裝飾字**", () => {
+    const css = readFileSync(
+      new URL("../workspace/src/index.css", import.meta.url),
+      "utf8",
+    );
+    const start = css.indexOf("@media (max-width: 920px)");
+    const end = css.indexOf("@media (max-width: 680px)");
+    const mobile = css.slice(start, end);
+    assert.match(mobile, /\.timeline-row \.timeline-field-label\s*\{[^}]*font:\s*600 9px/);
+    assert.match(mobile, /\.timeline-evidence \.literal-evidence blockquote\s*\{[^}]*font-size:\s*12px/);
+  });
+});
+
 describe("降級過的索引不得靜默地被讀出去", () => {
   const scopedDb = (scope: "repo" | "lineage") => {
     const dbPath = fixtureDb();

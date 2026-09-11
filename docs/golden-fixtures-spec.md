@@ -123,7 +123,8 @@ labeled_at: 2026-07-26
   expect: alpha
   rationale: >
     只把 setTimeout 換成 sleep()、重試次數字面量 3 改成 5，
-    控制流結構完全沒動。誤判成 shape 會白花 LLM 的錢。
+    控制流結構完全沒動。誤判成 shape 會把純正規化誤報成真正的結構變化，
+    汙染 hotspots 與理由歸屬。
 ```
 
 ### D. construct — 構造生命週期
@@ -154,8 +155,8 @@ labeled_at: 2026-07-26
   expect: present
   introduce_at: 222...
   remove_at: 333...
-  expect_strength_at_least: B
-  rationale: PR #442 明確說明改回舊做法的原因，應該能到 B 級。
+  expect_strength_at_least: C
+  rationale: PR #442 明確說明改回舊做法，但文字尚不能可靠綁到 entity；不得硬升 B 級。
 
 - id: exc-002
   kind: excursion
@@ -195,7 +196,9 @@ commit sha，所以整條案例只用 git 原生座標，不引用索引器產�
 **「文件沒被收進來」與「文件在、但沒有引文」是兩件事**：前者是覆蓋不足
 （`missing`），後者是一個真實的觀測值。混為一談會讓覆蓋率失去意義。
 
-`must_not_infer` 尚未實作——`claim` 層還沒解禁，`inferred` 目前不會被產生。
+`must_not_infer` 尚未實作——不是因為 `claim` 被鎖，而是目前根本沒有 inferred producer，
+且 `v_presentable_claim` 無條件排除 inferred。現在加入這個欄位只會得到一條永遠通過、
+沒有回歸力量的測試；等真的有 inferred debug 路徑時再實作。
 
 **負例是這一類案例的主要價值。** `controlled-typescript` 的
 `evd-zh-negation-outside-span` 守的是：原文「版本字串**沒有**理由改變」不得
@@ -276,9 +279,10 @@ fixtures/*.yaml  →  runner  →  report.json + report.md
 - [ ] 13. git 判定為 rename、但實際內容大改的檔案
 - [ ] 14. 一個檔案拆成兩個，函式散落各處
 
-### 成本與雜訊（直接決定 LLM 花費）
+### 成本與雜訊（直接決定結構訊號品質）
 
-- [x] 15. **全庫格式化 commit**（prettier / gofmt 一次跑完）— 所有實體都應落在 `raw` 層。這條沒過，你的 token 成本會失控
+- [x] 15. **全庫格式化 commit**（prettier / gofmt 一次跑完）— 所有實體都應落在
+  `raw` 層。這條沒過，hotspots 與理由相關性都會被格式雜訊灌水
 - [x] 16. 只加註解
 - [x] 17. 只改縮排或換行
 - [x] 18. 只改局部變數名 — 應落在 `token` 層
@@ -291,7 +295,8 @@ fixtures/*.yaml  →  runner  →  report.json + report.md
 ### 構造與迂迴
 
 - [x] 24. 明確 `git revert` — A 級
-- [x] 25. 手動反向修改（沒用 git revert）— 應該仍能到 A 或 B
+- [x] 25. 手動反向修改（沒用 git revert）— 反向結構足夠時到 A，否則保守留 C；
+  不得用 commit 級文字硬升 B
 - [x] 26. **部分放棄**：引入 A+B，只移除 A — 這是實體層級相似度看不見、構造層級才抓得到的案例，是這個設計的存在理由
 - [x] 27. **短命但非放棄**（過渡期 feature flag）— 負例
 - [ ] 28. 長期存在後才移除（技術演進，非試錯）

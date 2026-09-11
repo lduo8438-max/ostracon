@@ -44,7 +44,7 @@ CREATE TABLE schema_migration (
 -- claim pass 再落後——三者解耦是刻意的，因為只有 claim pass 要花錢。
 CREATE TABLE pass_state (
   repo_id           INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
-  pass_name         TEXT NOT NULL,      -- 'structural' | 'lifecycle' | 'evidence' | 'claim'
+  pass_name         TEXT NOT NULL,      -- 各 pass 自訂；現有含 structural/declarations/excursion/linked/claim
   last_commit_id    INTEGER REFERENCES git_commit(id),
   indexer_version   TEXT NOT NULL,      -- 版本變更時該 pass 的產出需作廢重算
   updated_at        TEXT NOT NULL,

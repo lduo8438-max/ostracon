@@ -16,15 +16,19 @@ git repo
    ├─ [pass 2] lifecycle ───────────── 零 LLM
    │    構造抽取 → construct_span → excursion (A/C 級)
    │
-   ├─ [pass 3] evidence ────────────── 需網路，不需 LLM
+   ├─ [pass 3] evidence ────────────── 零 LLM；只有 linked 收取需網路
    │    commit message / PR / issue → source_doc
-   │    → reference_link → excursion 升級為 B 級
+   │    → 抽取式 span → 程式驗證 → evidence
    │
-   └─ [pass 4] claim ───────────────── 唯一花錢的一層
-        抽取式 span 擷取 → 程式斷言 → evidence → claim
+   └─ [pass 4] claim ───────────────── 零 LLM、確定式投影
+        verified evidence → why / constraint / tradeoff / abandoned_reason
 ```
 
-四個 pass 各有獨立水位線（`pass_state`）。pass 1–2 可以跑完整個 repo 而完全不碰網路、不花一毛錢；這是「先給你看結構，你覺得有用再開 API key」的產品策略的技術基礎，也是冷啟動摩擦最小化的關鍵。
+圖中的四層是概念邊界，不是 `pass_state` 裡四個同形的水位線。實作依可恢復性拆成
+`structural`／`declarations`／`excursion`／`linked`／`claim` 等狀態；evidence 的規則版本
+則跟著每筆候選記錄。`claim` 每次由完整 evidence 集合重算，`pass_state` 只記版本，
+不是 commit 水位線。結構索引與 commit-message evidence 都能完全離線；只有選用 linked
+文件時才需要 GitHub token。正式畫面從頭到尾都是零 LLM。
 
 ### 目錄劃分
 
@@ -540,14 +544,16 @@ IR 與獨立 hash，不能削弱這個原生 shape hash 來假裝語言中立。
 
 兩個 revision **第一次相異的層級**即變更性質，`revision_change.change_level` 直接查表得出，不需要規則引擎：
 
-| 首次相異 | 語意 | 是否送 LLM |
+| 首次相異 | 語意 | 計入 hotspots 的結構改動 |
 |---|---|---|
 | raw（token 相同） | 格式／註解 | 否 |
 | token（alpha 相同） | 局部變數改名 | 否 |
-| alpha（shape 相同） | 字面量／呼叫目標變更，控制流不變 | 視情況 |
+| alpha（shape 相同） | 字面量／呼叫目標變更，控制流不變 | 否（灰區，保守低估） |
 | shape | 結構重構 | 是 |
 
-實測預期：一般 repo 中 raw + token 佔六成以上。這條路徑省下的 token 成本是專案能被個人負擔的主因。
+這個分層讓格式化、註解與局部改名不會灌進重構熱點；理由相關性仍採更寬的
+`change_level <> 'none'`，因為字面量或呼叫目標改變也可能有真實理由。兩個用途不得
+共用一個含糊的「是否重要」門檻。
 
 ---
 
@@ -1334,16 +1340,15 @@ demo 語料實測：6,367 次引文顯示裡有 **41.7% 落在 `change_level = '
 
 ---
 
-## 7. 成本模型
+## 7. 成本邊界
 
-| 措施 | 效果 |
-|---|---|
-| raw / token 層變更不呼叫模型 | 省六成以上 |
-| `llm_cache` 內容定址（input_hash + prompt_version + model） | prompt 未變時重跑零成本 |
-| pass 4 獨立水位線 | 可只對使用者查詢過的實體按需生成 |
-| 抽取式 prompt 輸出短 | 輸出 token 遠低於生成式 |
+目前產品路徑沒有模型 provider，也沒有任何 LLM 呼叫。`llm_cache` 是 schema 裡保留的
+未啟用邊界，沒有產品程式讀寫；不能把預留表寫成已實作的成本機制。
 
-預設 provider 為 Anthropic API，同時支援 Ollama——**沒有 API key 的人必須也能跑完 pass 1–3**，否則冷啟動摩擦會殺死一半的潛在使用者。
+- structural／lifecycle、stated evidence 與 claim 全部可離線、確定式重跑。
+- linked evidence 的成本是 GitHub API 請求；它有獨立水位線、逐目標去重、重試與 replay。
+- claim 是 verified evidence 的全量投影；demo 語料實測為毫秒級，所以不假裝成增量。
+- 未來若加入模型，輸出只能是 `inferred` debug 資料，仍不得進 `v_presentable_claim`。
 
 ---
 

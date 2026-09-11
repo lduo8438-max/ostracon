@@ -77,6 +77,16 @@ Evidence 不可見也已修正。重發 demo 後，同三條任務在線上 390 
 相同。W10 至此完整關閉，下一個閥門是重新選定里程碑題目；第三套陌生 repo 不自動
 延續成下一題。
 
+第一個新角度已於 2026-09-11 量完並否決：GitHub inline review comment 的
+`path`／`line`／`commit_id` 理論上能把理由縮到單一 changed entity，且與已否決的
+名稱命中、hunk overlap 不同。但在 pip／playwright 各取扇出最高的 25 顆 commit：
+associated PR 都找得到，inline comment 分別 110／108 條，抽取器認得理由的只有
+16／11 條，有 active line 的 9／7 條，最後各只有 3 條唯一落入 changed entity；
+其中至少一條只是責任指派而非設計理由。有效產量至多 5，低於先前已否決的名稱命中
+7 條，卻要新增 associated-PR 收取、review-comment schema、版本化 pass 與舊 review
+commit 對位，故不進產品。探針留在 gitignored `reports/probe/inline-attribution.mjs`，
+避免日後換個名字重跑同一條路。
+
 ### W8 的效能專題：已完成，而且原本的題目是錯的
 
 W7 定位出「兩顆巨型 commit 佔全程 52%」，並把成因寫成**候選池隨池子大小超線性

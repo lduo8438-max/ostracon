@@ -10,15 +10,15 @@ import type { CommitRecord, LineageResult, LineageSegment, LineageState } from "
  * lineageId 直接使用資料庫的主鍵值，不做本地 id 到 DB id 的二次映射。
  * 少一層映射就少一類「續跑時對錯號」的 bug。
  *
- * ── 已知限制（不是 bug，是刻意的取捨）────────────────────────────────
+ * ── 已知缺陷（W11 已有持久健康守門，根治尚未完成）──────────────────────
  * 維護的是一張全域的 path → lineage 對照表，而不是逐 commit 的完整樹狀態。
  * 當同一路徑在兩條平行分支上各自演化、之後才合併時，血緣歸屬可能出錯。
- * 完全正確需要對每個 commit 保存樹快照，成本高一到兩個數量級。
+ * 六套語料量測已證明它不是可概括為「罕見」的取捨：merge-heavy 的 pip 有 299 次。
+ * schema v4 會持久保存 anomaly，由 CLI/UI 明示健康狀態；這只阻止靜默，不修歸屬。
  *
- * 實務上這種情況集中在長命分支上，多數 repo 罕見。若某個 repo 受影響嚴重，
- * 用 --first-parent 走訪在原理上可以完全避開（代價是看不到分支上的個別 commit），
- * 但那個選項尚未實作——不要在文件裡把它寫成使用者已經能用的東西。
- * 這個限制必須出現在 README，不能只留在程式碼註解裡。
+ * 也不能只加 --first-parent：結構 pass 目前跳過 merge commit，那會連合併進主線的
+ * 分支工作一起漏掉。根治要同時處理 parent-aware state 與一條 segment 只有單一
+ * to_commit_id、無法表示 DAG 存活區間的資料模型。這個缺陷必須出現在 README。
  */
 export function buildLineages(
   commits: CommitRecord[],

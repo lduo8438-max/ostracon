@@ -439,14 +439,20 @@ ostracon ostracised --repo <repo> --db index.db      # 不給 --until 就跑到 
 走訪層維護的是一張**全域的 path → lineage 對照表**，而不是逐 commit 的完整樹狀態。
 同一個路徑在兩條平行分支上各自演化、之後才合併時，血緣歸屬可能接錯。
 
-完全正確需要對每個 commit 保存樹快照，成本高一到兩個數量級。實務上這種情況集中在
-長命分支上，多數 repo 罕見。
+這不是可忽略的罕見情況。六套語料的獨立量測中，merge-heavy 的 pypa/pip 有 299 次
+parent-state divergence（139 次落在支援語言路徑），requests 有 30 次；
+microsoft/playwright 與 Osiris 是 0，create-t3-app 的 2 次只落在 lockfile，Vue 的
+6 次裡有 3 次落在支援語言路徑、對到 4 次已索引宣告改動。換句話說，它取決於
+分支拓撲，不能用 repo 大小或「通常很少」帶過。
 
-**目前沒有繞過它的辦法。** `--first-parent` 走訪在原理上可以完全避開（代價是看不到
-分支上的個別 commit），但**那個選項還沒有實作**——先前這份文件寫得像是已經可用，
-那是錯的。真的遇到這個問題的話請開 issue，那會是實作它的理由。
+schema v4 起會把走訪時的異常持久保存；CLI 與工作台會顯示 lineage-health 狀態，
+不再把受影響的索引標成 verified。v3 索引可就地遷移，但原本沒保存、也進不了
+`file_change` 的異常無法事後完整還原，所以在全量重建前只會顯示**可重建下限**。
 
-**這是刻意的取捨，不是待修的 bug。**
+**目前沒有繞過它的辦法，這是待修的身份模型缺陷。** 只加 `--first-parent` 不是安全
+修法：現行結構 pass 跳過 merge commit；若同時不改 merge 的取法，分支上最後合併
+進來的工作會整批消失。根治需要讓 path state 與 commit parent 對齊，並重新設計
+`path_lineage_segment` 只能保存單一 `to_commit_id` 的區間模型。
 
 ### 合併 commit 不做改名偵測
 

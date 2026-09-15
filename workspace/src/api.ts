@@ -70,6 +70,7 @@ interface ApiSummary {
   schemaVersion: number | null
   changeLevels: Record<string, number>
   ostracised: { shown: number; hiddenTests: number; suspected: number }
+  lineageRisk?: NonNullable<Repository['lineageRisk']>
 }
 
 interface ApiEntity {
@@ -236,6 +237,16 @@ export async function fetchSummary(): Promise<Repository & {
     revisions: summary.counts.revisions,
     entities: summary.counts.entities,
     schema: summary.schemaVersion === null ? 'unknown' : `v${summary.schemaVersion}`,
+    // 0.1.4 與更早的靜態匯出沒有這個欄位。新版前端讀舊資料時不能崩潰；
+    // 全 0 在這裡代表「舊格式沒有診斷」，不是替舊索引背書為已審核。
+    lineageRisk: summary.lineageRisk ?? {
+      complete: false,
+      divergences: 0,
+      affectedPaths: 0,
+      parsedPathDivergences: 0,
+      changedEntityRows: 0,
+      distinctEntities: 0,
+    },
     changeDistribution: {
       none: summary.changeLevels.none ?? 0,
       shape: summary.changeLevels.shape ?? 0,

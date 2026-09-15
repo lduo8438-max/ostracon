@@ -78,6 +78,14 @@ const navItems: Array<{ id: ViewId; index: string; label: string }> = [
 ]
 
 const format = (value: number) => value.toLocaleString('en-US')
+const NO_LINEAGE_RISK: NonNullable<Repository['lineageRisk']> = {
+  complete: false,
+  divergences: 0,
+  affectedPaths: 0,
+  parsedPathDivergences: 0,
+  changedEntityRows: 0,
+  distinctEntities: 0,
+}
 /**
  * hunk 證據的三態。**「unknown」不是「沒碰到」**——這次改動根本沒有 hunk
  * 資料（純改名、二進位），把它顯示成「沒碰到」就是把不知道當成負證據。
@@ -864,6 +872,10 @@ export function OstracisedBody({ data, onOpen }: { data: OstracisedView; onOpen:
 }
 
 export function Workspace({ repository }: { repository: Repository }) {
+  // 直接掛載 Workspace 的整合端、以及 0.1.4 前的靜態 JSON，都可能尚無此欄位。
+  // API 邊界已正規化一次，元件邊界仍保護直接呼叫，避免健康 banner 反成白屏來源。
+  const lineageRisk = repository.lineageRisk ?? NO_LINEAGE_RISK
+  const lineageWarning = !lineageRisk.complete || lineageRisk.parsedPathDivergences > 0
   // **網址是唯一真相。** 深連結、picker 選取、從熱點／被推翻清單跳過來，
   // 三條路徑都經由這裡，所以「我看到的東西」永遠貼得出去。
   const [hash, setHash] = useState(() => window.location.hash)
@@ -937,9 +949,25 @@ export function Workspace({ repository }: { repository: Repository }) {
             <button className="global-find" type="button" onClick={findDeclaration} aria-haspopup="dialog" aria-keyshortcuts="/">
               Find declaration <kbd>/</kbd>
             </button>
-            <span className="top-status"><i />output verified</span>
+            <span className={`top-status${lineageWarning ? ' warning' : ''}`}>
+              <i />{lineageRisk.parsedPathDivergences > 0 ? 'lineage risk found' : lineageWarning ? 'lineage audit incomplete' : 'output verified'}
+            </span>
           </div>
         </div>
+        {lineageWarning ? (
+          <aside className="health-warning" role="status">
+            <strong>{lineageRisk.parsedPathDivergences > 0 ? 'Parallel-branch lineage risk' : 'Lineage audit incomplete'}</strong>
+            <span>
+              {!lineageRisk.complete && lineageRisk.parsedPathDivergences === 0
+                ? 'This index predates durable lineage diagnostics. No retained risk was found, but only a full rebuild can complete the audit.'
+                : <>{format(lineageRisk.parsedPathDivergences)} supported-language path events
+              {lineageRisk.changedEntityRows > 0
+                ? ` overlap ${format(lineageRisk.changedEntityRows)} indexed declaration changes across ${format(lineageRisk.distinctEntities)} entities.`
+                : ' may have been assigned from the wrong branch state.'}
+              {' '}Identity can be incomplete until the DAG lineage model is replaced.{!lineageRisk.complete ? ' This is a lower bound from an older index.' : ''}</>}
+            </span>
+          </aside>
+        ) : null}
         <AnimatePresence mode="wait">
           <motion.div key={view} className="view-wrap" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}>
             {view === 'ladder' ? <LadderView /> : null}

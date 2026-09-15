@@ -16,6 +16,7 @@ import {
   type SnippetRequest,
 } from "./snippets.ts";
 import { sha256, unwrapQuote } from "../evidence/span.ts";
+import { parallelLineageRisk, type ParallelLineageRisk } from "../git/health.ts";
 import { timelineOf, type TimelineRow, RATIONALE_SEPARATOR } from "../cli/why.ts";
 
 /**
@@ -432,6 +433,11 @@ export interface RepoSummary {
    */
   ostracised: { shown: number; hiddenTests: number; suspected: number };
   /**
+   * 平行分支上同一路徑各自演化時，現行全域 path map 可能錯配身份的可重算健康值。
+   * 它來自已保存的 git DAG，不是只在索引當下存在的一次性 warning。
+   */
+  lineageRisk: ParallelLineageRisk;
+  /**
    * 這份索引的規模。**畫面標頭一定要能標出自己在看哪一套語料**——先前的
    * mock 標題寫 vuejs/core、數字卻是 angular 的，而那種錯只有把數字接回
    * 資料庫才不會再發生。
@@ -685,6 +691,7 @@ export function repoSummary(db: DatabaseSync, repoId: number): RepoSummary {
       hiddenTests: ostracised.hiddenTests,
       suspected: ostracised.suspected,
     },
+    lineageRisk: parallelLineageRisk(db, repoId),
   };
 }
 

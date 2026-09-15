@@ -31,6 +31,7 @@ PRAGMA foreign_keys = ON;
 --   1 = 內容定址之前的 v0.5 系列（回溯編號，實際上從沒被寫進去過）
 --   2 = declaration_content：內容與位置分離、雜湊改存 BLOB
 --   3 = idx_revision_path：純索引，**不動任何資料**，所以是第一個可就地遷移的版本
+--   4 = lineage_anomaly：保存走訪時無法塞進 file_change 的血緣異常；純增補，可就地遷移
 --
 -- **不是每一次版本提升都該要求重建。** v1→v2 改了資料的存法，舊資料庫確實不可
 -- 續用；v2→v3 只加一條索引，輸出逐位元不變，而要求重建的代價是 angular 三小時。
@@ -41,10 +42,10 @@ CREATE TABLE schema_migration (
 ) STRICT;
 
 -- 各 pass 的水位線。結構 pass 可以跑到 commit X，證據 pass 落後到 commit Y，
--- claim pass 再落後——三者解耦是刻意的，因為只有 claim pass 要花錢。
+-- claim pass 再落後——它們解耦是刻意的；現行 claim 是零 LLM 的確定式投影。
 CREATE TABLE pass_state (
   repo_id           INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
-  pass_name         TEXT NOT NULL,      -- 各 pass 自訂；現有含 structural/declarations/excursion/linked/claim
+  pass_name         TEXT NOT NULL,      -- 現有含 structural/declarations/excursion/linked/claim/lineage-health
   last_commit_id    INTEGER REFERENCES git_commit(id),
   indexer_version   TEXT NOT NULL,      -- 版本變更時該 pass 的產出需作廢重算
   updated_at        TEXT NOT NULL,
@@ -125,6 +126,20 @@ CREATE TABLE file_change (
 
 CREATE INDEX idx_filechange_commit ON file_change(commit_id);
 CREATE INDEX idx_filechange_lineage ON file_change(lineage_id);
+
+-- `buildLineages` 遇到 parent-state divergence 時不會丟例外，但某些異常（尤其是
+-- 「刪除了全域 active map 裡不存在的路徑」）也沒有 lineage_id 可填，因此不能進
+-- file_change。只回傳一次性計數會在下一次 no-op 索引後消失，靜態匯出更完全看不見。
+-- 這張表保存原始診斷；完整性由 pass_state 的 `lineage-health` 水位線另行標記。
+CREATE TABLE lineage_anomaly (
+  repo_id    INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+  commit_id  INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
+  path       TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  PRIMARY KEY (repo_id, commit_id, path, reason)
+) STRICT;
+
+CREATE INDEX idx_lineage_anomaly_commit ON lineage_anomaly(commit_id);
 
 -- git 算好的「改動的是哪幾行」。內容完全相同的候選之間匹配器已無資訊可用
 -- （完整 Osiris 歷史有 51 條 L4/Jaccard=1 的任意配對），而行號是唯一還沒用上、

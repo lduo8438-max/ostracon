@@ -16,6 +16,7 @@ import "./ladder.test.ts";
 import "./ladder-view.test.ts";
 import "./subpath-deploy.test.ts";
 import "./lineage.test.ts";
+import "./lineage-health.test.ts";
 import "./linked.test.ts";
 import "./minhash-arithmetic.test.ts";
 import "./ostracised.test.ts";

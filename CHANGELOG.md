@@ -11,6 +11,26 @@
 
 ---
 
+## [Unreleased]
+
+### 平行分支血緣健康狀態
+
+- 非 merge commit 的 path state 與其 parent 發生矛盾時，現在會把 anomaly 持久保存；
+  `why`、`hotspots`、`ostracised` 與工作台都會明示風險，不再只在第一次索引的
+  `IndexGitReport` 留下一個之後會消失的數字。
+- 工作台會以全站 health banner 區分「完整審核且未命中」、「命中平行分支風險」與
+  「舊索引只能重建下限」三種狀態；後兩者都不再顯示 `output verified`。
+- 新增最小 DAG 回歸，並釘住沒有 lineage_id、因此進不了 `file_change` 的異常刪除
+  仍必須被保存。六套語料量測確認影響從 0 到 pip 的 299 次不等，不能再稱為罕見。
+
+### 資料庫相容性
+
+- schema 升為 **v4**，新增 `lineage_anomaly`。v3 → v4 是純增補，可就地遷移，
+  不改既有身份與 revision 產出。
+- 遷移過來的舊索引沒有完整歷史 anomaly；工具會把數字標為下限，直到全量重建。
+
+---
+
 ## [0.1.4] — 2026-09-10
 
 **把 W10 的能力放到使用者真的走得到、讀得懂的位置，並收進一條經兩套陌生語料

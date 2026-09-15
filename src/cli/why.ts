@@ -7,6 +7,7 @@ import { verifyParserAdapters } from "../ast/parser.ts";
 import { affectedEntityCounts, scopeOf } from "../claim/scope.ts";
 import { unwrapQuote } from "../evidence/span.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { parallelLineageRisk, parallelLineageRiskNotice } from "../git/health.ts";
 import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexLineage } from "../index/lineage-pass.ts";
 import {
@@ -668,6 +669,8 @@ export async function why(
       // 時間軸上少掉的那幾條引文是資料掉了。
       notes.push(staleEvidenceNotice(staleEvidence));
     }
+    const lineageNotice = parallelLineageRiskNotice(parallelLineageRisk(db, gitReport.repoId));
+    if (lineageNotice !== undefined) notes.push(lineageNotice);
     if (current === undefined) {
       // 使用者問的是一個在終點已經不存在的路徑。不說的話，時間軸看起來會像
       // 「這個檔案還在，只是最近沒動過」——那是完全相反的意思。

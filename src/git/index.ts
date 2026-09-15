@@ -15,6 +15,7 @@ import {
   openDb,
   persistWalk,
   type RepoConsolidation,
+  LINEAGE_HEALTH_VERSION,
 } from "./persist.ts";
 import type { WalkOptions } from "./types.ts";
 
@@ -106,6 +107,17 @@ export function indexGit(inputPath: string, opts: IndexGitOptions): IndexGitRepo
       nextLineageId: getNextLineageId(db),
     };
     let mode: "full" | "incremental" = "full";
+    const lineageHealthWasComplete = existingRepo !== undefined && db.prepare(
+      `SELECT 1
+         FROM pass_state health
+         JOIN pass_state structural
+           ON structural.repo_id = health.repo_id
+          AND structural.pass_name = 'structural'
+          AND structural.last_commit_id = health.last_commit_id
+        WHERE health.repo_id = ?
+          AND health.pass_name = 'lineage-health'
+          AND health.indexer_version = ?`,
+    ).get(existingRepo, LINEAGE_HEALTH_VERSION) !== undefined;
     if (watermark) {
       if (storedVersion !== version) {
         throw new Error(
@@ -148,6 +160,7 @@ export function indexGit(inputPath: string, opts: IndexGitOptions): IndexGitRepo
       originUrl: tryGit(repoPath, ["remote", "get-url", "origin"]),
       defaultBranch: tryGit(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]),
       structuralWatermark: { sha: untilSha, indexerVersion: version },
+      lineageHealthComplete: mode === "full" || lineageHealthWasComplete,
     });
 
     return {

@@ -59,8 +59,11 @@ export function openDb(path: string): DatabaseSync {
  *
  * 2 = `declaration_content`：內容與位置分離、雜湊改存 BLOB。
  * 3 = `idx_revision_path`：純索引，不動任何資料。
+ * 4 = `lineage_anomaly`：保存原本只存在於一次性 report 的診斷。
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
+
+export const LINEAGE_HEALTH_VERSION = "lineage-health-0.1.0";
 
 /**
  * 可就地套用的遷移：**只有不改變任何產出的變更才准列在這裡。**
@@ -73,6 +76,16 @@ export const SCHEMA_VERSION = 3;
 const MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
   [3, (db: DatabaseSync) => {
     db.exec("CREATE INDEX IF NOT EXISTS idx_revision_path ON revision(repo_id, lineage_id, path)");
+  }],
+  [4, (db: DatabaseSync) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS lineage_anomaly (
+      repo_id    INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+      commit_id  INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
+      path       TEXT NOT NULL,
+      reason     TEXT NOT NULL,
+      PRIMARY KEY (repo_id, commit_id, path, reason)
+    ) STRICT`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_lineage_anomaly_commit ON lineage_anomaly(commit_id)");
   }],
 ]);
 
@@ -303,6 +316,8 @@ export function persistWalk(
     originUrl?: string;
     defaultBranch?: string;
     structuralWatermark?: { sha: string; indexerVersion: string };
+    /** true 只在從 root 完整走過，或接續一份已完整的 lineage-health 水位線時成立。 */
+    lineageHealthComplete?: boolean;
   } = {},
 ): PersistResult {
   db.exec("BEGIN");
@@ -312,10 +327,14 @@ export function persistWalk(
     insertParents(db, repoId, commits, commitIds);
     resolveCommitIds(db, repoId, lineage, commitIds);
     applyLineages(db, repoId, lineage, commitIds);
+    insertLineageAnomalies(db, repoId, lineage, commitIds);
     const fileChangeIds = insertFileChanges(db, commits, commitIds, lineage);
     const hunkRows = insertHunks(db, commits, fileChangeIds);
     if (opts.structuralWatermark) {
       updateStructuralWatermark(db, repoId, opts.structuralWatermark, commitIds);
+      if (opts.lineageHealthComplete) {
+        updateLineageHealthWatermark(db, repoId, opts.structuralWatermark.sha, commitIds);
+      }
     }
     db.exec("COMMIT");
     return { repoId, commitIds, hunkRows };
@@ -323,6 +342,44 @@ export function persistWalk(
     db.exec("ROLLBACK");
     throw e;
   }
+}
+
+function insertLineageAnomalies(
+  db: DatabaseSync,
+  repoId: number,
+  lineage: LineageResult,
+  commitIds: Map<string, number>,
+): void {
+  const ins = db.prepare(
+    `INSERT INTO lineage_anomaly (repo_id, commit_id, path, reason)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (repo_id, commit_id, path, reason) DO NOTHING`,
+  );
+  for (const anomaly of lineage.anomalies) {
+    const commitId = commitIds.get(anomaly.sha);
+    if (commitId === undefined) throw new Error(`找不到 lineage anomaly commit ${anomaly.sha}`);
+    ins.run(repoId, commitId, anomaly.path, anomaly.reason);
+  }
+}
+
+function updateLineageHealthWatermark(
+  db: DatabaseSync,
+  repoId: number,
+  sha: string,
+  commitIds: Map<string, number>,
+): void {
+  const commitId = commitIds.get(sha)
+    ?? (db.prepare("SELECT id FROM git_commit WHERE repo_id = ? AND sha = ?")
+      .get(repoId, sha) as { id: number } | undefined)?.id;
+  if (commitId === undefined) throw new Error(`找不到 lineage-health 水位 commit ${sha}`);
+  db.prepare(
+    `INSERT INTO pass_state (repo_id, pass_name, last_commit_id, indexer_version, updated_at)
+     VALUES (?, 'lineage-health', ?, ?, ?)
+     ON CONFLICT (repo_id, pass_name) DO UPDATE SET
+       last_commit_id = excluded.last_commit_id,
+       indexer_version = excluded.indexer_version,
+       updated_at = excluded.updated_at`,
+  ).run(repoId, commitId, LINEAGE_HEALTH_VERSION, new Date().toISOString());
 }
 
 /**

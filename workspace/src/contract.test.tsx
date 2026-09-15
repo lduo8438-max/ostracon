@@ -128,6 +128,37 @@ describe('空資料是合法輸入', () => {
   })
 })
 
+describe('索引健康狀態不可靜默', () => {
+  it('平行分支風險會取代 verified 狀態並顯示全站警示', () => {
+    const { html } = render(
+      <Workspace repository={{
+        name: 'x/y', commits: 10, revisions: 20, entities: 3, schema: 'v3',
+        lineageRisk: {
+          complete: true,
+          divergences: 2,
+          affectedPaths: 1,
+          parsedPathDivergences: 2,
+          changedEntityRows: 4,
+          distinctEntities: 3,
+        },
+      }} />,
+    )
+    expect(html).toContain('lineage risk found')
+    expect(html).toContain('Parallel-branch lineage risk')
+    expect(html).toContain('4 indexed declaration changes across 3 entities')
+    expect(html).not.toContain('output verified')
+  })
+
+  it('舊 summary 缺少診斷欄位時標成 incomplete，不冒充零風險', () => {
+    const { html } = render(
+      <Workspace repository={{ name: 'old/export', commits: 1, revisions: 1, entities: 1, schema: 'v3' }} />,
+    )
+    expect(html).toContain('lineage audit incomplete')
+    expect(html).toContain('Lineage audit incomplete')
+    expect(html).not.toContain('output verified')
+  })
+})
+
 describe('時間軸沒有專屬理由時', () => {
   const rows = [row(1), row(2), row(3)]
 

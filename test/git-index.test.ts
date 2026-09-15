@@ -56,6 +56,12 @@ const SCHEMA = `
     old_path TEXT, change_type TEXT NOT NULL, rename_score INTEGER, blob_sha TEXT,
     UNIQUE (commit_id, path)
   ) STRICT;
+  CREATE TABLE lineage_anomaly (
+    repo_id INTEGER NOT NULL REFERENCES repo(id),
+    commit_id INTEGER NOT NULL REFERENCES git_commit(id),
+    path TEXT NOT NULL, reason TEXT NOT NULL,
+    PRIMARY KEY (repo_id, commit_id, path, reason)
+  ) STRICT;
   CREATE TABLE file_hunk (
     file_change_id INTEGER NOT NULL REFERENCES file_change(id) ON DELETE CASCADE,
     hunk_index INTEGER NOT NULL, old_start INTEGER NOT NULL, old_count INTEGER NOT NULL,

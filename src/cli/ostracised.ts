@@ -11,6 +11,7 @@ import {
   unboundExcursionNotice,
 } from "../claim/derive.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { parallelLineageRisk, parallelLineageRiskNotice } from "../git/health.ts";
 import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import { assertNoCrossRepoRows } from "../index/structural.ts";
@@ -254,6 +255,8 @@ export async function ostracised(
         ? [repoConsolidationNotice(gitReport.consolidation)]
         : []),
       ...(pass.mode === "rebuilt" ? [REBUILD_NOTICE] : []),
+      ...[parallelLineageRiskNotice(parallelLineageRisk(db, gitReport.repoId))]
+        .filter((notice): notice is string => notice !== undefined),
       ...[aggregateSuppressionNotice(claims), unboundExcursionNotice(claims)]
         .filter((notice): notice is string => notice !== undefined),
     ];

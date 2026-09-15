@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { verifyParserAdapters } from "../ast/parser.ts";
 import { indexGit, INDEXER_VERSION } from "../git/index.ts";
+import { parallelLineageRisk, parallelLineageRiskNotice } from "../git/health.ts";
 import { openIndexDatabase, repoConsolidationNotice } from "../git/persist.ts";
 import { indexRepoStructure, REBUILD_NOTICE } from "../index/repo-pass.ts";
 import { assertNoCrossRepoRows } from "../index/structural.ts";
@@ -208,6 +209,8 @@ export async function hotspots(
         ? [repoConsolidationNotice(gitReport.consolidation)]
         : []),
       ...(pass.mode === "rebuilt" ? [REBUILD_NOTICE] : []),
+      ...[parallelLineageRiskNotice(parallelLineageRisk(db, gitReport.repoId))]
+        .filter((notice): notice is string => notice !== undefined),
     ];
     return notes.length > 0 ? `${notes.join("\n")}\n\n${list}` : list;
   } finally {

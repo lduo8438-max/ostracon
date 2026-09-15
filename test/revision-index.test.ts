@@ -62,9 +62,13 @@ describe("revision 的路徑索引", () => {
       const version = (db.prepare("SELECT MAX(version) AS v FROM schema_migration")
         .get() as { v: number }).v;
       const plan = planOf(db, PREVIOUS_PATH_ENTITY_SQL);
+      const anomalyTable = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lineage_anomaly'",
+      ).get();
       db.close();
       assert.equal(version, SCHEMA_VERSION);
       assert.ok(plan.some((d) => d.includes("idx_revision_path")));
+      assert.ok(anomalyTable, "v2 → current 的遷移鏈必須同時建出 v4 anomaly 表");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

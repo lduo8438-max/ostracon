@@ -120,12 +120,23 @@ export interface OstracisedEntity {
  * 比序列還慢）；靜態站台雖然快，但首屏會多下載 154 KB 的 JSON，其中
  * 一半在當下那一頁用不到。拆開之後兩種後端各自受益。
  */
+export interface LineageRisk {
+  complete: boolean
+  divergences: number
+  affectedPaths: number
+  parsedPathDivergences: number
+  changedEntityRows: number
+  distinctEntities: number
+}
+
 export interface Repository {
   name: string
   commits: number
   revisions: number
   entities: number
   schema: string
+  /** 0.1.4 前的靜態 summary 沒有此欄；元件邊界會把缺值顯示成 audit incomplete。 */
+  lineageRisk?: LineageRisk
 }
 
 export interface LadderView {

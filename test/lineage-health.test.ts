@@ -98,20 +98,18 @@ test("沒有 lineage_id 而進不了 file_change 的異常仍會被持久保存"
     message: sha,
     isMerge: false,
   });
-  const commits = [
-    commit("root", [], 0, "A"),
-    commit("delete-a", ["root"], 1, "D"),
-    commit("delete-b", ["root"], 2, "D"),
-  ];
+  // parent-aware 模型已修掉「兄弟分支各刪一次」的假 anomaly；這裡改用真的不可能
+  // 進 file_change 的輸入，繼續驗 v4 健康資料不會因缺 lineage_id 而消失。
+  const commits = [commit("delete-missing", [], 0, "D")];
   const lineage = buildLineages(commits);
   assert.equal(lineage.anomalies.length, 1);
   persistWalk(db, "/persisted", commits, lineage, {
-    structuralWatermark: { sha: "delete-b", indexerVersion: "test" },
+    structuralWatermark: { sha: "delete-missing", indexerVersion: "test" },
     lineageHealthComplete: true,
   });
   assert.equal(
     (db.prepare("SELECT COUNT(*) AS n FROM file_change").get() as { n: number }).n,
-    2,
+    0,
     "異常刪除沒有 lineage_id，仍然不能假裝它已進 file_change",
   );
   assert.deepEqual(parallelLineageRisk(db, 1), {

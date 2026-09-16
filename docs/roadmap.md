@@ -251,13 +251,11 @@ revision 數只差 2.4%（144,746 對 148,199），索引時間卻差一倍**（
 **全部已進 README（2026-08-02）**，另補了迂迴偵測那一條。這裡保留清單本身，
 內文以 README 為準。
 
-1. **平行分支上的血緣**：維護的是全域 path → lineage 對照表而非逐 commit 樹狀態。
-   同一路徑在兩條分支各自演化再合併時歸屬可能出錯。2026-09-11 六套語料量測：
-   pip 299 次（139 次支援語言）、requests 30、Vue 6（3 次支援語言／4 次實際宣告
-   改動）、create-t3-app 2（皆非解析路徑）、playwright 與 Osiris 0。這已由「已知
-   取捨」升級為 **W11 身份模型缺陷**。第一刀先以 schema v4 持久化診斷、CLI 與 UI
-   health 狀態阻止靜默；下一刀才改 DAG 模型。只加 `--first-parent` 不成立，因為
-   現行結構 pass 跳過 merge，會連合併進來的分支工作一起漏掉。
+1. ~~**平行分支上的血緣**~~ ✅ **W11 已修**。schema v4 先持久化健康診斷；schema
+   v5 再以 parent-aware 稀疏 event 取代全域 path map 與 topo segment。pip 的 299、
+   requests 的 30、Vue 的 6 次 parent-state divergence 重跑皆歸零；五套 fresh golden
+   51/51。create-t3-app 額外抓到「merge 同時保留 rename 兩端」：匯入端現在 fork，
+   entity birth 落在 merge。舊索引因 `walk-0.4.0` 版本守門必須全量重建。
 2. **合併不做改名偵測**（git combined diff 的限制）。
 3. **alpha 層是名稱比對非作用域解析**（過度正規化，方向保守：會少送 LLM，不會多送）。
 4. **`ctrl-position-ambiguous` 類的位置歧義無解**（不是難解）。diff-hunk 約束也解不了，

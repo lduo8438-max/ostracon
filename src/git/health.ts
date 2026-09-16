@@ -7,10 +7,10 @@ import type { CommitRecord, FileChangeRecord } from "./types.ts";
 /**
  * 已知的平行分支血緣風險。
  *
- * `buildLineages` 目前用一張全域 path → lineage 狀態走拓撲序；非 merge commit 的
- * name-status 卻是相對於它自己的唯一 parent。若這兩者矛盾，代表全域狀態已被另一
- * 條分支改寫。這不是一般的「不規則 git 歷史」：在完整、非 shallow 的索引上，
- * A/M/D/R 對 parent 的語意足以把它判為 parent-state divergence。
+ * v4 的 `buildLineages` 曾用一張全域 path → lineage 狀態走拓撲序；非 merge commit
+ * 的 name-status 卻是相對自己的唯一 parent。這份值保留舊索引的診斷與相容顯示；
+ * v5 的 parent-aware event 模型不再製造這類 divergence，只有真正無法解析的輸入
+ * 才會留下 anomaly。
  *
  * 這份健康值刻意從已保存的 git_commit/file_change 重算，不讀本次 indexGit report。
  * 否則第一次索引會警告，第二次 no-op 就回到 0，既有匯出更完全看不見風險。
@@ -88,6 +88,8 @@ export function parallelLineageRisk(db: DatabaseSync, repoId: number): ParallelL
 
   let divergences = saved;
   if (!complete) {
+    // v4 相容診斷刻意不掛 parent：這裡要重播的是當時的 topo-linear 全域狀態，
+    // 才能從舊 DB 算出既有風險的保守下限。不要把這段誤改成 v5 parent-aware replay。
     const commitRows = db.prepare(
       `SELECT id, sha, is_merge AS isMerge, topo_order AS topoOrder
          FROM git_commit

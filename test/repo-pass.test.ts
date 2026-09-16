@@ -187,7 +187,7 @@ describe("全 repo 結構 pass", () => {
     db.close();
   });
 
-  it("合併 commit 一律跳過", async () => {
+  it("沒有新 lineage birth 的合併 commit 仍跳過", async () => {
     const { repo, git, write, commit } = makeRepo();
     write("src/a.ts", `${HELPER}\n`);
     commit("base");
@@ -211,7 +211,51 @@ describe("全 repo 結構 pass", () => {
     const db = new DatabaseSync(dbPath);
     db.exec("PRAGMA foreign_keys = ON");
     const pass = await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
-    assert.equal(pass.mergesSkipped, 1, "combined diff 沒有可靠的單一父");
+    assert.equal(pass.mergesSkipped, 1, "一般 merge 的 combined diff 沒有可靠的單一父");
+    db.close();
+  });
+
+  it("merge 同時保留 rename 兩端時，新 fork entity 誕生在 merge 而不是日後第一次修改", async () => {
+    const { repo, git, write, commit } = makeRepo();
+    write("src/old.ts", `${HELPER}\n`);
+    commit("base");
+    git("checkout", "-qb", "rename-side");
+    git("mv", "src/old.ts", "src/new.ts");
+    commit("rename on side");
+    git("checkout", "-q", "main");
+    write("src/main.ts", "export const main = 1;\n");
+    commit("advance main");
+    git(
+      "-c", "user.name=t", "-c", "user.email=t@t",
+      "merge", "--no-ff", "--no-commit", "rename-side",
+    );
+    write("src/old.ts", `${HELPER}\n`);
+    const mergeSha = commit("keep both copies");
+
+    const dbPath = freshDb();
+    await verifyParserAdapters();
+    const report = indexGit(repo, { dbPath });
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA foreign_keys = ON");
+    await indexRepoStructure(db, repo, report.repoId, INDEXER_VERSION);
+
+    const rows = db.prepare(
+      `SELECT e.id AS entityId, birth.sha AS birthSha, r.path AS path
+         FROM entity e
+         JOIN git_commit birth ON birth.id = e.birth_commit_id
+         JOIN revision r ON r.entity_id = e.id
+         JOIN slot s ON s.id = r.slot_id
+        WHERE s.qualified_name = 'normalizeRegion'
+        GROUP BY e.id, r.path
+        ORDER BY r.path`,
+    ).all() as unknown as Array<{ entityId: number; birthSha: string; path: string }>;
+    assert.deepEqual([...new Set(rows.map((row) => row.path))], ["src/new.ts", "src/old.ts"]);
+    assert.equal(new Set(rows.map((row) => row.entityId)).size, 2);
+    assert.equal(
+      rows.find((row) => row.path === "src/new.ts" && row.birthSha === mergeSha)?.birthSha,
+      mergeSha,
+      "fork 的使用者可見 birth 必須落在兩份內容首次同時存在的 merge",
+    );
     db.close();
   });
 });

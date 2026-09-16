@@ -436,6 +436,21 @@ export async function indexRepoStructure(
             lineage_id AS lineageId
        FROM file_change WHERE commit_id = ?`,
   );
+  const mergeBirthsOf = db.prepare(
+    `SELECT event.path AS path, NULL AS oldPath, 'A' AS changeType,
+            event.lineage_id AS lineageId
+       FROM path_lineage_event event
+       JOIN git_commit current ON current.id = event.commit_id
+      WHERE event.commit_id = ? AND event.lineage_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+            FROM path_lineage_event earlier
+            JOIN git_commit earlier_commit ON earlier_commit.id = earlier.commit_id
+           WHERE earlier.repo_id = event.repo_id
+             AND earlier.lineage_id = event.lineage_id
+             AND earlier_commit.topo_order < current.topo_order
+        )`,
+  );
   const parentOf = db.prepare(
     `SELECT p.sha AS sha
        FROM git_commit_parent e
@@ -485,14 +500,22 @@ export async function indexRepoStructure(
   for (const commit of commits) {
     const commitStarted = process.hrtime.bigint();
     report.commitsScanned++;
-    if (commit.isMerge === 1) {
+    const mergeBirths = commit.isMerge === 1
+      ? mergeBirthsOf.all(commit.id) as unknown as ChangeRow[]
+      : [];
+    if (commit.isMerge === 1 && mergeBirths.length === 0) {
       // combined diff 沒有可靠的單一父，被併入分支的改動也會在各自的 commit 走到。
       report.mergesSkipped++;
       finishCommit(commit, commitStarted);
       continue;
     }
     const parent = (parentOf.get(commit.id) as { sha: string } | undefined)?.sha;
-    const changes = (changesOf.all(commit.id) as unknown as ChangeRow[])
+    // merge 平常仍跳過；唯一例外是 parent-aware state 在 merge 結果中必須 fork
+    // lineage 的 path。那個新 identity 真正在此誕生，combined diff 卻不一定有列；
+    // 若等到日後第一次修改才建 entity，時間軸會把 birth 說晚。
+    const changes = (commit.isMerge === 1
+      ? mergeBirths
+      : changesOf.all(commit.id) as unknown as ChangeRow[])
       .filter((c) => grammarForPath(c.path) !== undefined);
     if (changes.length === 0) {
       finishCommit(commit, commitStarted);

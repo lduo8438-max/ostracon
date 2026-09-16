@@ -99,19 +99,24 @@ CI 會真的打包、在封裝外安裝、實跑 `why` 與 `hotspots`。那是�
 ### Git 走訪與路徑血緣
 
 非合併 commit 由一次反向拓撲序 `git log --name-status` 走訪，預設使用
-`-M30% -C40%`；合併 commit 另外只取 combined diff。這避免把被合入分支上
-已走訪過的 commit 重算一次，保留的正是衝突解決與 evil merge。combined diff
-不支援改名／複製偵測，因此不產生 `R` / `C`：所有父版本都沒有／都有的路徑仍
-可記為 `A` / `D`，其他組合記為 `M`。
+`-M30% -C40%`。合併 commit 有兩份刻意不同的 diff：combined diff 只進
+`file_change`，保留衝突解決與 evil merge；第一父到 merge 結果的 diff 只進
+`path_lineage_event`，用來重建輸出樹狀態。前者不支援改名／複製偵測，因此不產生
+`R` / `C`；後者可以偵測 rename，但不會被冒充為 merge 自己的 revision。
 
 只存在於部分父版本、又在合併結果消失的路徑不會出現在 combined diff；它相對至少
 一個父版本沒有變化。這筆刪除仍存在於分支自己的 commit，查詢不可把「merge-time
 deletion」等同於「一定能在 merge commit 找到 D」。
 
-`buildLineages` 是不碰 Git 與資料庫的純函式。它以存活路徑集合為輸入／輸出；
-資料庫中 `to_commit_id IS NULL` 的 segment 就是這個集合的唯一持久化表示，不另建
-平行狀態表。回傳給下一批的開放 segment 必須標成已持久化，跨批次關閉時才能產生
-`UPDATE`，而不是在當批空的 segment 陣列中尋找。
+`buildLineages` 是不碰 Git 與資料庫的純函式。每個 commit 的 state 是一個稀疏
+overlay，只指向自己的第一父；不存在的 path event 才沿第一父繼承，NULL event 是
+明確 tombstone。`path_lineage_segment` 是 v4 相容表，v5 新索引不再寫入：單一
+`to_commit_id` 的 topo 區間無法表示 DAG 上「一支已刪、另一支仍存」。
+
+merge 若把另一父的 path 帶進來，優先沿用那一父的 lineage；但若同一 lineage 已在
+第一父的另一個 path 存活，而 merge 結果同時保留兩者，匯入端必須 fork。結構 pass
+只為這種新 fork 處理 merge，讓 entity birth 落在兩份首次共存的 commit；一般 merge
+仍跳過，避免把分支工作重算。
 
 增量寫入必須同時維持以下不變量：
 
@@ -120,7 +125,7 @@ deletion」等同於「一定能在 merge commit 找到 D」。
 - structural 水位線與該批資料在同一個 transaction 提交；
 - 水位線不是新終點祖先、或 `indexer_version` 不同時，直接要求重建；
 - `file_change` 由 `UNIQUE (commit_id, path)` 保證重跑冪等；
-- 開放 segment 用部分索引加速續跑狀態重建。
+- 水位終點快照與任意批次外 parent 都由 event 沿第一父鏈重建；後者守住早岔晚併。
 
 ### 續跑時記憶體對照表必然落空，必須回資料庫查
 

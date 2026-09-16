@@ -416,6 +416,25 @@ export function lineagesEverAt(
   sha: string,
   pathName: string,
 ): number[] {
+  if (usesPathLineageEvents(db, repoId)) {
+    return (db.prepare(
+      `WITH RECURSIVE ancestors(id) AS (
+         SELECT id FROM git_commit WHERE repo_id = ? AND sha = ?
+         UNION
+         SELECT edge.parent_id
+           FROM ancestors
+           JOIN git_commit_parent edge ON edge.child_id = ancestors.id
+       )
+       SELECT event.lineage_id AS id, MAX(commit_row.topo_order) AS lastSeen
+         FROM ancestors
+         JOIN path_lineage_event event
+           ON event.repo_id = ? AND event.commit_id = ancestors.id
+         JOIN git_commit commit_row ON commit_row.id = event.commit_id
+        WHERE event.path = ? AND event.lineage_id IS NOT NULL
+        GROUP BY event.lineage_id
+        ORDER BY lastSeen DESC, event.lineage_id`,
+    ).all(repoId, sha, repoId, pathName) as unknown as Array<{ id: number }>).map((row) => row.id);
+  }
   return (db.prepare(
     `SELECT s.lineage_id AS id, MAX(from_c.topo_order) AS lastSeen
        FROM path_lineage_segment s
@@ -443,6 +462,25 @@ export function lineageIdAt(
   sha: string,
   pathName: string,
 ): number | undefined {
+  if (usesPathLineageEvents(db, repoId)) {
+    const event = db.prepare(
+      `WITH RECURSIVE first_parent(id, depth) AS (
+         SELECT id, 0 FROM git_commit WHERE repo_id = ? AND sha = ?
+         UNION ALL
+         SELECT edge.parent_id, first_parent.depth + 1
+           FROM first_parent
+           JOIN git_commit_parent edge ON edge.child_id = first_parent.id AND edge.ordinal = 0
+       )
+       SELECT state.lineage_id AS id
+         FROM first_parent
+         JOIN path_lineage_event state
+           ON state.repo_id = ? AND state.commit_id = first_parent.id
+        WHERE state.path = ?
+        ORDER BY first_parent.depth
+        LIMIT 1`,
+    ).get(repoId, sha, repoId, pathName) as { id: number | null } | undefined;
+    return event?.id ?? undefined;
+  }
   const direct = db.prepare(
     `SELECT fc.lineage_id AS id
        FROM file_change fc
@@ -464,6 +502,15 @@ export function lineageIdAt(
       LIMIT 1`,
   ).get(sha, repoId, pathName) as { id: number } | undefined;
   return row?.id;
+}
+
+function usesPathLineageEvents(db: DatabaseSync, repoId: number): boolean {
+  return db.prepare(
+    `SELECT 1
+       FROM pass_state
+      WHERE repo_id = ? AND pass_name = 'structural'
+        AND indexer_version LIKE 'walk-0.4.0+%'`,
+  ).get(repoId) !== undefined;
 }
 
 /**
@@ -641,25 +688,26 @@ export function recreatedPathPredecessor(
   atSha: string,
 ): RecreatedPathPredecessor | undefined {
   const row = prep(db,
-    `SELECT seg.lineage_id AS lineageId, deleted.sha AS deletedAt,
+    `WITH RECURSIVE first_parent(id) AS (
+       SELECT id FROM git_commit WHERE repo_id = ? AND sha = ?
+       UNION ALL
+       SELECT edge.parent_id
+         FROM first_parent
+         JOIN git_commit_parent edge
+           ON edge.child_id = first_parent.id AND edge.ordinal = 0
+     )
+     SELECT fc.lineage_id AS lineageId, deleted.sha AS deletedAt,
             parent.sha AS finalCommit
-       FROM path_lineage_segment seg
-       JOIN path_lineage old_lineage ON old_lineage.id = seg.lineage_id
-       JOIN git_commit deleted ON deleted.id = seg.to_commit_id
-       JOIN git_commit target ON target.repo_id = old_lineage.repo_id AND target.sha = ?
-       JOIN file_change fc ON fc.commit_id = deleted.id
-                          AND fc.lineage_id = seg.lineage_id
-                          AND fc.path = seg.path
-                          AND fc.change_type = 'D'
+       FROM first_parent
+       JOIN git_commit deleted ON deleted.id = first_parent.id
+       JOIN file_change fc ON fc.commit_id = deleted.id AND fc.change_type = 'D'
        LEFT JOIN git_commit_parent edge ON edge.child_id = deleted.id AND edge.ordinal = 0
        LEFT JOIN git_commit parent ON parent.id = edge.parent_id
-      WHERE old_lineage.repo_id = ?
-        AND seg.lineage_id <> ?
-        AND seg.path = ?
-        AND deleted.topo_order < target.topo_order
+      WHERE fc.lineage_id <> ?
+        AND fc.path = ?
       ORDER BY deleted.topo_order DESC
       LIMIT 1`,
-  ).get(atSha, repoId, currentLineageId, pathName) as
+  ).get(repoId, atSha, currentLineageId, pathName) as
     | { lineageId: number; deletedAt: string; finalCommit: string | null }
     | undefined;
   return row
@@ -1016,7 +1064,9 @@ export function ensureRevision(
     if (existing.entityId !== entityId) {
       throw new Error(
         `revision ${existing.id} 已屬於 entity ${existing.entityId}，`
-        + `不可再交給 entity ${entityId}（不變量 1）。`,
+        + `不可再交給 entity ${entityId}（不變量 1；`
+        + `${observed.commit.slice(0, 10)} ${observed.path}:${observed.symbol}#${observed.occurrence}，`
+        + `lineage ${lineageId}）。`,
       );
     }
     return existing.id;

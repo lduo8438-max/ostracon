@@ -434,25 +434,20 @@ ostracon ostracised --repo <repo> --db index.db      # 不給 --until 就跑到 
 `fetch-depth: 0`。partial clone（`--filter=blob:none`）不受影響——它的 commit
 歷史是完整的，只有 blob 延遲取得。
 
-### 平行分支上的血緣歸屬可能出錯
+### 平行分支血緣需要 schema v5 全量重建
 
-走訪層維護的是一張**全域的 path → lineage 對照表**，而不是逐 commit 的完整樹狀態。
-同一個路徑在兩條平行分支上各自演化、之後才合併時，血緣歸屬可能接錯。
+schema v4 以前以一張全域 path → lineage 對照表走拓撲序；同一路徑在兩條平行分支
+各自演化時，一支的刪除會改寫另一支讀到的狀態。六套語料量測曾抓到 pip 299 次、
+requests 30 次、Vue 6 次 parent-state divergence，證明這不是可忽略的邊角情況。
 
-這不是可忽略的罕見情況。六套語料的獨立量測中，merge-heavy 的 pypa/pip 有 299 次
-parent-state divergence（139 次落在支援語言路徑），requests 有 30 次；
-microsoft/playwright 與 Osiris 是 0，create-t3-app 的 2 次只落在 lockfile，Vue 的
-6 次裡有 3 次落在支援語言路徑、對到 4 次已索引宣告改動。換句話說，它取決於
-分支拓撲，不能用 repo 大小或「通常很少」帶過。
+schema v5 改成 **parent-aware 稀疏事件**：一般 commit 只從自己的第一父繼承；merge
+另存第一父樹到結果樹的 state diff，分支帶入的檔案不會被重算成 merge 自己的改動。
+若 merge 同時保留某次 rename 的新舊兩端，匯入端會明確 fork，避免一條 lineage 在
+同一棵樹佔兩個 path；新 entity 的 birth 也會落在那顆 merge，而非日後第一次修改。
 
-schema v4 起會把走訪時的異常持久保存；CLI 與工作台會顯示 lineage-health 狀態，
-不再把受影響的索引標成 verified。v3 索引可就地遷移，但原本沒保存、也進不了
-`file_change` 的異常無法事後完整還原，所以在全量重建前只會顯示**可重建下限**。
-
-**目前沒有繞過它的辦法，這是待修的身份模型缺陷。** 只加 `--first-parent` 不是安全
-修法：現行結構 pass 跳過 merge commit；若同時不改 merge 的取法，分支上最後合併
-進來的工作會整批消失。根治需要讓 path state 與 commit parent 對齊，並重新設計
-`path_lineage_segment` 只能保存單一 `to_commit_id` 的區間模型。
+舊索引可就地升級 schema 以供只讀，但**不能把空事件表冒充已重建**：走訪演算法版本
+已變為 `walk-0.4.0`，下一次寫入會要求全量重建。重建前 CLI／工作台仍保留 v4 的
+lineage-health 警示；重建後才會以新模型計算 verified 狀態。
 
 ### 合併 commit 不做改名偵測
 

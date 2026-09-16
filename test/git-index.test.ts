@@ -16,6 +16,7 @@ import {
   persistWalk,
   walkCommits,
 } from "../src/git/index.ts";
+import { lineageIdAt, recreatedPathPredecessor } from "../src/index/structural.ts";
 
 const SCHEMA = `
   PRAGMA foreign_keys = ON;
@@ -50,6 +51,13 @@ const SCHEMA = `
   ) STRICT;
   CREATE INDEX idx_segment_open ON path_lineage_segment(lineage_id)
     WHERE to_commit_id IS NULL;
+  CREATE TABLE path_lineage_event (
+    repo_id INTEGER NOT NULL REFERENCES repo(id),
+    commit_id INTEGER NOT NULL REFERENCES git_commit(id),
+    path TEXT NOT NULL,
+    lineage_id INTEGER REFERENCES path_lineage(id),
+    PRIMARY KEY (repo_id, commit_id, path)
+  ) STRICT;
   CREATE TABLE file_change (
     id INTEGER PRIMARY KEY, commit_id INTEGER NOT NULL REFERENCES git_commit(id),
     lineage_id INTEGER NOT NULL REFERENCES path_lineage(id), path TEXT NOT NULL,
@@ -127,7 +135,7 @@ test("兩個 repo 的 lineage 主鍵不碰撞，也不會跨 repo 引用", () =>
   assert.deepEqual(lineageIds.map((row) => row.id), [1, 2]);
 });
 
-test("增量批次延續 topo_order、parent edge 並關閉舊 segment", () => {
+test("增量批次延續 topo_order、parent edge 並寫入 tombstone event", () => {
   const dbPath = makeDb();
   const repo = makeRepo();
   indexGit(repo, { dbPath });
@@ -147,16 +155,22 @@ test("增量批次延續 topo_order、parent edge 並關閉舊 segment", () => {
   ).all() as Array<{ n: number }>;
   const parents = db.prepare("SELECT COUNT(*) AS n FROM git_commit_parent").get() as { n: number };
   const changes = db.prepare("SELECT COUNT(*) AS n FROM file_change").get() as { n: number };
-  const closed = db.prepare(
-    `SELECT c.sha AS sha FROM path_lineage_segment s
-     JOIN git_commit c ON c.id = s.to_commit_id`,
-  ).get() as { sha: string };
+  const tombstone = db.prepare(
+    `SELECT c.sha AS sha, event.lineage_id AS lineageId
+       FROM path_lineage_event event
+       JOIN git_commit c ON c.id = event.commit_id
+      WHERE event.path = 'a.ts' AND event.lineage_id IS NULL`,
+  ).get() as { sha: string; lineageId: null };
+  const segmentCount = db.prepare("SELECT COUNT(*) AS n FROM path_lineage_segment")
+    .get() as { n: number };
   db.close();
 
   assert.deepEqual(topo.map((row) => row.n), [0, 1, 2]);
   assert.equal(parents.n, 2);
   assert.equal(changes.n, 3);
-  assert.equal(closed.sha, death);
+  assert.equal(tombstone.sha, death);
+  assert.equal(tombstone.lineageId, null);
+  assert.equal(segmentCount.n, 0, "v5 不得再把 DAG state 投影成會說謊的 topo 區間");
 });
 
 test("hunk 寫進 file_hunk，且二進位與合併不留任何列", () => {
@@ -293,6 +307,118 @@ test("合併依 combined 狀態保留 A/D/M，且永遠不產生 R/C", () => {
     ),
     "combined diff 不可見的路徑仍應在分支自己的 commit 留下紀錄",
   );
+});
+
+test("merge 從另一父帶進來的路徑保存 state event，且沿用分支原 lineage", () => {
+  const dbPath = makeDb();
+  const repo = makeRepo("src/root.ts");
+  git(repo, "checkout", "-qb", "feature");
+  write(repo, "src/branch.ts", "branch one\n");
+  const branchAdd = commit(repo, "add branch file");
+  git(repo, "checkout", "-q", "main");
+  write(repo, "src/root.ts", "main two\n");
+  commit(repo, "advance main");
+  git(repo, "merge", "--no-ff", "-qm", "merge feature", "feature");
+  const mergeSha = git(repo, "rev-parse", "HEAD");
+  write(repo, "src/branch.ts", "branch two\n");
+  const child = commit(repo, "edit imported file");
+
+  const walked = walkCommits(repo);
+  const merge = walked.find((candidate) => candidate.sha === mergeSha);
+  assert.ok(merge);
+  assert.equal(
+    merge.changes.some((change) => change.path === "src/branch.ts"),
+    false,
+    "乾淨帶入的分支檔案不是 merge 自己的 combined contribution",
+  );
+  assert.equal(
+    merge.stateChanges?.some(
+      (change) => change.path === "src/branch.ts" && change.changeType === "A",
+    ),
+    true,
+    "但第一父到 merge 結果的 state diff 必須看得見它",
+  );
+
+  const report = indexGit(repo, { dbPath });
+  const db = new DatabaseSync(dbPath);
+  const lineageForChange = (sha: string) => (db.prepare(
+    `SELECT fc.lineage_id AS id
+       FROM file_change fc JOIN git_commit c ON c.id = fc.commit_id
+      WHERE c.sha = ? AND fc.path = 'src/branch.ts'`,
+  ).get(sha) as { id: number }).id;
+  const branchLineage = lineageForChange(branchAdd);
+  assert.equal(lineageForChange(child), branchLineage);
+  assert.equal(lineageIdAt(db, report.repoId, mergeSha, "src/branch.ts"), branchLineage);
+  assert.equal(lineageIdAt(db, report.repoId, child, "src/branch.ts"), branchLineage);
+  const mergeEvent = db.prepare(
+    `SELECT event.lineage_id AS id
+       FROM path_lineage_event event JOIN git_commit c ON c.id = event.commit_id
+      WHERE c.sha = ? AND event.path = 'src/branch.ts'`,
+  ).get(mergeSha) as { id: number };
+  assert.equal(mergeEvent.id, branchLineage);
+  db.close();
+});
+
+test("增量批次外的分支 parent 從事件表懶讀，與全量 lineage 相同", () => {
+  const incrementalDb = makeDb();
+  const fullDb = makeDb();
+  const repo = makeRepo("src/shared.ts");
+  const root = git(repo, "rev-parse", "HEAD");
+  git(repo, "checkout", "-qb", "feature");
+  write(repo, "src/shared.ts", "feature two\n");
+  const feature = commit(repo, "edit on feature");
+  git(repo, "checkout", "-q", "main");
+  write(repo, "src/main.ts", "main only\n");
+  const watermark = commit(repo, "advance main");
+
+  indexGit(repo, { dbPath: incrementalDb, until: watermark });
+  git(repo, "merge", "--no-ff", "-qm", "merge feature", "feature");
+  const tip = git(repo, "rev-parse", "HEAD");
+  const incremental = indexGit(repo, { dbPath: incrementalDb });
+  const full = indexGit(repo, { dbPath: fullDb });
+  assert.equal(incremental.mode, "incremental");
+
+  const ids = (dbPath: string) => {
+    const db = new DatabaseSync(dbPath);
+    const repoId = (db.prepare("SELECT id FROM repo").get() as { id: number }).id;
+    const result = {
+      root: lineageIdAt(db, repoId, root, "src/shared.ts"),
+      feature: lineageIdAt(db, repoId, feature, "src/shared.ts"),
+      tip: lineageIdAt(db, repoId, tip, "src/shared.ts"),
+    };
+    db.close();
+    return result;
+  };
+  assert.deepEqual(ids(incrementalDb), ids(fullDb));
+  assert.equal(ids(fullDb).root, ids(fullDb).feature);
+  assert.equal(full.anomalies, 0);
+});
+
+test("旁支曾刪除的路徑不冒充主線日後新增的 predecessor", () => {
+  const dbPath = makeDb();
+  const repo = makeRepo("src/root.ts");
+  git(repo, "checkout", "-qb", "side");
+  write(repo, "src/transient.ts", "side only\n");
+  commit(repo, "add transient on side");
+  git(repo, "rm", "-q", "src/transient.ts");
+  commit(repo, "delete transient on side");
+  git(repo, "checkout", "-q", "main");
+  write(repo, "src/main.ts", "main only\n");
+  commit(repo, "advance main");
+  git(repo, "merge", "--no-ff", "-qm", "merge side", "side");
+  write(repo, "src/transient.ts", "main birth\n");
+  const birth = commit(repo, "add transient on main");
+
+  const report = indexGit(repo, { dbPath });
+  const db = new DatabaseSync(dbPath);
+  const lineageId = lineageIdAt(db, report.repoId, birth, "src/transient.ts");
+  assert.ok(lineageId);
+  assert.equal(
+    recreatedPathPredecessor(db, report.repoId, lineageId, "src/transient.ts", birth),
+    undefined,
+    "second-parent branch history is not a D → A transition on the current timeline",
+  );
+  db.close();
 });
 
 test("indexer_version 由實際選項算出，改門檻就換版本", () => {

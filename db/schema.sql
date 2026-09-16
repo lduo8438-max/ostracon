@@ -32,6 +32,7 @@ PRAGMA foreign_keys = ON;
 --   2 = declaration_content：內容與位置分離、雜湊改存 BLOB
 --   3 = idx_revision_path：純索引，**不動任何資料**，所以是第一個可就地遷移的版本
 --   4 = lineage_anomaly：保存走訪時無法塞進 file_change 的血緣異常；純增補，可就地遷移
+--   5 = path_lineage_event：以 parent-aware 稀疏事件取代無法表示 DAG 的 topo 區間
 --
 -- **不是每一次版本提升都該要求重建。** v1→v2 改了資料的存法，舊資料庫確實不可
 -- 續用；v2→v3 只加一條索引，輸出逐位元不變，而要求重建的代價是 angular 三小時。
@@ -103,11 +104,27 @@ CREATE TABLE path_lineage_segment (
   PRIMARY KEY (lineage_id, from_commit_id)
 ) STRICT;
 
--- 增量續跑靠這條索引重建存活路徑集合：尚未關閉的 segment 就是存活路徑本身。
+-- v4 相容結構：v5 新索引不再寫入。topo 區間無法表示 DAG 上「一支已刪、另一支仍存」；
+-- 保留表是為了讓舊索引只讀與就地 migration 有明確邊界，不把 schema 升級冒充重建。
 CREATE INDEX idx_segment_open ON path_lineage_segment(lineage_id)
   WHERE to_commit_id IS NULL;
 
 CREATE INDEX idx_lineage_path ON path_lineage_segment(path);
+
+-- DAG-aware 的 path state 真相。每列是這個 commit 相對第一父的狀態覆寫：
+-- lineage_id 有值代表存在且屬於該血緣，NULL 是明確刪除；沒有列才是沿第一父繼承。
+-- merge 額外保存第一父樹到 merge 結果的差異，所以另一分支帶進來、但不屬於
+-- combined diff 的檔案也有狀態事件，卻不會被重算成 merge 自己的 file_change。
+CREATE TABLE path_lineage_event (
+  repo_id     INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+  commit_id   INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
+  path        TEXT NOT NULL,
+  lineage_id  INTEGER REFERENCES path_lineage(id), -- NULL = tombstone
+  PRIMARY KEY (repo_id, commit_id, path)
+) STRICT;
+
+CREATE INDEX idx_lineage_event_lookup
+  ON path_lineage_event(repo_id, path, commit_id);
 
 CREATE TABLE file_change (
   id            INTEGER PRIMARY KEY,

@@ -65,10 +65,14 @@ describe("revision 的路徑索引", () => {
       const anomalyTable = db.prepare(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lineage_anomaly'",
       ).get();
+      const eventTable = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'path_lineage_event'",
+      ).get();
       db.close();
       assert.equal(version, SCHEMA_VERSION);
       assert.ok(plan.some((d) => d.includes("idx_revision_path")));
       assert.ok(anomalyTable, "v2 → current 的遷移鏈必須同時建出 v4 anomaly 表");
+      assert.ok(eventTable, "v2 → current 的遷移鏈必須同時建出 v5 path event 表");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

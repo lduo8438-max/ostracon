@@ -60,8 +60,9 @@ export function openDb(path: string): DatabaseSync {
  * 2 = `declaration_content`：內容與位置分離、雜湊改存 BLOB。
  * 3 = `idx_revision_path`：純索引，不動任何資料。
  * 4 = `lineage_anomaly`：保存原本只存在於一次性 report 的診斷。
+ * 5 = `path_lineage_event`：parent-aware 的稀疏 path state。
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const LINEAGE_HEALTH_VERSION = "lineage-health-0.1.0";
 
@@ -86,6 +87,18 @@ const MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
       PRIMARY KEY (repo_id, commit_id, path, reason)
     ) STRICT`);
     db.exec("CREATE INDEX IF NOT EXISTS idx_lineage_anomaly_commit ON lineage_anomaly(commit_id)");
+  }],
+  [5, (db: DatabaseSync) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS path_lineage_event (
+      repo_id     INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+      commit_id   INTEGER NOT NULL REFERENCES git_commit(id) ON DELETE CASCADE,
+      path        TEXT NOT NULL,
+      lineage_id  INTEGER REFERENCES path_lineage(id),
+      PRIMARY KEY (repo_id, commit_id, path)
+    ) STRICT`);
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_lineage_event_lookup ON path_lineage_event(repo_id, path, commit_id)",
+    );
   }],
 ]);
 
@@ -285,26 +298,82 @@ export const repoConsolidationNotice = (c: RepoConsolidation): string =>
 /**
  * 從資料庫重建血緣續跑狀態。
  *
- * 尚未關閉的 segment（to_commit_id IS NULL）就是存活路徑集合本身，
- * 所以續跑狀態不需要另外持久化——它不可能與實際資料不同步，
- * 因為它「就是」實際資料。
+ * active 是目前 structural 水位沿第一父鏈折疊出的終點快照；resolveAt 則能懶讀
+ * 任意批次外 parent。後者是增量遇到「分支早在水位前岔出、現在才被 merge」時仍
+ * 能與全量一致的關鍵，不能只拿終點快照代替。
  */
 export function loadLineageState(db: DatabaseSync, repoId: number): LineageState {
   const rows = db
     .prepare(
-      `SELECT s.lineage_id AS lineageId, s.path AS path, c.sha AS fromSha
-       FROM path_lineage_segment s
-       JOIN path_lineage l ON l.id = s.lineage_id
-       JOIN git_commit c ON c.id = s.from_commit_id
-       WHERE l.repo_id = ? AND s.to_commit_id IS NULL`,
+      `WITH RECURSIVE first_parent(id, depth) AS (
+         SELECT last_commit_id, 0
+           FROM pass_state
+          WHERE repo_id = ? AND pass_name = 'structural'
+         UNION ALL
+         SELECT edge.parent_id, first_parent.depth + 1
+           FROM first_parent
+           JOIN git_commit_parent edge ON edge.child_id = first_parent.id AND edge.ordinal = 0
+       ), ranked AS (
+         SELECT event.lineage_id AS lineageId, event.path AS path, c.sha AS fromSha,
+                ROW_NUMBER() OVER (PARTITION BY event.path ORDER BY first_parent.depth) AS rank
+           FROM first_parent
+           JOIN path_lineage_event event
+             ON event.repo_id = ? AND event.commit_id = first_parent.id
+           JOIN git_commit c ON c.id = event.commit_id
+       )
+       SELECT lineageId, path, fromSha
+         FROM ranked
+        WHERE rank = 1 AND lineageId IS NOT NULL`,
     )
-    .all(repoId) as Array<{ lineageId: number; path: string; fromSha: string }>;
+    .all(repoId, repoId) as Array<{ lineageId: number; path: string; fromSha: string }>;
 
   const active = new Map<string, { lineageId: number; fromSha: string; isNew: boolean }>();
   for (const r of rows) {
     active.set(r.path, { lineageId: r.lineageId, fromSha: r.fromSha, isNew: false });
   }
-  return { active, nextLineageId: getNextLineageId(db) };
+  const resolve = db.prepare(
+    `WITH RECURSIVE first_parent(id, depth) AS (
+       SELECT id, 0 FROM git_commit WHERE repo_id = ? AND sha = ?
+       UNION ALL
+       SELECT edge.parent_id, first_parent.depth + 1
+         FROM first_parent
+         JOIN git_commit_parent edge ON edge.child_id = first_parent.id AND edge.ordinal = 0
+     )
+     SELECT event.lineage_id AS lineageId
+       FROM first_parent
+       JOIN path_lineage_event event
+         ON event.repo_id = ? AND event.commit_id = first_parent.id AND event.path = ?
+      ORDER BY first_parent.depth
+      LIMIT 1`,
+  );
+  const resolvePath = db.prepare(
+    `WITH RECURSIVE first_parent(id, depth) AS (
+       SELECT id, 0 FROM git_commit WHERE repo_id = ? AND sha = ?
+       UNION ALL
+       SELECT edge.parent_id, first_parent.depth + 1
+         FROM first_parent
+         JOIN git_commit_parent edge ON edge.child_id = first_parent.id AND edge.ordinal = 0
+     ), ranked AS (
+       SELECT event.path AS path, event.lineage_id AS lineageId,
+              ROW_NUMBER() OVER (PARTITION BY event.path ORDER BY first_parent.depth) AS rank
+         FROM first_parent
+         JOIN path_lineage_event event
+           ON event.repo_id = ? AND event.commit_id = first_parent.id
+     )
+     SELECT path FROM ranked WHERE rank = 1 AND lineageId = ? LIMIT 1`,
+  );
+  return {
+    active,
+    nextLineageId: getNextLineageId(db),
+    resolveAt: (sha, path) => {
+      const row = resolve.get(repoId, sha, repoId, path) as { lineageId: number | null } | undefined;
+      return row?.lineageId ?? undefined;
+    },
+    resolvePathAt: (sha, lineageId) => {
+      const row = resolvePath.get(repoId, sha, repoId, lineageId) as { path: string } | undefined;
+      return row?.path;
+    },
+  };
 }
 
 export function persistWalk(
@@ -325,8 +394,8 @@ export function persistWalk(
     const repoId = upsertRepo(db, rootPath, opts);
     const commitIds = insertCommits(db, repoId, commits);
     insertParents(db, repoId, commits, commitIds);
-    resolveCommitIds(db, repoId, lineage, commitIds);
-    applyLineages(db, repoId, lineage, commitIds);
+    applyLineages(db, repoId, lineage);
+    insertLineageEvents(db, repoId, lineage, commitIds);
     insertLineageAnomalies(db, repoId, lineage, commitIds);
     const fileChangeIds = insertFileChanges(db, commits, commitIds, lineage);
     const hunkRows = insertHunks(db, commits, fileChangeIds);
@@ -380,28 +449,6 @@ function updateLineageHealthWatermark(
        indexer_version = excluded.indexer_version,
        updated_at = excluded.updated_at`,
   ).run(repoId, commitId, LINEAGE_HEALTH_VERSION, new Date().toISOString());
-}
-
-/**
- * segment 的端點可能落在「先前批次已索引」的 commit 上（例如續跑時關閉一段舊血緣），
- * 那些 sha 不在本次的 commitIds 裡，必須回資料庫補查。
- */
-function resolveCommitIds(
-  db: DatabaseSync,
-  repoId: number,
-  lineage: LineageResult,
-  commitIds: Map<string, number>,
-): void {
-  const sel = db.prepare("SELECT id FROM git_commit WHERE repo_id = ? AND sha = ?");
-  const need = new Set<string>();
-  for (const s of lineage.segments) {
-    if (!commitIds.has(s.fromSha)) need.add(s.fromSha);
-    if (s.toSha && !commitIds.has(s.toSha)) need.add(s.toSha);
-  }
-  for (const sha of need) {
-    const row = sel.get(repoId, sha) as { id: number } | undefined;
-    if (row) commitIds.set(sha, row.id);
-  }
 }
 
 function upsertRepo(
@@ -470,62 +517,45 @@ function insertParents(
   }
 }
 
-/**
- * lineageId 就是 path_lineage 的主鍵，不做二次映射。
- * isNew=true 的 segment 走 INSERT，isNew=false 的走 UPDATE——
- * 後者代表「上一批次留下的開放段落，這次被關閉了」。
- */
 function applyLineages(
   db: DatabaseSync,
   repoId: number,
   lineage: LineageResult,
-  commitIds: Map<string, number>,
 ): void {
   const insLineage = db.prepare(
     "INSERT INTO path_lineage (id, repo_id) VALUES (?, ?) ON CONFLICT (id) DO NOTHING",
   );
   const lineageOwner = db.prepare("SELECT repo_id AS repoId FROM path_lineage WHERE id = ?");
-  const insSeg = db.prepare(
-    `INSERT INTO path_lineage_segment (lineage_id, path, from_commit_id, to_commit_id)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT (lineage_id, from_commit_id) DO UPDATE SET
-       path = excluded.path, to_commit_id = excluded.to_commit_id`,
-  );
-  const closeSeg = db.prepare(
-    `UPDATE path_lineage_segment SET to_commit_id = ?
-     WHERE lineage_id = ? AND from_commit_id = ?`,
-  );
+  // path_lineage_segment 無法表達 DAG 存活區間，v5 起不再寫入。lineage 的 FK 身分
+  // 由 event 與 file_change 的實際引用建立，不能再把「有 segment」當成替身。
+  const ids = new Set([
+    ...lineage.events.flatMap((event) => event.lineageId === null ? [] : [event.lineageId]),
+    ...lineage.changeLineage.values(),
+  ]);
+  for (const id of ids) {
+    insLineage.run(id, repoId);
+    const owner = lineageOwner.get(id) as { repoId: number };
+    if (owner.repoId !== repoId) {
+      throw new Error(`lineage id ${id} 已屬於 repo ${owner.repoId}，不可指派給 repo ${repoId}`);
+    }
+  }
+}
 
-  for (const seg of lineage.segments) {
-    const from = commitIds.get(seg.fromSha);
-    if (from === undefined) {
-      throw new Error(`找不到 segment 起點 commit ${seg.fromSha}`);
-    }
-    let to: number | null = null;
-    if (seg.toSha) {
-      const resolved = commitIds.get(seg.toSha);
-      if (resolved === undefined) {
-        throw new Error(`找不到 segment 終點 commit ${seg.toSha}`);
-      }
-      to = resolved;
-    }
-    if (seg.isNew) {
-      insLineage.run(seg.lineageId, repoId);
-      const owner = lineageOwner.get(seg.lineageId) as { repoId: number };
-      if (owner.repoId !== repoId) {
-        throw new Error(
-          `lineage id ${seg.lineageId} 已屬於 repo ${owner.repoId}，不可指派給 repo ${repoId}`,
-        );
-      }
-      insSeg.run(seg.lineageId, seg.path, from, to);
-    } else {
-      const result = closeSeg.run(to, seg.lineageId, from);
-      if (result.changes !== 1) {
-        throw new Error(
-          `無法關閉 lineage ${seg.lineageId} 的 segment ${seg.path}@${seg.fromSha}`,
-        );
-      }
-    }
+function insertLineageEvents(
+  db: DatabaseSync,
+  repoId: number,
+  lineage: LineageResult,
+  commitIds: Map<string, number>,
+): void {
+  const insert = db.prepare(
+    `INSERT INTO path_lineage_event (repo_id, commit_id, path, lineage_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (repo_id, commit_id, path) DO UPDATE SET lineage_id = excluded.lineage_id`,
+  );
+  for (const event of lineage.events) {
+    const commitId = commitIds.get(event.sha);
+    if (commitId === undefined) throw new Error(`找不到 lineage event commit ${event.sha}`);
+    insert.run(repoId, commitId, event.path, event.lineageId);
   }
 }
 

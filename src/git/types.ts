@@ -46,6 +46,11 @@ export interface CommitRecord {
   /** 反向拓撲序中的索引。祖先必定小於後代。 */
   topoOrder: number;
   changes: FileChangeRecord[];
+  /**
+   * 只有 merge 需要：第一父樹到 merge 結果的差異。`changes` 仍是 combined diff，
+   * 只代表 merge 自己的衝突解決；這份則只拿來重建 merge 之後的 path state。
+   */
+  stateChanges?: FileChangeRecord[];
 }
 
 export interface WalkOptions {
@@ -74,17 +79,33 @@ export interface LineageSegment {
 /**
  * 增量走訪的續跑狀態。
  *
- * 關鍵洞見：資料庫裡「尚未關閉的 segment」就是存活路徑集合本身
- * （to_commit_id IS NULL）。所以續跑不需要另外持久化任何狀態，
- * 一句 SELECT 就能重建，也不可能與實際資料不同步。
+ * `active` 是水位終點的便利快照；真正讓分支批次接得回去的是 `resolveAt`：它能從
+ * v5 event 沿任意批次外 parent 的第一父鏈懶讀 path state。只保存 HEAD 快照會漏掉
+ * 「早已岔出、越過水位後才被 merge」的分支。
  */
 export interface LineageState {
   active: Map<string, { lineageId: number; fromSha: string; isNew: boolean }>;
   nextLineageId: number;
+  /**
+   * parent 不在本批 commit 時，懶讀那個 commit 的 path state。新事件模型的增量
+   * 走訪會使用它；`active` 留給 v4 segment 相容與純線性呼叫端。
+   */
+  resolveAt?: (sha: string, path: string) => number | undefined;
+  /** 同一狀態下，一條 lineage 最多只能佔一個 path；merge 匯入時用來辨識 copy fork。 */
+  resolvePathAt?: (sha: string, lineageId: number) => string | undefined;
+}
+
+export interface LineageEvent {
+  sha: string;
+  path: string;
+  /** null 是明確 tombstone；沒有事件才表示沿第一父繼承。 */
+  lineageId: number | null;
 }
 
 export interface LineageResult {
   segments: LineageSegment[];
+  /** DAG-aware 的稀疏 path state；一般 commit 依 parent，merge 依第一父結果差異。 */
+  events: LineageEvent[];
   /** key = `${sha}\0${path}`，值為該 file_change 所屬的 lineage */
   changeLineage: Map<string, number>;
   /** 走訪結束後的狀態，供下次增量續跑 */

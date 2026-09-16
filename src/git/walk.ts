@@ -85,7 +85,12 @@ function parseNameStatus(line: string): FileChangeRecord | null {
  * 沒有／都有的路徑仍可可靠記為 A / D，其餘（包含 rename-like resolution）記為 M。
  * 這是 git 的限制，不是我們的選擇——必須寫下來，否則第四週會有人以為是 bug。
  */
-function mergeChanges(repo: string, sha: string): FileChangeRecord[] {
+function mergeChanges(
+  repo: string,
+  sha: string,
+  firstParent: string,
+  opts: WalkOptions,
+): { changes: FileChangeRecord[]; stateChanges: FileChangeRecord[] } {
   const out = git(repo, ["diff-tree", "-c", "-r", "--name-status", "--no-commit-id", sha]);
   const rows: FileChangeRecord[] = [];
   for (const line of out.split("\n")) {
@@ -99,7 +104,22 @@ function mergeChanges(repo: string, sha: string): FileChangeRecord[] {
         : "M";
     rows.push({ changeType: kind, path: unquotePath(path) });
   }
-  return rows;
+  // combined diff 只保存 merge 自己的貢獻，不能用來重建 merge 輸出樹。第一父 diff
+  // 則恰好描述「從第一父 state 到 merge state 要套哪些事件」，且可做 rename/copy
+  // 偵測。它不會寫進 file_change，因此不會把分支上的工作重複算成 merge 的 revision。
+  const stateOut = git(repo, [
+    "diff-tree",
+    "-r",
+    "--name-status",
+    "--no-commit-id",
+    ...diffFlags(opts),
+    firstParent,
+    sha,
+  ]);
+  const stateChanges = stateOut.split("\n")
+    .map((line) => parseNameStatus(line.trim() ? line : ""))
+    .filter((change): change is FileChangeRecord => change !== null);
+  return { changes: rows, stateChanges };
 }
 
 /**
@@ -250,7 +270,11 @@ export function walkCommits(
     if (rec.isMerge) merges.push(rec);
   }
 
-  for (const m of merges) m.changes = mergeChanges(repo, m.sha);
+  for (const m of merges) {
+    const result = mergeChanges(repo, m.sha, m.parents[0]!, opts);
+    m.changes = result.changes;
+    m.stateChanges = result.stateChanges;
+  }
 
   return commits;
 }

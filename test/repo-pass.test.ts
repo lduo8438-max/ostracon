@@ -225,7 +225,10 @@ describe("全 repo 結構 pass", () => {
     git("checkout", "-q", "main");
     write("src/main.ts", "export const main = 1;\n");
     commit("advance main");
-    git("merge", "--no-ff", "--no-commit", "rename-side");
+    git(
+      "-c", "user.name=t", "-c", "user.email=t@t",
+      "merge", "--no-ff", "--no-commit", "rename-side",
+    );
     write("src/old.ts", `${HELPER}\n`);
     const mergeSha = commit("keep both copies");
 

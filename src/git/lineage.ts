@@ -1,147 +1,319 @@
-import type { CommitRecord, LineageResult, LineageSegment, LineageState } from "./types.ts";
+import type {
+  CommitRecord,
+  LineageEvent,
+  LineageResult,
+  LineageSegment,
+  LineageState,
+} from "./types.ts";
 
 /**
  * 路徑血緣建構。
  *
- * 純函式：吃 CommitRecord[] 與（可選的）續跑狀態，吐血緣。不碰 git、不碰資料庫。
- * 刻意如此——血緣邏輯是 slot 身份的地基，而 slot 是雙身份設計的一半，
- * 它必須能在沒有 repo 的情況下用手寫的案例徹底測試。
+ * 每個 commit 的狀態只從自己的第一父繼承；merge 的 `stateChanges` 是第一父樹到
+ * merge 結果的差異，因此能把另一父新帶進來的路徑接回原 lineage，又不會把分支上
+ * 的每次修改重算成 merge 自己的改動。狀態用稀疏 overlay，成本與實際 path event
+ * 成正比，不是 commits × repository paths 的完整快照。
  *
- * lineageId 直接使用資料庫的主鍵值，不做本地 id 到 DB id 的二次映射。
- * 少一層映射就少一類「續跑時對錯號」的 bug。
- *
- * ── 已知缺陷（W11 已有持久健康守門，根治尚未完成）──────────────────────
- * 維護的是一張全域的 path → lineage 對照表，而不是逐 commit 的完整樹狀態。
- * 當同一路徑在兩條平行分支上各自演化、之後才合併時，血緣歸屬可能出錯。
- * 六套語料量測已證明它不是可概括為「罕見」的取捨：merge-heavy 的 pip 有 299 次。
- * schema v4 會持久保存 anomaly，由 CLI/UI 明示健康狀態；這只阻止靜默，不修歸屬。
- *
- * 也不能只加 --first-parent：結構 pass 目前跳過 merge commit，那會連合併進主線的
- * 分支工作一起漏掉。根治要同時處理 parent-aware state 與一條 segment 只有單一
- * to_commit_id、無法表示 DAG 存活區間的資料模型。這個缺陷必須出現在 README。
+ * `segments` 是 schema v4 的線性相容投影。新索引以 `events` 為真相；segment 無法
+ * 表示 DAG 存活區間，不能再拿來回答任意 commit 的 path state。
  */
 export function buildLineages(
   commits: CommitRecord[],
   initial?: LineageState,
 ): LineageResult {
-  const active = new Map(initial?.active ?? []);
-  let nextId = initial?.nextLineageId ?? 1;
+  type Present = { lineageId: number; fromSha: string };
+  type StateNode = {
+    sha: string;
+    parentSha?: string;
+    delta: Map<string, Present | null>;
+    cache: Map<string, Present | null>;
+    lineageDelta: Map<number, string | null>;
+    lineageCache: Map<number, string | null>;
+  };
 
-  const segments: LineageSegment[] = [];
+  const nodes = new Map<string, StateNode>();
+  const eventsByKey = new Map<string, LineageEvent>();
   const changeLineage = new Map<string, number>();
   const anomalies: LineageResult["anomalies"] = [];
-
+  let nextId = initial?.nextLineageId ?? 1;
+  let previousSyntheticSha: string | undefined;
+  const graphAware = commits.some((commit) => commit.parents.length > 0);
   const key = (sha: string, path: string) => `${sha}\0${path}`;
 
-  function open(lineageId: number, path: string, sha: string) {
-    active.set(path, { lineageId, fromSha: sha, isNew: true });
-    segments.push({ lineageId, path, fromSha: sha, toSha: null, isNew: true });
+  const initialValue = (sha: string, path: string): Present | undefined => {
+    if (initial?.resolveAt) {
+      const resolved = initial.resolveAt(sha, path);
+      return resolved === undefined ? undefined : { lineageId: resolved, fromSha: sha };
+    }
+    const active = initial?.active.get(path);
+    return active ? { lineageId: active.lineageId, fromSha: active.fromSha } : undefined;
+  };
+
+  function valueAt(sha: string | undefined, path: string): Present | undefined {
+    if (sha === undefined) return undefined;
+    let cursor: string | undefined = sha;
+    let found: Present | undefined;
+    while (cursor !== undefined) {
+      const node = nodes.get(cursor);
+      if (!node) {
+        found = initialValue(cursor, path);
+        break;
+      }
+      if (node.delta.has(path)) {
+        found = node.delta.get(path) ?? undefined;
+        break;
+      }
+      if (node.cache.has(path)) {
+        found = node.cache.get(path) ?? undefined;
+        break;
+      }
+      cursor = node.parentSha;
+    }
+    // 只快取原始查詢節點。若沿途每個 commit 都回填，最後為 tip 列舉 path 時會
+    // 退化成 commits × paths，正是稀疏事件模型要避免的完整快照成本。
+    nodes.get(sha)?.cache.set(path, found ?? null);
+    return found;
   }
 
-  /** 關閉某路徑開著的那一段。已持久化的段落標 isNew=false，讓 persist 走 UPDATE 而非 INSERT。 */
-  function close(path: string, sha: string): number | undefined {
-    const cur = active.get(path);
-    if (!cur) return undefined;
-    active.delete(path);
-    if (cur.isNew) {
-      const seg = segments.find(
-        (s) => s.lineageId === cur.lineageId && s.path === path && s.fromSha === cur.fromSha,
-      );
-      if (seg) seg.toSha = sha;
-    } else {
-      segments.push({ lineageId: cur.lineageId, path, fromSha: cur.fromSha, toSha: sha, isNew: false });
+  function pathAt(sha: string | undefined, lineageId: number): string | undefined {
+    if (sha === undefined) return undefined;
+    let cursor: string | undefined = sha;
+    let found: string | undefined;
+    while (cursor !== undefined) {
+      const node = nodes.get(cursor);
+      if (!node) {
+        found = initial?.resolvePathAt
+          ? initial.resolvePathAt(cursor, lineageId)
+          : [...(initial?.active ?? [])].find(([, value]) => value.lineageId === lineageId)?.[0];
+        break;
+      }
+      if (node.lineageDelta.has(lineageId)) {
+        found = node.lineageDelta.get(lineageId) ?? undefined;
+        break;
+      }
+      if (node.lineageCache.has(lineageId)) {
+        found = node.lineageCache.get(lineageId) ?? undefined;
+        break;
+      }
+      cursor = node.parentSha;
     }
-    return cur.lineageId;
+    nodes.get(sha)?.lineageCache.set(lineageId, found ?? null);
+    return found;
   }
 
-  for (const c of commits) {
-    // 分階段處理，因為同一個 commit 內順序會互相影響：
-    // 「A 改名為 B，同時新增一個新的 A」如果先處理新增，A 的血緣就會被覆蓋。
-    // git 不保證 --name-status 的輸出順序，所以不能依賴它。
-    const renames = c.changes.filter((x) => x.changeType === "R");
-    const deletes = c.changes.filter((x) => x.changeType === "D");
-    const adds = c.changes.filter((x) => x.changeType === "A" || x.changeType === "C");
-    const mods = c.changes.filter((x) => x.changeType === "M");
+  function setEvent(sha: string, path: string, value: Present | undefined): void {
+    eventsByKey.set(key(sha, path), { sha, path, lineageId: value?.lineageId ?? null });
+  }
 
-    // 階段 1：改名先騰出舊路徑。先全部讀出再套用，避免鏈式改名
-    // （A→B 且 B→C 出現在同一 commit）互相踩到。
-    const renameOps = renames.map((r) => ({ r, lineageId: active.get(r.oldPath!)?.lineageId }));
-    for (const { r, lineageId } of renameOps) {
-      if (lineageId !== undefined) close(r.oldPath!, c.sha);
+  function uniqueOtherParentValue(commit: CommitRecord, path: string): Present | undefined {
+    const ids = new Map<number, Present>();
+    for (const parent of commit.parents.slice(1)) {
+      const value = valueAt(parent, path);
+      if (value) ids.set(value.lineageId, value);
     }
-    for (const { r, lineageId } of renameOps) {
-      if (lineageId === undefined) {
-        // 舊路徑不在存活集合中。合併、淺層 clone、或 --until 截斷歷史都會造成。
-        // 當作新血緣起點，但要留下痕跡——靜默吞掉會讓血緣斷得莫名其妙。
+    return ids.size === 1 ? ids.values().next().value : undefined;
+  }
+
+  for (const commit of commits) {
+    // 舊的純函式測試沒有填 parents；整批都沒有 edge 時維持線性測試語意。
+    // 真實 git walk 一定帶 parent，不能讓這個相容分支介入 DAG。
+    const parentSha = graphAware ? commit.parents[0] : previousSyntheticSha;
+    const node: StateNode = {
+      sha: commit.sha,
+      ...(parentSha === undefined ? {} : { parentSha }),
+      delta: new Map(),
+      cache: new Map(),
+      lineageDelta: new Map(),
+      lineageCache: new Map(),
+    };
+    nodes.set(commit.sha, node);
+
+    const parentValue = (path: string): Present | undefined => {
+      if (parentSha !== undefined) return valueAt(parentSha, path);
+      if (!graphAware) {
+        const value = initial?.active.get(path);
+        return value ? { lineageId: value.lineageId, fromSha: value.fromSha } : undefined;
+      }
+      return initialValue(commit.sha, path);
+    };
+    const current = (path: string): Present | undefined => {
+      if (node.delta.has(path)) return node.delta.get(path) ?? undefined;
+      return parentValue(path);
+    };
+    const assign = (path: string, value: Present | undefined): void => {
+      const previous = current(path);
+      if (previous && previous.lineageId !== value?.lineageId) {
+        node.lineageDelta.set(previous.lineageId, null);
+      }
+      node.delta.set(path, value ?? null);
+      if (value) node.lineageDelta.set(value.lineageId, path);
+      setEvent(commit.sha, path, value);
+    };
+    const fresh = (path: string): Present => ({ lineageId: nextId++, fromSha: commit.sha });
+
+    // 一般 commit 的 changes 已是相對唯一 parent 的狀態差異。merge 的 combined
+    // changes 只是「與所有父都不同」的貢獻；狀態必須改用第一父 diff。
+    const stateChanges = commit.isMerge ? (commit.stateChanges ?? commit.changes) : commit.changes;
+    const renames = stateChanges.filter((change) => change.changeType === "R");
+    const deletes = stateChanges.filter((change) => change.changeType === "D");
+    const adds = stateChanges.filter((change) => change.changeType === "A" || change.changeType === "C");
+    const mods = stateChanges.filter((change) => change.changeType === "M");
+
+    // 所有 rename source 都先從 parent state 讀出，避免 A→B、B→C 鏈式改名互踩。
+    const renameOps = renames.map((change) => ({
+      change,
+      value: parentValue(change.oldPath!),
+    }));
+    for (const { change } of renameOps) assign(change.oldPath!, undefined);
+    for (const { change, value } of renameOps) {
+      let next = value;
+      if (!next && commit.isMerge) next = uniqueOtherParentValue(commit, change.path);
+      if (!next) {
         anomalies.push({
-          sha: c.sha,
-          path: r.path,
-          reason: `改名來源 ${r.oldPath} 不在存活路徑中，視為新血緣起點`,
+          sha: commit.sha,
+          path: change.path,
+          reason: `改名來源 ${change.oldPath} 不在 parent 路徑中，視為新血緣起點`,
         });
-        const id = nextId++;
-        open(id, r.path, c.sha);
-        changeLineage.set(key(c.sha, r.path), id);
-        continue;
+        next = fresh(change.path);
       }
-      open(lineageId, r.path, c.sha);
-      changeLineage.set(key(c.sha, r.path), lineageId);
+      assign(change.path, next);
     }
 
-    // 階段 2：刪除。血緣就此關閉；同路徑日後再出現會是「新的」血緣，
-    // 這是刻意的——git 沒有任何證據說它們是同一個檔案，
-    // 而實體層的 slot_discontinuity 正是要在這裡報斷層。
-    for (const d of deletes) {
-      const id = close(d.path, c.sha);
-      if (id === undefined) {
-        anomalies.push({ sha: c.sha, path: d.path, reason: "刪除了不在存活路徑中的檔案" });
-        continue;
+    for (const change of deletes) {
+      const previous = current(change.path)
+        ?? (commit.isMerge ? uniqueOtherParentValue(commit, change.path) : undefined);
+      if (!previous) {
+        anomalies.push({ sha: commit.sha, path: change.path, reason: "刪除了不在 parent 路徑中的檔案" });
       }
-      changeLineage.set(key(c.sha, d.path), id);
+      assign(change.path, undefined);
     }
 
-    // 階段 3：新增與複製。複製一律開新血緣——來源檔案仍然存在，
-    // 兩者從此各走各的。來源關係保存在 file_change.old_path，不混進血緣。
-    for (const a of adds) {
-      const cur = active.get(a.path);
-      if (cur) {
-        anomalies.push({ sha: c.sha, path: a.path, reason: "新增了已存在的路徑" });
-        changeLineage.set(key(c.sha, a.path), cur.lineageId);
+    for (const change of adds) {
+      const existing = current(change.path);
+      if (existing) {
+        anomalies.push({ sha: commit.sha, path: change.path, reason: "新增了 parent 已存在的路徑" });
+        assign(change.path, existing);
         continue;
       }
-      const id = nextId++;
-      open(id, a.path, c.sha);
-      changeLineage.set(key(c.sha, a.path), id);
+      // merge 對第一父看見 A/C 時，檔案通常是另一支早已建立後被帶進來；沿用那支
+      // 的 lineage，不能在 merge 點製造第二次 birth。一般 commit 的 C 仍開新 lineage。
+      const imported = commit.isMerge ? uniqueOtherParentValue(commit, change.path) : undefined;
+      // 另一父把同一 lineage 搬到新 path、第一父卻仍把它留在舊 path，而 merge 結果
+      // 同時保留兩者時，Git 的結果是一份 fork/copy，不可能讓一個 lineage 佔兩格。
+      const alreadyAt = imported ? pathAt(commit.sha, imported.lineageId) : undefined;
+      assign(change.path, imported && (alreadyAt === undefined || alreadyAt === change.path)
+        ? imported
+        : fresh(change.path));
     }
 
-    // 階段 4：修改不改變血緣，只需登記歸屬。
-    for (const m of mods) {
-      const cur = active.get(m.path);
-      if (cur) {
-        changeLineage.set(key(c.sha, m.path), cur.lineageId);
-        continue;
+    for (const change of mods) {
+      let existing = current(change.path);
+      if (!existing && commit.isMerge) existing = uniqueOtherParentValue(commit, change.path);
+      if (!existing) {
+        anomalies.push({
+          sha: commit.sha,
+          path: change.path,
+          reason: "修改了不在 parent 路徑中的檔案，開新血緣",
+        });
+        existing = fresh(change.path);
       }
-      // 合併的 combined diff 不做改名偵測，rename-like resolution 會報成 M。
-      anomalies.push({ sha: c.sha, path: m.path, reason: "修改了不在存活路徑中的檔案，開新血緣" });
-      const id = nextId++;
-      open(id, m.path, c.sha);
-      changeLineage.set(key(c.sha, m.path), id);
+      assign(change.path, existing);
     }
+
+    // file_change 仍只保存 commit 自己的 combined contribution。它的 lineage 從
+    // 已完成的輸出 state 取；D 則從各 parent 的輸入 state 取。
+    for (const change of commit.changes) {
+      let value = change.changeType === "D"
+        ? parentValue(change.path)
+        : current(change.path);
+      if (!value && commit.isMerge) value = uniqueOtherParentValue(commit, change.path);
+      if (value) changeLineage.set(key(commit.sha, change.path), value.lineageId);
+    }
+
+    previousSyntheticSha = commit.sha;
   }
 
-  // 回傳的 state 描述的是「這批寫進資料庫之後」的世界。
-  // 本批新開的段落屆時已經持久化，所以一律降級為 isNew=false，
-  // 否則下一批要關閉它們時，close() 會去這一批的 segments 陣列裡找，
-  // 找不到就靜默不做事——那條血緣的 to_commit_id 會永遠停在 NULL，
-  // 路徑看起來像從未被刪除，下游每一個 slot 查詢都會跟著錯。
-  const carried = new Map<string, { lineageId: number; fromSha: string; isNew: boolean }>();
-  for (const [path, e] of active) {
-    carried.set(path, { lineageId: e.lineageId, fromSha: e.fromSha, isNew: false });
+  const events = [...eventsByKey.values()];
+  const segments = compatibilitySegments(commits, events, initial);
+  const tipSha = commits.at(-1)?.sha;
+  const active = new Map<string, { lineageId: number; fromSha: string; isNew: boolean }>();
+  if (tipSha !== undefined) {
+    // 只沿 tip 的第一父鏈折疊 event；每個 path 的第一筆就是終點狀態。這是 O(events)，
+    // 不為每個 path 各走一次整條歷史。
+    const seen = new Set<string>();
+    let cursor: string | undefined = tipSha;
+    while (cursor !== undefined) {
+      const node = nodes.get(cursor);
+      if (!node) break;
+      for (const [path, value] of node.delta) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        if (value) active.set(path, { ...value, isNew: false });
+      }
+      cursor = node.parentSha;
+    }
+    for (const [path, value] of initial?.active ?? []) {
+      if (!seen.has(path)) active.set(path, value);
+    }
+  } else {
+    for (const [path, value] of initial?.active ?? []) active.set(path, value);
   }
 
   return {
     segments,
+    events,
     changeLineage,
     anomalies,
-    state: { active: carried, nextLineageId: nextId },
+    state: {
+      active,
+      nextLineageId: nextId,
+      resolveAt: (sha, path) => valueAt(sha, path)?.lineageId,
+      resolvePathAt: (sha, lineageId) => pathAt(sha, lineageId),
+    },
   };
+}
+
+/** schema v4／公開回傳值的線性投影；DAG 查詢不得使用。 */
+function compatibilitySegments(
+  commits: CommitRecord[],
+  events: LineageEvent[],
+  initial?: LineageState,
+): LineageSegment[] {
+  const order = new Map(commits.map((commit, index) => [commit.sha, index]));
+  const sorted = [...events].sort((a, b) => (order.get(a.sha) ?? 0) - (order.get(b.sha) ?? 0));
+  const active = new Map<string, { lineageId: number; fromSha: string; persisted: boolean }>();
+  for (const [path, value] of initial?.active ?? []) {
+    active.set(path, { lineageId: value.lineageId, fromSha: value.fromSha, persisted: true });
+  }
+  const segments: LineageSegment[] = [];
+  for (const event of sorted) {
+    const previous = active.get(event.path);
+    if (event.lineageId === null) {
+      if (previous) {
+        if (previous.persisted) {
+          segments.push({
+            lineageId: previous.lineageId,
+            path: event.path,
+            fromSha: previous.fromSha,
+            toSha: event.sha,
+            isNew: false,
+          });
+        } else {
+          const segment = segments.find((candidate) =>
+            candidate.lineageId === previous.lineageId
+            && candidate.path === event.path
+            && candidate.fromSha === previous.fromSha
+            && candidate.toSha === null);
+          if (segment) segment.toSha = event.sha;
+        }
+        active.delete(event.path);
+      }
+      continue;
+    }
+    if (previous?.lineageId === event.lineageId) continue;
+    const from = { lineageId: event.lineageId, fromSha: event.sha, persisted: false };
+    active.set(event.path, from);
+    segments.push({ ...from, path: event.path, toSha: null, isNew: true });
+  }
+  return segments;
 }

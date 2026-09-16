@@ -117,6 +117,42 @@ test("純修改不製造額外 segment", () => {
   assert.equal(r.segments[0]!.toSha, null);
 });
 
+test("兄弟分支各自從共同 parent 取 path state，不共享拓撲序的可變狀態", () => {
+  const root = { ...c([A("x.ts")], "root"), parents: [] };
+  const deleted = { ...c([D("x.ts")], "delete-branch"), parents: ["root"] };
+  const modified = { ...c([M("x.ts")], "modify-sibling"), parents: ["root"] };
+
+  const r = buildLineages([root, deleted, modified]);
+  assert.equal(
+    lineageOf(r, "modify-sibling", "x.ts"),
+    lineageOf(r, "root", "x.ts"),
+    "兄弟分支的刪除不得讓另一支的修改假裝成新血緣",
+  );
+  assert.equal(r.anomalies.length, 0);
+});
+
+test("merge 同時保留兩支的改名前後路徑時，匯入端要 fork 而不是一條 lineage 佔兩格", () => {
+  const root = { ...c([A("old.ts")], "root-copy"), parents: [] };
+  const renamed = {
+    ...c([R("old.ts", "new.ts")], "rename-branch"),
+    parents: ["root-copy"],
+  };
+  const main = { ...c([A("other.ts")], "main-keeps-old"), parents: ["root-copy"] };
+  const merge = {
+    ...c([], "merge-keeps-both"),
+    parents: ["main-keeps-old", "rename-branch"],
+    isMerge: true,
+    stateChanges: [A("new.ts")],
+  };
+
+  const r = buildLineages([root, renamed, main, merge]);
+  const oldId = r.state.resolveAt?.("merge-keeps-both", "old.ts");
+  const newId = r.state.resolveAt?.("merge-keeps-both", "new.ts");
+  assert.ok(oldId);
+  assert.ok(newId);
+  assert.notEqual(newId, oldId, "同一個輸出樹裡一條 lineage 只能佔一個 path");
+});
+
 // ── 增量續跑 ────────────────────────────────────────────────────────────────
 
 test("分批走訪的結果與一次走完完全相同", () => {
@@ -156,4 +192,37 @@ test("續跑時新血緣的 id 不會與既有的相撞", () => {
   const firstIds = new Set(first.segments.map((s) => s.lineageId));
   const newId = second.segments.find((s) => s.path === "c.ts")!.lineageId;
   assert.equal(firstIds.has(newId), false);
+});
+
+test("批次外 parent 的 tombstone 不得退回水位線 active 快照", () => {
+  const initial = {
+    active: new Map([["x.ts", { lineageId: 1, fromSha: "watermark", isNew: false }]]),
+    nextLineageId: 2,
+    resolveAt: (_sha: string, _path: string) => undefined,
+    resolvePathAt: (_sha: string, _lineageId: number) => undefined,
+  };
+  const modified = { ...c([M("x.ts")], "after-deleted-parent"), parents: ["deleted-parent"] };
+
+  const r = buildLineages([modified], initial);
+  assert.equal(lineageOf(r, modified.sha, "x.ts"), 2);
+  assert.equal(r.anomalies.length, 1, "authoritative parent state says absent, so M must open a new lineage");
+});
+
+test("批次外 parent 的 reverse lookup 不得退回水位線 active 快照", () => {
+  const initial = {
+    active: new Map([["old.ts", { lineageId: 1, fromSha: "watermark", isNew: false }]]),
+    nextLineageId: 2,
+    resolveAt: (sha: string, path: string) => sha === "side" && path === "new.ts" ? 1 : undefined,
+    resolvePathAt: (_sha: string, _lineageId: number) => undefined,
+  };
+  const merge = {
+    ...c([], "merge-external-parents"),
+    parents: ["main", "side"],
+    isMerge: true,
+    stateChanges: [A("new.ts")],
+  };
+
+  const r = buildLineages([merge], initial);
+  assert.equal(r.state.resolveAt?.(merge.sha, "new.ts"), 1);
+  assert.equal(r.state.nextLineageId, 2, "first-parent lookup says lineage is absent, so import must not fork");
 });

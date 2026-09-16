@@ -13,6 +13,16 @@
 
 ## [Unreleased]
 
+### 平行分支血緣改為 parent-aware
+
+- path state 不再由一張全域可變 Map 按拓撲序推進；一般 commit 從自己的第一父繼承，
+  merge 另存第一父到結果樹的稀疏事件。pip 原本 299 次、requests 30 次、Vue 6 次
+  parent-state divergence 在新模型下均歸零。
+- merge 同時保留 rename 新舊兩端時，匯入端會 fork 成新 lineage，避免同一 lineage
+  在一棵樹佔兩個 path；相應 entity 的 birth 會記在 merge，而不是延後到第一次修改。
+- `lineageIdAt`、已消失路徑 fallback 與 D→A 前身查詢改沿 commit ancestry／第一父
+  event，不再用 `topo_order` 區間猜 DAG 存活。
+
 ### 平行分支血緣健康狀態
 
 - 非 merge commit 的 path state 與其 parent 發生矛盾時，現在會把 anomaly 持久保存；
@@ -28,6 +38,8 @@
 - schema 升為 **v4**，新增 `lineage_anomaly`。v3 → v4 是純增補，可就地遷移，
   不改既有身份與 revision 產出。
 - 遷移過來的舊索引沒有完整歷史 anomaly；工具會把數字標為下限，直到全量重建。
+- schema 再升為 **v5**，新增 `path_lineage_event`。schema 結構可就地升級供只讀，
+  但走訪產出改為 `walk-0.4.0`，既有 structural 索引不得續接，必須全量重建。
 
 ---
 

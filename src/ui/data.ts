@@ -433,7 +433,7 @@ export interface RepoSummary {
    */
   ostracised: { shown: number; hiddenTests: number; suspected: number };
   /**
-   * 平行分支上同一路徑各自演化時，現行全域 path map 可能錯配身份的可重算健康值。
+   * 舊全域 path map 的分支風險／新 parent-aware 模型的未解異常健康值。
    * 它來自已保存的 git DAG，不是只在索引當下存在的一次性 warning。
    */
   lineageRisk: ParallelLineageRisk;

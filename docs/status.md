@@ -2646,7 +2646,8 @@ materializer、runner 與 evaluator 目前會為建料／查詢直接使用 `nod
 
 ## 3. Schema 重點
 
-**目前是 v2**（`schema_migration` 記錄它，`openIndexDatabase` 比對它）。
+**本節記錄撰寫當時的 v2**（現行版本已是 v5；見下方 W11）。
+`schema_migration` 記錄版本，`openIndexDatabase` 負責比對。
 v1 → v2 的唯一差別是內容定址：內容衍生欄位移到 `declaration_content`，
 `revision` 只留身分與位置，雜湊與 `blob_sha` 改存 BLOB。見上方對照與
 `plan-content-addressed.md`。以下是 v0.5 當時記的其餘重點，仍然成立。
@@ -2665,7 +2666,7 @@ v0.5 讓 `slot_discontinuity.similarity` nullable：`NULL` 是無法比較，`0`
 已修過的重要問題（勿回退）：
 
 - `file_change` 的 `UNIQUE (commit_id, path)`——否則重跑會把整批再插一次
-- `path_lineage_segment` 的部分索引 `WHERE to_commit_id IS NULL`——增量續跑靠它重建存活路徑集合
+- v2–v4 的 `path_lineage_segment` 部分索引 `WHERE to_commit_id IS NULL`——當時增量續跑靠它重建存活路徑集合；v5 改讀 `path_lineage_event`
 - FTS5 external content 表**必須有同步 trigger**，否則全文檢索永遠是空的且不報錯
 - `source_doc.external_id` 必須 NOT NULL（SQLite 視每個 NULL 為相異值，UNIQUE 會失效）
 - `revision_change` 必須 CHECK 兩端不可皆 NULL
@@ -2818,3 +2819,28 @@ Osiris 沒有 R50–R70 的 git rename（只有一筆 R90），所以沒有硬�
 對策見 `plan-diff-hunk.md`。切片 1（hunk parser）與切片 2（`file_hunk` 進資料庫）
 已完成，Osiris 全歷史有 1607 個 hunk、其中 471 個純新增可供約束使用；
 真正消費這份資料的約束層是切片 3，指標尚未改變。
+
+## W11｜平行分支血緣（2026-09-15）
+
+第一刀（schema v4）先把 parent-state divergence 持久化並接到 CLI／工作台，避免
+已知風險仍顯示 `output verified`。第二刀（schema v5、`walk-0.4.0`）才改身份模型：
+
+- 每個 commit 的 path state 是指向第一父的稀疏 overlay，不再共用全域可變 Map；
+- merge 的 combined diff 仍只代表衝突解決／evil merge，另取第一父到結果樹的 diff
+  寫成 state event，不把被併入分支的 revision 重算一次；
+- `path_lineage_event` 的 NULL 是 tombstone，沒有 event 才沿第一父繼承；
+- 增量批次外 parent 由 event table 懶讀，實測「水位前岔出、之後才 merge」與全量
+  lineage 完全相同；
+- merge 同時保留 rename 兩端時，匯入端 fork；結構 pass 只為這種新 lineage 處理
+  merge，使 entity birth 落在兩份首次共存的 commit。
+
+移除 parent-aware 機制後，最小兄弟分支案例會把共同 lineage `1` 錯開成 `2`；移除
+merge fork 後，create-t3-app 會在 `Home` 上讓 entity 74／77 爭用同一 revision，
+直接撞不變量 1。兩條都已收成回歸。
+
+驗收：核心 499／499、前端 37／37；五套 fresh golden 51／51。v4→v5 stable key：
+controlled、requests、Osiris、Vue 零差異；create-t3-app 保留全部 405 個舊 key，新增
+7 個原本被合併的 branch／merge fork entity。完整 probe：pip 299 → 0、requests
+30 → 0、create-t3-app 2 → 0、Vue 6 → 0。pip 走訪 37.3s → 81.9s（4,176 顆 merge
+各多一份第一父 diff）；相對原 396s 全索引約增加 45s，仍落在兩項模型 414s 的
+約 6.5% 誤差內。

@@ -57,6 +57,9 @@ export interface IndexGitReport {
   merges: number;
   fileChanges: number;
   lineages: number;
+  /** schema v5 實際保存的稀疏 path state 列數。 */
+  events: number;
+  /** @deprecated 純函式為 v4 呼叫端保留的線性投影；v5 不寫入 segment 表。 */
   segments: number;
   anomalies: number;
   /** 取到 hunk 的 file_change 數。未取到的是合併、二進位與純 mode 變更。 */
@@ -170,7 +173,9 @@ export function indexGit(inputPath: string, opts: IndexGitOptions): IndexGitRepo
       commits: commits.length,
       merges: commits.filter((c) => c.isMerge).length,
       fileChanges: commits.reduce((n, c) => n + c.changes.length, 0),
-      lineages: new Set(lineage.segments.map((s) => s.lineageId)).size,
+      lineages: new Set(lineage.events.flatMap((event) =>
+        event.lineageId === null ? [] : [event.lineageId])).size,
+      events: lineage.events.length,
       segments: lineage.segments.length,
       anomalies: lineage.anomalies.length,
       filesWithHunks: attached.filesWithHunks,
@@ -190,14 +195,11 @@ export function indexGit(inputPath: string, opts: IndexGitOptions): IndexGitRepo
  * `indexerVersion()`。
  */
 /**
- * `0.2.0` → `0.3.0`：`--name-status` 的路徑改為一律去引號。
- *
- * 非 ASCII 檔名先前帶著引號與八進位逸出存進 `file_change` 與
- * `path_lineage_segment`，那些路徑值現在不同了——而 `stable_key` 雜湊誕生路徑，
- * 所以產出確實改變（不變量 7）。ASCII-only 的 repo 產出完全相同，但版本仍必須
- * 提升：舊資料庫裡那些路徑是壞的，續跑會讓兩種形態混在同一個水位線之後。
+ * `0.3.0` → `0.4.0`：path state 改成 parent-aware 稀疏事件；merge 另取第一父
+ * 到結果樹的 diff。file_change 仍只保存 combined contribution，但 lineage id、
+ * segment 與任意 commit 的路徑定址都可能改變，所以舊 structural 產出不可續接。
  */
-export const WALK_ALGORITHM_VERSION = "walk-0.3.0";
+export const WALK_ALGORITHM_VERSION = "walk-0.4.0";
 
 /**
  * 完整的 structural indexer 版本。

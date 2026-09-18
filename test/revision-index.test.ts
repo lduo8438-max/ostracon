@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 import { openIndexDatabase, SCHEMA_VERSION } from "../src/git/persist.ts";
 import { PREVIOUS_PATH_ENTITY_SQL } from "../src/index/structural.ts";
+import { MERGE_STATE_EVENTS_SQL } from "../src/index/repo-pass.ts";
 
 function scratch(): string {
   return mkdtempSync(path.join(tmpdir(), "ostracon-revidx-"));
@@ -117,6 +118,31 @@ describe("revision 的路徑索引", () => {
       seed.exec("DELETE FROM schema_migration");
       seed.close();
       assert.throws(() => openIndexDatabase(file), /schema 版本/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("path lineage event 的查詢計畫", () => {
+  it("**每顆 merge 讀 state event 不得全表掃描 path_lineage_event**", () => {
+    const dir = scratch();
+    try {
+      const db = openIndexDatabase(path.join(dir, "fresh.db"));
+      const plan = planOf(db, MERGE_STATE_EVENTS_SQL);
+      db.close();
+      // 這條查詢每顆 merge 跑一次。舊寫法沒綁 repo_id、吃不到主鍵，再加上逐列的
+      // NOT EXISTS 子查詢，pip 4,176 顆 merge 實測共 265 秒。與 previousPathEntity
+      // 同一個斷言形狀：驗「沒有 SCAN」而不是「某個索引存在」。
+      assert.deepEqual(
+        plan.filter((d) => /^SCAN path_lineage_event\b/.test(d)),
+        [],
+        `path_lineage_event 被全表掃描了：\n${plan.join("\n")}`,
+      );
+      assert.ok(
+        plan.some((d) => /^SEARCH path_lineage_event USING (COVERING )?INDEX sqlite_autoindex_path_lineage_event_1 \(repo_id=\? AND commit_id=\?\)/.test(d)),
+        `沒有用主鍵前綴定位：\n${plan.join("\n")}`,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

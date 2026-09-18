@@ -2844,3 +2844,42 @@ controlled、requests、Osiris、Vue 零差異；create-t3-app 保留全部 405 
 30 → 0、create-t3-app 2 → 0、Vue 6 → 0。pip 走訪 37.3s → 81.9s（4,176 顆 merge
 各多一份第一父 diff）；相對原 396s 全索引約增加 45s，仍落在兩項模型 414s 的
 約 6.5% 誤差內。
+
+### 第三刀：v5 效能退化定位（2026-09-17）
+
+上一段「pip 全索引約增加 45s」**只算了走訪**。declarations pass 沒有被量：
+pip v4 是 6m19s，v5 是 10m49s；playwright 的 structural 水位線到 declarations 完成
+相隔 28m10s，比舊紀錄的整輪 17.4 分鐘還長。
+
+**定位方法**：以 `--import` 預載包住 `StatementSync` 的 get/all/run，依 SQL 文字累計
+呼叫次數與耗時，同時開 `--cpu-prof`；不改產品程式碼。
+
+**pip 的退化是一條查詢。** `mergeBirthsOf`（lineage 是否在這顆 merge 首次出現）
+每顆 merge 呼叫一次：4,176 次、63.6 ms/次、共 265 秒。plan 是兩次全表掃：
+沒綁 `repo_id` 吃不到 `(repo_id, commit_id, path)` 主鍵；逐列 `NOT EXISTS` 沒有
+以 `lineage_id` 為鍵的索引，每次掃整個 repo 的 event。修法是整趟只聚合一次
+「每條 lineage 最早出現的拓撲序」，每顆 merge 用主鍵取自己的 event。不升 schema。
+4,176 顆 merge 逐顆比對新舊輸出（含順序）：0 顆不同。
+
+| pip，同機從零重建 | 修前 `fa89b03` | 修後 |
+|---|---:|---:|
+| declarations pass | 687.0 s | **400.2 s（×0.58）** |
+| revision／match／birth／death／斷層 | 600,058／580,842／19,216／9,275／75 | 相同 |
+| 十張身份表指紋（git 原生座標）＋ rowid 層級逐列 | — | **全部相同** |
+
+**playwright 沒有 v5 退化——「17.4 分鐘」不是可比的基準。** 同機、同一套插樁跑
+v4（`80d8c7b`）與 v5（`fa89b03`）：repo pass **1,672.4 s 對 1,681.2 s（+0.5%）**，
+revision、match、birth、斷層計數完全相同，每個千顆檢查點相差 0–4 秒。pw 只有
+1 顆 merge；lineage 相關 SQL 合計約 12 秒。**全部 SQL 只佔 124 秒**，其餘是 JS：
+
+- `lineRange` 自身 457 s（27%）、`utf8ByteRange` 103 s——每個宣告都從檔案開頭
+  slice／split，成本是「宣告數 × 檔案大小」。兩者自 initial commit 就存在，
+  與 v5 無關，**另開一刀**處理。
+- tree-sitter 解析 423 s（含子呼叫）、`git cat-file` 批次 131 s。
+
+**驗收**：核心 500／500、前端 37／37；五套 golden 修前修後皆 51／51，逐案例
+`status` 與 `binary.actual` 相同、`regressions` 皆空。新增的 plan 斷言在拿掉
+`repo_id` 時出現 `SCAN path_lineage_event`；把首次出現判準反轉時兩條 merge 測試變紅。
+playwright 以修後程式從零重建，十張身份表指紋與 `fa89b03` 建出的索引全部相同。
+**那一趟的 1,724 秒不是乾淨計時**：前半段機器負載約 16（另有 iOS Simulator 等
+程序），到第 6,000 顆時比 v4 插樁版慢 11%，所以效能結論只取上面兩組同條件的配對量測。

@@ -113,6 +113,24 @@ export interface RepoPassOptions {
   onProgress?: (progress: RepoPassProgress) => void;
 }
 
+/**
+ * 一顆 merge 的 path state event。**必須綁 `repo_id`**：主鍵是
+ * `(repo_id, commit_id, path)`，少了第一欄就退化成全表掃。依 rowid 排序是為了
+ * 保留舊查詢（全表掃、rowid 順序）交給匹配器的觀察順序。
+ */
+export const MERGE_STATE_EVENTS_SQL = `SELECT path, lineage_id AS lineageId
+   FROM path_lineage_event
+  WHERE repo_id = ? AND commit_id = ? AND lineage_id IS NOT NULL
+  ORDER BY rowid`;
+
+/** 每條 lineage 最早出現在哪個拓撲序；一趟只跑一次。 */
+export const LINEAGE_FIRST_TOPO_SQL = `SELECT event.lineage_id AS lineageId,
+        MIN(commit_row.topo_order) AS firstTopo
+   FROM path_lineage_event event
+   JOIN git_commit commit_row ON commit_row.id = event.commit_id
+  WHERE event.repo_id = ? AND event.lineage_id IS NOT NULL
+  GROUP BY event.lineage_id`;
+
 interface CommitRow {
   id: number;
   sha: string;
@@ -436,21 +454,36 @@ export async function indexRepoStructure(
             lineage_id AS lineageId
        FROM file_change WHERE commit_id = ?`,
   );
-  const mergeBirthsOf = db.prepare(
-    `SELECT event.path AS path, NULL AS oldPath, 'A' AS changeType,
-            event.lineage_id AS lineageId
-       FROM path_lineage_event event
-       JOIN git_commit current ON current.id = event.commit_id
-      WHERE event.commit_id = ? AND event.lineage_id IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-            FROM path_lineage_event earlier
-            JOIN git_commit earlier_commit ON earlier_commit.id = earlier.commit_id
-           WHERE earlier.repo_id = event.repo_id
-             AND earlier.lineage_id = event.lineage_id
-             AND earlier_commit.topo_order < current.topo_order
-        )`,
-  );
+  const mergeStateEventsOf = db.prepare(MERGE_STATE_EVENTS_SQL);
+  // 「lineage 在這顆 merge 首次出現」原本寫成每列一個 NOT EXISTS 子查詢。event 表
+  // 沒有以 lineage_id 為鍵的索引，子查詢每次都掃整個 repo 的 event；外層又沒綁
+  // repo_id 而吃不到主鍵、也是全表掃。pip 4,176 顆 merge 實測 63.6 ms/顆、共 265 秒；
+  // 同機從零重建，declarations pass 687.0 → 400.2 秒，身份指紋逐列相同。
+  //
+  // 改成整趟只聚合一次「每條 lineage 最早出現的拓撲序」。event 在 structural pass
+  // 已全部落地、這一趟不會再改，所以一次聚合與逐列子查詢等價：該 merge 自己就有
+  // 一筆 event，「沒有更早的」恰好等於「最早的就是這一顆」。不加索引是刻意的——
+  // 加索引要升 schema、每個既有資料庫都要遷移，而這裡的查詢一趟只跑一次。
+  let firstTopoByLineage: Map<number, number> | undefined;
+  const mergeBirthsOf = (commit: CommitRow): ChangeRow[] => {
+    const events = mergeStateEventsOf.all(repoId, commit.id) as unknown as Array<
+      { path: string; lineageId: number }
+    >;
+    if (events.length === 0) return [];
+    firstTopoByLineage ??= new Map(
+      (db.prepare(LINEAGE_FIRST_TOPO_SQL).all(repoId) as unknown as Array<
+        { lineageId: number; firstTopo: number }
+      >).map((row) => [row.lineageId, row.firstTopo]),
+    );
+    return events
+      .filter((event) => firstTopoByLineage!.get(event.lineageId) === commit.topoOrder)
+      .map((event) => ({
+        path: event.path,
+        oldPath: null,
+        changeType: "A",
+        lineageId: event.lineageId,
+      }));
+  };
   const parentOf = db.prepare(
     `SELECT p.sha AS sha
        FROM git_commit_parent e
@@ -500,9 +533,7 @@ export async function indexRepoStructure(
   for (const commit of commits) {
     const commitStarted = process.hrtime.bigint();
     report.commitsScanned++;
-    const mergeBirths = commit.isMerge === 1
-      ? mergeBirthsOf.all(commit.id) as unknown as ChangeRow[]
-      : [];
+    const mergeBirths = commit.isMerge === 1 ? mergeBirthsOf(commit) : [];
     if (commit.isMerge === 1 && mergeBirths.length === 0) {
       // combined diff 沒有可靠的單一父，被併入分支的改動也會在各自的 commit 走到。
       report.mergesSkipped++;

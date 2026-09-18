@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { utf8ByteRange } from "../ast/adapter.ts";
+import { createSourcePositions, type SourcePositions } from "../ast/positions.ts";
 import { changeLevel, hashDeclaration, tokenStream } from "../ast/hash.ts";
 import { grammarForPath, parseSource } from "../ast/parser.ts";
 import type { HashVector, LanguageProfile, SynNode } from "../ast/types.ts";
@@ -49,6 +49,8 @@ export interface ObservedDeclaration {
   exactNgrams: Set<number>;
   /** 該版本檔案的 git blob id。本地算，見 `blobShaOf`。 */
   blobSha: string;
+  /** 整份檔案共用的位置索引；同檔的宣告不必各自重掃一次原始碼。 */
+  positions: SourcePositions;
 }
 
 export const git = (repo: string, args: string[]): string =>
@@ -191,6 +193,7 @@ async function observeBytes(
   const source = bytes.toString("utf8");
   const blobSha = blobShaOf(bytes);
   const parsed = await parseSource(source, grammar);
+  const positions = createSourcePositions(source);
   const occurrences = new Map<string, number>();
   return parsed.declarations.map((declaration) => {
     const occurrence = occurrences.get(declaration.qualifiedName) ?? 0;
@@ -218,6 +221,7 @@ async function observeBytes(
       // 共用物件，唯讀。就地修改會讓所有同 hashToken 的宣告一起壞掉。
       exactNgrams: bundle.ngrams,
       blobSha,
+      positions,
     };
   });
 }
@@ -308,7 +312,10 @@ export function createObserver(repo: string, limit = OBSERVER_CACHE_LIMIT): {
 export function lineRange(
   observed: ObservedDeclaration,
 ): { startLine: number; endLine: number } {
-  const startLine = observed.source.slice(0, observed.node.startIndex).split("\n").length;
+  // 起始行查共用索引；結束行仍由節點文字的換行數推導，**不改成第二次查表**——
+  // 那會把「宣告佔幾行」的定義換成「endIndex 落在第幾行」，兩者在文字以換行
+  // 結尾時不同，而這個欄位是產出的一部分。
+  const startLine = observed.positions.lineAt(observed.node.startIndex);
   return { startLine, endLine: startLine + observed.node.text.split("\n").length - 1 };
 }
 
@@ -1072,7 +1079,10 @@ export function ensureRevision(
     return existing.id;
   }
 
-  const bytes = utf8ByteRange(observed.node, observed.source);
+  const bytes = {
+    startByte: observed.positions.byteAt(observed.node.startIndex),
+    endByte: observed.positions.byteAt(observed.node.endIndex),
+  };
   const { startLine: lineStart, endLine: lineEnd } = lineRange(observed);
 
   const info = prep(db,

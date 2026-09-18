@@ -29,6 +29,7 @@ import "./quote-audit.test.ts";
 import "./retry.test.ts";
 import "./repo-identity.test.ts";
 import "./repo-pass.test.ts";
+import "./positions.test.ts";
 import "./revision-index.test.ts";
 import "./shallow.test.ts";
 import "./signature-cache.test.ts";

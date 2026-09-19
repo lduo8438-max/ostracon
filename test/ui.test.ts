@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ import {
   RATIONALES_PATH,
   SUMMARY_PATH,
   evolutionPath,
+  pathnameOf,
   startUiServer,
 } from "../src/ui/server.ts";
 import { exportStaticSite } from "../src/ui/export.ts";
@@ -243,6 +245,30 @@ describe("三欄 UI 的資料層", () => {
   });
 });
 
+/**
+ * 發一個**原始**的 GET，目標字串逐字送出。
+ *
+ * `fetch` 問不到這件事：它會先照 URL 規格解析，`//evil.example/...` 於是變成
+ * 連去 `evil.example` 的請求，根本不會到這台伺服器。要問「伺服器收到這個
+ * 請求目標會怎麼答」，就得自己寫 request line。
+ */
+function rawGet(base: string, target: string): Promise<{ status: number; body: string }> {
+  const at = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { host: at.hostname, port: Number(at.port), path: target, method: "GET" },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.once("error", reject);
+    req.end();
+  });
+}
+
 describe("三欄 UI 的伺服器", () => {
   it("端點回得出結構、演化與意圖", async () => {
     const { url, server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });
@@ -301,6 +327,50 @@ describe("三欄 UI 的伺服器", () => {
       assert.equal(failed.status, 500);
       assert.match(JSON.stringify(await failed.json()), /claim_evidence/);
       assert.equal((await fetch(url)).status, 200, "單一 API 失敗後 server 仍要存活");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("**`//` 開頭的目標是 authority 不是路徑**", () => {
+    // 正常形式。
+    assert.equal(pathnameOf("/"), "/");
+    assert.equal(pathnameOf("/api/summary.json"), "/api/summary.json");
+    // 查詢字串不屬於路徑——端點一律以路徑定位，靜態檔沒有查詢字串可用。
+    assert.equal(pathnameOf("/api/summary.json?x=1"), "/api/summary.json");
+    // URL 正規化收掉 `..`，而且收不到根之上；`readAsset` 還有自己的包含性檢查。
+    assert.equal(pathnameOf("/api/../api/summary.json"), "/api/summary.json");
+    assert.equal(pathnameOf("/../../../etc/passwd"), "/etc/passwd");
+    // **協定相對**：`//` 之後被解析成 authority，路徑只剩後半段。
+    // `new URL` 對這三個分別是「拋錯」、「host=evil.example」、「host=api」。
+    assert.equal(pathnameOf("//"), undefined);
+    assert.equal(pathnameOf("//evil.example/api/summary.json"), undefined);
+    assert.equal(pathnameOf("//api/summary.json"), undefined);
+    // absolute-form（代理才用）與 `OPTIONS *` 這台伺服器都不服務。
+    assert.equal(pathnameOf("http://127.0.0.1/api/summary.json"), undefined);
+    assert.equal(pathnameOf("*"), undefined);
+    assert.equal(pathnameOf(undefined), undefined);
+  });
+
+  it("**協定相對的目標回 404：不是 500，也不得答成別的端點**", async () => {
+    const { url, server } = await startUiServer({ dbPath: fixtureDb(), port: 0 });
+    try {
+      // **對照組先跑。** 這個 helper 自己發原始請求，壞掉的話下面每一條都會
+      // 印出假的 404；掃描與量測都要先確認管線有效。
+      assert.equal((await rawGet(url, "/api/summary.json")).status, 200);
+      assert.equal((await rawGet(url, "/")).status, 200);
+
+      // 只有 `//` 時 authority 是空的，`new URL` 拋 TypeError，外層 catch
+      // 把它翻成 500。使用者打錯路徑不是伺服器故障。
+      const empty = await rawGet(url, "//");
+      assert.equal(empty.status, 404);
+      assert.doesNotMatch(empty.body, /Invalid URL/, "不得把解析失敗當成伺服器錯誤");
+
+      // 嚴重的是這一半：authority 被靜默丟掉，剩下的 pathname 恰好是真端點，
+      // 於是一個**不是端點的路徑**答出了 summary 的內容。
+      const spoofed = await rawGet(url, "//evil.example/api/summary.json");
+      assert.equal(spoofed.status, 404, "authority 不得被丟掉之後當成端點");
+      assert.doesNotMatch(spoofed.body, /counts/, "不得回出 summary 的內容");
     } finally {
       server.close();
     }

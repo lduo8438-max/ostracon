@@ -105,6 +105,30 @@ function stableKeyFromPath(pathname: string): string | null | undefined {
   return STABLE_KEY.test(match[1]!) ? match[1]! : null;
 }
 
+/**
+ * HTTP 請求目標 → pathname。不是這台伺服器服務的形式就回 `undefined`，
+ * 呼叫端一律回 404。
+ *
+ * **`new URL(target, base)` 不能直接拿來解 origin-form 的請求目標。** 以 `//`
+ * 開頭的目標在 URL 規格裡是「協定相對」參照，`//` 之後的東西會被解析成
+ * authority 而**不是**路徑：
+ *
+ * - `//evil.example/api/summary.json` → host `evil.example`、pathname
+ *   `/api/summary.json`。authority 被靜默丟掉，於是一個**不是端點的路徑**
+ *   照樣答得出 summary——與深連結那次同型：把「找不到」偽裝成「找到了」。
+ * - `//` → authority 是空的，`new URL` 直接拋 `TypeError: Invalid URL`，
+ *   被外層 catch 翻成 **500**。
+ *
+ * 兩者都該是 404。origin-form 一定以單一斜線開頭；absolute-form（代理才會用的
+ * 完整 URL）與 `OPTIONS *` 這台伺服器都不服務，所以「不以單一斜線開頭」
+ * 就是找不到，不必也不該去猜使用者想要什麼。
+ */
+export function pathnameOf(target: string | undefined): string | undefined {
+  if (target === undefined) return undefined;
+  if (!target.startsWith("/") || target.startsWith("//")) return undefined;
+  return new URL(target, "http://127.0.0.1").pathname;
+}
+
 /** 這個 repo 索引時的根路徑。讀片段要回本地 git，所以需要它。 */
 function repoRootOf(db: DatabaseSync, repoId: number): string | undefined {
   return (db.prepare("SELECT root_path AS root FROM repo WHERE id = ?")
@@ -121,10 +145,14 @@ export function createUiServer(options: UiOptions): Server {
     // 才不會在將來加入寫入時忘記。
     const db = new DatabaseSync(options.dbPath, { readOnly: true });
     try {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const pathname = pathnameOf(request.url);
+      if (pathname === undefined) {
+        sendJson(response, 404, { error: "沒有這個路徑" });
+        return;
+      }
       // 頁面與資產都來自建置後的前端。**伺服器與靜態匯出共用同一份產物**，
       // 所以「本機看到的」與「發佈出去的」不可能是兩個版本。
-      if (!url.pathname.startsWith("/api/")) {
+      if (!pathname.startsWith("/api/")) {
         if (!appBuilt()) {
           response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
           response.end(APP_MISSING_NOTICE);
@@ -133,9 +161,9 @@ export function createUiServer(options: UiOptions): Server {
         // **不做 SPA fallback。** 這個前端用的是 hash 片段（`#<stable_key>`），
         // 不是路徑路由——把未知路徑一律回 index.html 只會把打錯的網址偽裝成
         // 正常頁面，而 `/nope` 回 200 是在說謊。既有測試釘住這一點。
-        const file = url.pathname === "/" || url.pathname === "/index.html"
+        const file = pathname === "/" || pathname === "/index.html"
           ? "/index.html"
-          : url.pathname;
+          : pathname;
         const asset = readAsset(file);
         if (asset === undefined) {
           sendJson(response, 404, { error: "找不到" });
@@ -145,7 +173,7 @@ export function createUiServer(options: UiOptions): Server {
         response.end(asset);
         return;
       }
-      if (url.pathname === SUMMARY_PATH) {
+      if (pathname === SUMMARY_PATH) {
         const summary = repoSummary(db, repoId);
         const indexed = summary.counts.entities;
         // 搜尋目錄涵蓋全部 indexed 宣告，而任意 stable_key 都能開 timeline。
@@ -161,25 +189,25 @@ export function createUiServer(options: UiOptions): Server {
         });
         return;
       }
-      if (url.pathname === ENTITIES_PATH) {
+      if (pathname === ENTITIES_PATH) {
         sendJson(response, 200, listEntities(db, repoId));
         return;
       }
-      if (url.pathname === ENTITY_SEARCH_PATH) {
+      if (pathname === ENTITY_SEARCH_PATH) {
         searchIndexJson ??= JSON.stringify(entitySearchIndex(db, repoId));
         response.writeHead(200, JSON_HEADERS);
         response.end(searchIndexJson);
         return;
       }
-      if (url.pathname === OSTRACISED_PATH) {
+      if (pathname === OSTRACISED_PATH) {
         sendJson(response, 200, ostracisedFor(db, repoId));
         return;
       }
-      if (url.pathname === LADDER_PATH) {
+      if (pathname === LADDER_PATH) {
         sendJson(response, 200, ladderStats(db, repoId));
         return;
       }
-      if (url.pathname === DISCONTINUITIES_PATH) {
+      if (pathname === DISCONTINUITIES_PATH) {
         // 本機伺服器旁邊就是語料，所以片段直接讀。讀不到時 payload 會說
         // `repo-unavailable`，不是靜默留白。
         sendJson(response, 200,
@@ -187,17 +215,17 @@ export function createUiServer(options: UiOptions): Server {
         );
         return;
       }
-      if (url.pathname === HOTSPOTS_PATH) {
+      if (pathname === HOTSPOTS_PATH) {
         // 測試檔的排除與 CLI 用同一個 predicate，而且**排除不得靜默**——
         // 兩邊各數一次的話，畫面與 CLI 遲早會給出不同的數字。
         sendJson(response, 200, hotspotsView(db, repoId));
         return;
       }
-      if (url.pathname === RATIONALES_PATH) {
+      if (pathname === RATIONALES_PATH) {
         sendJson(response, 200, rationaleGroups(db, repoId));
         return;
       }
-      const key = stableKeyFromPath(url.pathname);
+      const key = stableKeyFromPath(pathname);
       if (key !== undefined) {
         if (key === null) {
           sendJson(response, 400, { error: "entity 必須是 64 位十六進位的 stable_key" });

@@ -2918,3 +2918,45 @@ emoji／CRLF／無尾端換行／連續空行／單行／空檔）的**每一個
 二分搜尋 off-by-one、行號少加一。
 
 驗收：核心 503／503、前端 37／37、五套 golden 51／51 且逐案例與第三刀相同。
+
+### 0.2.0 已發布（2026-09-19）
+
+`ostracon@0.2.0` 是 0.1.x 以來第一個**強制重建索引**的版本。CLI 介面與旗標零變動，
+唯一的 breaking 面是資料庫：`walk-0.4.0` 讓既有 structural 索引不得續接。
+
+| provenance | |
+|---|---|
+| 發布 commit | `e79897bdaf48d46f8b9646ff9e29e298e6626b7d` |
+| npm `gitHead` | 同上 |
+| 遠端 peeled tag `v0.2.0^{}` | 同上 |
+| tarball shasum | `54ba9968d40982588c9c7973a25ff7348148aac4` |
+| 產物 | 533,096 bytes／解包 1,481,410／**215 檔** |
+
+shasum **三方相同**：發布前 dry-run、registry metadata、以及把 tarball 抓回來自己
+重算 sha1 與 sha512。207 → 215 的八個檔案逐一對得上（`positions.ts` 與 `health.ts`
+各自的 `.js`／`.d.ts`／兩份 map），沒有意外資產。
+
+**我報過一次錯的 shasum，記下來。** PR #41 的 commit message 與內文寫
+`162e22dc…`，那是取完 dry-run **之後**我才往 CHANGELOG 補一行造成的——正好
+145 bytes，與 `unpackedSize` 的差額逐位元相符。**這是第二次踩到「描述自己所在
+檔案的數字」**（0.1.1 那次是 48 bytes）。教訓不是「不要寫那種數字」，是
+**取封裝計量必須是樹凍結後的最後一個動作**。
+
+**發布後複驗（都要真的上線的套件才走得到）**：全新快取從官方 registry 安裝，
+lockfile 的 integrity 與 registry 相同；`hotspots`／`ostracised`／`why`／`export`／
+`ui` 五支全通（export 325 檔、八個資料端點齊全；ui 八個端點全 200、`/nope` 404）；
+`npx --yes ostracon@0.2.0`（全新快取、空目錄）跑得通，不帶 `--db` 時落在
+`./.ostracon/index.db`。
+
+**這一版專屬的那條路徑也驗了**：拿 0.1.4 建的 v3 索引（`reports/demo-osiris.db` 的
+複本）給 0.2.0，寫入路徑**明確拒絕**並印出兩個版本字串與「請重建此 repo 的索引」，
+exit code 1；schema 本身照設計就地升到 v5 供只讀，`export` 仍讀得出來，而
+`summary.json` 的 `lineageRisk.complete` 是 **false**（從空檔重建的同一套語料是
+**true**）。原始基準檔沒有被動到，仍是 v3。
+
+**順手抓到一個小缺陷，不在這一版修**：`ostracon ui` 對 `GET //` 回 **500**
+`{"error":"TypeError: Invalid URL"}`，應該是 404——`//` 被當成協定相對 URL 的
+host。0.1.4 那條「單一錯誤不終止 server」的不變量仍成立（之後根路徑照樣 200）。
+**它是我在跑端點清單時因迴圈多帶一個空字串才撞到的，不是測試抓到的**——
+又一次「沒有人驗過的路徑形狀」。嚴重度低（只綁 127.0.0.1、瀏覽器不會發這種請求），
+留給下一刀連同回歸測試一起修。

@@ -2960,3 +2960,44 @@ host。0.1.4 那條「單一錯誤不終止 server」的不變量仍成立（之
 **它是我在跑端點清單時因迴圈多帶一個空字串才撞到的，不是測試抓到的**——
 又一次「沒有人驗過的路徑形狀」。嚴重度低（只綁 127.0.0.1、瀏覽器不會發這種請求），
 留給下一刀連同回歸測試一起修。
+
+### 第五刀：請求目標的解析（2026-09-19）
+
+0.2.0 發布後複驗時撞到的：`ostracon ui` 對 `GET //` 回 500
+`{"error":"TypeError: Invalid URL"}`。**是我跑端點清單時迴圈多帶一個空字串才
+撞到的，不是測試抓到的。**
+
+查下去比回報的更嚴重。成因是 `new URL(request.url, base)` 不能直接吃 HTTP 的
+origin-form 目標——`//` 之後在 URL 規格裡是 **authority 不是路徑**：
+
+| 請求目標 | `new URL` 解析結果 | 修正前的回應 |
+|---|---|---|
+| `//` | 拋 `TypeError: Invalid URL` | **500** |
+| `//evil.example/api/summary.json` | host `evil.example`、pathname `/api/summary.json` | **200，而且是真的 summary 內容** |
+| `//api/summary.json` | host `api`、pathname `/summary.json` | 404（碰巧對） |
+
+第二列才是重點：**一個不是端點的路徑答出了端點的內容**——與深連結那次同型，
+把「找不到」偽裝成「找到了」，只是方向相反。500 只是這個成因裡會拋錯的那一格。
+
+修法是把解析抽成純函式 `pathnameOf`：不以**單一**斜線開頭的目標一律回
+`undefined`，呼叫端回 404。absolute-form（代理才用的完整 URL）與 `OPTIONS *`
+這台伺服器都不服務，所以不必猜使用者想要什麼。
+
+**資產讀取本來就是安全的**，一併驗過：`readAsset` 用 `path.resolve(APP_DIR,
+"." + relative)` 再確認結果仍在 `APP_DIR` 之內，所以 `/../../../etc/passwd`
+正規化成 `/etc/passwd` 之後也出不去。這一刀沒有改它。
+
+兩條新測試，**兩半各自咬檢過**：
+- 只還原 `//` 那一半（讓 `//host/path` 照舊通過）時，純函式測試報
+  `actual '/api/summary.json' / expected undefined`，整合測試報
+  `actual 200 / expected 404`——證明「不得答成別的端點」那條不是裝飾。
+- 整個還原時兩條都紅，而同一個 describe 裡其他四條伺服器測試全綠——
+  證明它們咬的是自己那一條。
+
+整合測試用 `node:http` 自己寫 request line，**因為 `fetch` 問不到這件事**：
+它會先照 URL 規格解析，`//evil.example/...` 於是變成連去 `evil.example`
+的請求，根本不會到這台伺服器。測試裡先跑對照組（`/` 與 `/api/summary.json`
+必須 200），否則 helper 壞掉時每一條都會印出假的 404。
+
+驗收：核心 503 → **505**、前端 37／37、typecheck 與正式 build 全綠；
+五套 golden 52 案例（51 計入指標 ＋ 1 條 ambiguous）全過、regressions 為空。

@@ -87,6 +87,22 @@ associated PR 都找得到，inline comment 分別 110／108 條，抽取器認�
 commit 對位，故不進產品。探針留在 gitignored `reports/probe/inline-attribution.mjs`，
 避免日後換個名字重跑同一條路。
 
+第二個新角度也已量完並否決（2026-09-21）：**1:1 引文能不能當 reason-first
+overview 的主體**。門檻先定稿再量（`reports/probe/oneToOne-criteria.md`），結果是
+playwright 的群組數 96 < 100、抽樣真理由 73.3% < 80%，兩條不過；**A 冗餘那一條
+反而過得很漂亮，而那是這一刀真正的新資訊**——playwright 有 91.8% 的 1:1 宣告
+不在 400 筆策展清單裡，所以可達性缺口在有理由的那一小撮上同樣成立。
+逐項見 `plan-reason-overview.md`。
+
+同一刀量出一個新的候選缺陷：**帶 conventional-commit 前綴的主旨行被當成理由**
+（playwright 逐字等於主旨的 19 條裡有 18 條帶前綴、19 條帶 `(#PR)`；pip 是 39 條
+裡 0 條）。兩套的比例一模一樣（19.8%）而可讀性完全不同。**要人工裁決才動抽取器**，
+不加特判。
+
+**檯面上的角度到此都已量完並否決**（entity 名稱命中、hunk overlap、inline review
+comment、1:1 引文子集）。下一題不得從這四個裡任選一個重跑，要新的門檻文件並說明
+為什麼上一份不適用。
+
 ### W8 的效能專題：已完成，而且原本的題目是錯的
 
 W7 定位出「兩顆巨型 commit 佔全程 52%」，並把成因寫成**候選池隨池子大小超線性
